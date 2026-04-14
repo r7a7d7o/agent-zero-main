@@ -9,6 +9,7 @@ from helpers.ws import WsHandler
 from helpers.ws_manager import WsResult
 
 from plugins._a0_connector.helpers.event_bridge import get_context_log_entries
+from plugins._a0_connector.helpers.exec_config import build_exec_config
 from plugins._a0_connector.helpers.ws_runtime import (
     clear_remote_tree_snapshot,
     fail_pending_file_ops_for_sid,
@@ -82,6 +83,7 @@ class WsConnector(WsHandler):
             return {
                 "protocol": PROTOCOL_VERSION,
                 "features": WS_FEATURES,
+                "exec_config": build_exec_config(),
             }
 
         if event == "connector_subscribe_context":
