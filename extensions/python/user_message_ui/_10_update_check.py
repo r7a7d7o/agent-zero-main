@@ -12,7 +12,7 @@ import datetime
 
 last_check = datetime.datetime.fromtimestamp(0)
 check_cooldown_seconds = 60
-last_notification_id = ""
+last_notification_id = None
 last_notification_time = datetime.datetime.fromtimestamp(0)
 notification_cooldown_seconds = 60 * 60 * 24
 
