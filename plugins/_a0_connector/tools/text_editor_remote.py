@@ -1,4 +1,4 @@
-"""text_editor_remote tool — edit files on the CLI machine via `/ws`."""
+"""text_editor_remote tool - edit files on the CLI machine via `/ws`."""
 from __future__ import annotations
 
 import asyncio
@@ -9,6 +9,13 @@ from helpers.tool import Response, Tool
 from helpers.ws import NAMESPACE
 from helpers.ws_manager import ConnectionNotFoundError, get_shared_ws_manager
 
+from plugins._a0_connector.helpers.text_editor_freshness import (
+    apply_patch_post_state,
+    check_patch_freshness,
+    coerce_file_metadata,
+    mark_file_state_stale,
+    record_file_state,
+)
 from plugins._a0_connector.helpers.ws_runtime import (
     clear_pending_file_op,
     select_target_sid,
@@ -18,6 +25,10 @@ from plugins._a0_connector.helpers.ws_runtime import (
 
 FILE_OP_TIMEOUT = 30.0
 FILE_OP_EVENT = "connector_file_op"
+UNSUPPORTED_FRESHNESS_ERROR = (
+    "text_editor_remote: the connected CLI is too old for freshness-aware patching. "
+    "Upgrade the CLI and try again."
+)
 
 
 class TextEditorRemote(Tool):
@@ -40,16 +51,89 @@ class TextEditorRemote(Tool):
         if not path:
             return Response(message="path is required", break_loop=False)
 
+        if op == "read":
+            payload: dict[str, Any] = {}
+            if self.args.get("line_from"):
+                payload["line_from"] = int(self.args["line_from"])
+            if self.args.get("line_to"):
+                payload["line_to"] = int(self.args["line_to"])
+            result = await self._execute_file_op(op, path, **payload)
+            self._record_success_state(result)
+        elif op == "write":
+            content = self.args.get("content")
+            if content is None:
+                return Response(
+                    message="content is required for write",
+                    break_loop=False,
+                )
+            result = await self._execute_file_op(op, path, content=content)
+            self._record_success_state(result)
+        else:
+            edits = self.args.get("edits")
+            if not edits:
+                return Response(
+                    message="edits is required for patch",
+                    break_loop=False,
+                )
+            result = await self._execute_patch(path, edits)
+
+        return Response(
+            message=self._extract_result(result, op, path),
+            break_loop=False,
+        )
+
+    async def _execute_patch(self, path: str, edits: Any) -> dict[str, Any]:
+        stat_result = await self._execute_file_op("stat", path)
+        if self._is_unsupported_cli_freshness(stat_result):
+            return self._freshness_error(
+                "unsupported_cli_freshness",
+                UNSUPPORTED_FRESHNESS_ERROR,
+            )
+        if not self._result_ok(stat_result):
+            return stat_result
+
+        stat_file = self._extract_file_metadata(stat_result)
+        if stat_file is None:
+            return self._freshness_error(
+                "unsupported_cli_freshness",
+                UNSUPPORTED_FRESHNESS_ERROR,
+            )
+
+        freshness_code = check_patch_freshness(self.agent, stat_file)
+        if freshness_code:
+            return self._freshness_error(freshness_code)
+
+        patch_result = await self._execute_file_op("patch", path, edits=edits)
+        if not self._result_ok(patch_result):
+            return patch_result
+
+        patch_file = self._extract_file_metadata(patch_result)
+        if patch_file is None:
+            mark_file_state_stale(self.agent, stat_file)
+        else:
+            apply_patch_post_state(
+                self.agent,
+                patch_file,
+                edits if isinstance(edits, list) else [],
+            )
+        return patch_result
+
+    async def _execute_file_op(
+        self,
+        op: str,
+        path: str,
+        **payload_extra: Any,
+    ) -> dict[str, Any]:
         context_id = self.agent.context.id
         sid = select_target_sid(context_id)
         if not sid:
-            return Response(
-                message=(
+            return {
+                "ok": False,
+                "error": (
                     "text_editor_remote: no CLI client connected to this context. "
                     "Make sure the CLI is connected and subscribed."
                 ),
-                break_loop=False,
-            )
+            }
 
         op_id = str(uuid.uuid4())
         payload: dict[str, Any] = {
@@ -58,27 +142,7 @@ class TextEditorRemote(Tool):
             "path": path,
             "context_id": context_id,
         }
-        if op == "read":
-            if self.args.get("line_from"):
-                payload["line_from"] = int(self.args["line_from"])
-            if self.args.get("line_to"):
-                payload["line_to"] = int(self.args["line_to"])
-        elif op == "write":
-            content = self.args.get("content")
-            if content is None:
-                return Response(
-                    message="content is required for write",
-                    break_loop=False,
-                )
-            payload["content"] = content
-        else:
-            edits = self.args.get("edits")
-            if not edits:
-                return Response(
-                    message="edits is required for patch",
-                    break_loop=False,
-                )
-            payload["edits"] = edits
+        payload.update(payload_extra)
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -101,35 +165,73 @@ class TextEditorRemote(Tool):
             result = await asyncio.wait_for(future, timeout=FILE_OP_TIMEOUT)
         except ConnectionNotFoundError:
             clear_pending_file_op(op_id)
-            return Response(
-                message=(
+            return {
+                "op_id": op_id,
+                "ok": False,
+                "error": (
                     "text_editor_remote: the selected CLI client disconnected before "
                     "the file operation could be delivered"
                 ),
-                break_loop=False,
-            )
+            }
         except asyncio.TimeoutError:
             clear_pending_file_op(op_id)
-            return Response(
-                message=(
+            return {
+                "op_id": op_id,
+                "ok": False,
+                "error": (
                     f"text_editor_remote: timed out waiting for CLI to respond "
                     f"to {op} on {path!r}"
                 ),
-                break_loop=False,
-            )
+            }
         except Exception as exc:
             clear_pending_file_op(op_id)
-            return Response(
-                message=f"text_editor_remote: error sending file_op: {exc}",
-                break_loop=False,
-            )
+            return {
+                "op_id": op_id,
+                "ok": False,
+                "error": f"text_editor_remote: error sending file_op: {exc}",
+            }
         finally:
             clear_pending_file_op(op_id)
 
-        return Response(
-            message=self._extract_result(result, op, path),
-            break_loop=False,
-        )
+        if isinstance(result, dict):
+            return result
+
+        return {
+            "op_id": op_id,
+            "ok": False,
+            "error": f"Unexpected response format from CLI: {result!r}",
+        }
+
+    def _record_success_state(self, result: Any) -> None:
+        if not self._result_ok(result):
+            return
+
+        file_meta = self._extract_file_metadata(result)
+        if file_meta is not None:
+            record_file_state(self.agent, file_meta)
+
+    def _extract_file_metadata(self, result: Any) -> dict[str, Any] | None:
+        if not isinstance(result, dict):
+            return None
+
+        data = result.get("result")
+        if not isinstance(data, dict):
+            return None
+
+        return coerce_file_metadata(data.get("file"))
+
+    def _freshness_error(self, code: str, error: str = "") -> dict[str, Any]:
+        return {"ok": False, "code": code, "error": error}
+
+    def _result_ok(self, result: Any) -> bool:
+        return isinstance(result, dict) and bool(result.get("ok"))
+
+    def _is_unsupported_cli_freshness(self, result: Any) -> bool:
+        if not isinstance(result, dict) or bool(result.get("ok")):
+            return False
+
+        error = str(result.get("error") or "").strip().lower()
+        return "unknown op: stat" in error
 
     def _extract_result(self, result: Any, op: str, path: str) -> str:
         if not isinstance(result, dict):
@@ -138,8 +240,21 @@ class TextEditorRemote(Tool):
         ok = bool(result.get("ok"))
         data = result.get("result")
         error = result.get("error")
+        code = str(result.get("code") or "").strip().lower()
 
         if not ok:
+            if code == "patch_need_read":
+                return self.agent.read_prompt(
+                    "fw.text_editor.patch_need_read.md",
+                    path=path,
+                )
+            if code == "patch_stale_read":
+                return self.agent.read_prompt(
+                    "fw.text_editor.patch_stale_read.md",
+                    path=path,
+                )
+            if code == "unsupported_cli_freshness":
+                return str(error or UNSUPPORTED_FRESHNESS_ERROR)
             return f"Error ({op} {path!r}): {error or 'Unknown error'}"
 
         if not isinstance(data, dict):
