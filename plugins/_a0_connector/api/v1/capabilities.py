@@ -21,6 +21,7 @@ _BASE_FEATURES = [
     "projects",
     "text_editor_remote",
     "code_execution_remote",
+    "computer_use_remote",
     "remote_file_tree",
     "token_status",
 ]

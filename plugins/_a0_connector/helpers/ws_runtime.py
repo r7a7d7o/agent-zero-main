@@ -23,6 +23,14 @@ class PendingExecOperation:
     context_id: str | None = None
 
 
+@dataclass
+class PendingComputerUseOperation:
+    sid: str
+    loop: asyncio.AbstractEventLoop
+    future: asyncio.Future[dict[str, Any]]
+    context_id: str | None = None
+
+
 @dataclass(frozen=True)
 class RemoteTreeSnapshot:
     sid: str
@@ -30,11 +38,26 @@ class RemoteTreeSnapshot:
     updated_at: float
 
 
+@dataclass(frozen=True)
+class ComputerUseMetadata:
+    supported: bool
+    enabled: bool
+    trust_mode: str
+    artifact_root: str
+    backend_id: str
+    backend_family: str
+    features: tuple[str, ...]
+    support_reason: str
+    updated_at: float
+
+
 _context_subscriptions: dict[str, set[str]] = {}
 _sid_contexts: dict[str, set[str]] = {}
 _pending_file_ops: dict[str, PendingFileOperation] = {}
 _pending_exec_ops: dict[str, PendingExecOperation] = {}
+_pending_computer_use_ops: dict[str, PendingComputerUseOperation] = {}
 _remote_tree_snapshots: dict[str, RemoteTreeSnapshot] = {}
+_sid_computer_use_metadata: dict[str, ComputerUseMetadata] = {}
 _state_lock = threading.RLock()
 
 
@@ -47,6 +70,7 @@ def unregister_sid(sid: str) -> set[str]:
     with _state_lock:
         contexts = _sid_contexts.pop(sid, set())
         _remote_tree_snapshots.pop(sid, None)
+        _sid_computer_use_metadata.pop(sid, None)
         for context_id in contexts:
             subscribers = _context_subscriptions.get(context_id)
             if not subscribers:
@@ -143,6 +167,61 @@ def select_target_sid(context_id: str) -> str | None:
         return sorted(subscribers)[0]
 
 
+def store_sid_computer_use_metadata(sid: str, payload: dict[str, Any]) -> ComputerUseMetadata:
+    features_value = payload.get("features")
+    if isinstance(features_value, (list, tuple)):
+        features = tuple(str(item).strip() for item in features_value if str(item).strip())
+    else:
+        features = ()
+    metadata = ComputerUseMetadata(
+        supported=bool(payload.get("supported")),
+        enabled=bool(payload.get("supported")) and bool(payload.get("enabled")),
+        trust_mode=str(payload.get("trust_mode", "") or "").strip(),
+        artifact_root=str(payload.get("artifact_root", "") or "").strip(),
+        backend_id=str(payload.get("backend_id", "") or "").strip(),
+        backend_family=str(payload.get("backend_family", "") or "").strip(),
+        features=features,
+        support_reason=str(payload.get("support_reason", "") or "").strip(),
+        updated_at=time.time(),
+    )
+    with _state_lock:
+        _sid_computer_use_metadata[sid] = metadata
+    return metadata
+
+
+def clear_sid_computer_use_metadata(sid: str) -> None:
+    with _state_lock:
+        _sid_computer_use_metadata.pop(sid, None)
+
+
+def computer_use_metadata_for_sid(sid: str) -> dict[str, Any] | None:
+    with _state_lock:
+        metadata = _sid_computer_use_metadata.get(sid)
+    if metadata is None:
+        return None
+    return {
+        "supported": metadata.supported,
+        "enabled": metadata.enabled,
+        "trust_mode": metadata.trust_mode,
+        "artifact_root": metadata.artifact_root,
+        "backend_id": metadata.backend_id,
+        "backend_family": metadata.backend_family,
+        "features": list(metadata.features),
+        "support_reason": metadata.support_reason,
+        "updated_at": metadata.updated_at,
+    }
+
+
+def select_computer_use_target_sid(context_id: str) -> str | None:
+    with _state_lock:
+        subscribers = sorted(_context_subscriptions.get(context_id, set()))
+        for sid in subscribers:
+            metadata = _sid_computer_use_metadata.get(sid)
+            if metadata and metadata.supported and metadata.enabled:
+                return sid
+    return None
+
+
 def store_pending_file_op(
     op_id: str,
     *,
@@ -171,14 +250,7 @@ def resolve_pending_file_op(
     sid: str,
     payload: dict[str, Any],
 ) -> bool:
-    with _state_lock:
-        pending = _pending_file_ops.get(op_id)
-        if pending is None or pending.sid != sid:
-            return False
-        _pending_file_ops.pop(op_id, None)
-
-    pending.loop.call_soon_threadsafe(_set_future_result, pending.future, dict(payload))
-    return True
+    return _resolve_pending(_pending_file_ops, op_id, sid=sid, payload=payload)
 
 
 def fail_pending_file_op(
@@ -187,32 +259,11 @@ def fail_pending_file_op(
     sid: str | None = None,
     error: str,
 ) -> bool:
-    with _state_lock:
-        pending = _pending_file_ops.get(op_id)
-        if pending is None:
-            return False
-        if sid is not None and pending.sid != sid:
-            return False
-        _pending_file_ops.pop(op_id, None)
-
-    payload = {"op_id": op_id, "ok": False, "error": error}
-    pending.loop.call_soon_threadsafe(_set_future_result, pending.future, payload)
-    return True
+    return _fail_pending(_pending_file_ops, op_id, sid=sid, error=error)
 
 
 def fail_pending_file_ops_for_sid(sid: str, *, error: str) -> None:
-    with _state_lock:
-        matches = [
-            (op_id, pending)
-            for op_id, pending in _pending_file_ops.items()
-            if pending.sid == sid
-        ]
-        for op_id, _pending in matches:
-            _pending_file_ops.pop(op_id, None)
-
-    for op_id, pending in matches:
-        payload = {"op_id": op_id, "ok": False, "error": error}
-        pending.loop.call_soon_threadsafe(_set_future_result, pending.future, payload)
+    _fail_pending_for_sid(_pending_file_ops, sid=sid, error=error)
 
 
 def store_pending_exec_op(
@@ -243,14 +294,7 @@ def resolve_pending_exec_op(
     sid: str,
     payload: dict[str, Any],
 ) -> bool:
-    with _state_lock:
-        pending = _pending_exec_ops.get(op_id)
-        if pending is None or pending.sid != sid:
-            return False
-        _pending_exec_ops.pop(op_id, None)
-
-    pending.loop.call_soon_threadsafe(_set_future_result, pending.future, dict(payload))
-    return True
+    return _resolve_pending(_pending_exec_ops, op_id, sid=sid, payload=payload)
 
 
 def fail_pending_exec_op(
@@ -259,32 +303,118 @@ def fail_pending_exec_op(
     sid: str | None = None,
     error: str,
 ) -> bool:
+    return _fail_pending(_pending_exec_ops, op_id, sid=sid, error=error)
+
+
+def fail_pending_exec_ops_for_sid(sid: str, *, error: str) -> None:
+    _fail_pending_for_sid(_pending_exec_ops, sid=sid, error=error)
+
+
+def store_pending_computer_use_op(
+    op_id: str,
+    *,
+    sid: str,
+    future: asyncio.Future[dict[str, Any]],
+    loop: asyncio.AbstractEventLoop,
+    context_id: str | None = None,
+) -> None:
     with _state_lock:
-        pending = _pending_exec_ops.get(op_id)
+        _pending_computer_use_ops[op_id] = PendingComputerUseOperation(
+            sid=sid,
+            loop=loop,
+            future=future,
+            context_id=context_id,
+        )
+
+
+def clear_pending_computer_use_op(op_id: str) -> None:
+    with _state_lock:
+        _pending_computer_use_ops.pop(op_id, None)
+
+
+def resolve_pending_computer_use_op(
+    op_id: str,
+    *,
+    sid: str,
+    payload: dict[str, Any],
+) -> bool:
+    return _resolve_pending(_pending_computer_use_ops, op_id, sid=sid, payload=payload)
+
+
+def fail_pending_computer_use_op(
+    op_id: str,
+    *,
+    sid: str | None = None,
+    error: str,
+) -> bool:
+    return _fail_pending(_pending_computer_use_ops, op_id, sid=sid, error=error)
+
+
+def fail_pending_computer_use_ops_for_sid(sid: str, *, error: str) -> None:
+    _fail_pending_for_sid(_pending_computer_use_ops, sid=sid, error=error)
+
+
+def _resolve_pending(
+    registry: dict[str, PendingFileOperation | PendingExecOperation | PendingComputerUseOperation],
+    op_id: str,
+    *,
+    sid: str,
+    payload: dict[str, Any],
+) -> bool:
+    with _state_lock:
+        pending = registry.get(op_id)
+        if pending is None or pending.sid != sid:
+            return False
+        registry.pop(op_id, None)
+
+    pending.loop.call_soon_threadsafe(_set_future_result, pending.future, dict(payload))
+    return True
+
+
+def _fail_pending(
+    registry: dict[str, PendingFileOperation | PendingExecOperation | PendingComputerUseOperation],
+    op_id: str,
+    *,
+    sid: str | None,
+    error: str,
+) -> bool:
+    with _state_lock:
+        pending = registry.get(op_id)
         if pending is None:
             return False
         if sid is not None and pending.sid != sid:
             return False
-        _pending_exec_ops.pop(op_id, None)
+        registry.pop(op_id, None)
 
-    payload = {"op_id": op_id, "ok": False, "error": error}
-    pending.loop.call_soon_threadsafe(_set_future_result, pending.future, payload)
+    pending.loop.call_soon_threadsafe(
+        _set_future_result,
+        pending.future,
+        {"op_id": op_id, "ok": False, "error": error},
+    )
     return True
 
 
-def fail_pending_exec_ops_for_sid(sid: str, *, error: str) -> None:
+def _fail_pending_for_sid(
+    registry: dict[str, PendingFileOperation | PendingExecOperation | PendingComputerUseOperation],
+    *,
+    sid: str,
+    error: str,
+) -> None:
     with _state_lock:
         matches = [
             (op_id, pending)
-            for op_id, pending in _pending_exec_ops.items()
+            for op_id, pending in registry.items()
             if pending.sid == sid
         ]
         for op_id, _pending in matches:
-            _pending_exec_ops.pop(op_id, None)
+            registry.pop(op_id, None)
 
     for op_id, pending in matches:
-        payload = {"op_id": op_id, "ok": False, "error": error}
-        pending.loop.call_soon_threadsafe(_set_future_result, pending.future, payload)
+        pending.loop.call_soon_threadsafe(
+            _set_future_result,
+            pending.future,
+            {"op_id": op_id, "ok": False, "error": error},
+        )
 
 
 def _set_future_result(

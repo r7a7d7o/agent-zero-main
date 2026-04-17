@@ -8,16 +8,20 @@ from helpers.print_style import PrintStyle
 from helpers.ws import WsHandler
 from helpers.ws_manager import WsResult
 
-from plugins._a0_connector.helpers.event_bridge import get_context_log_entries
 from plugins._a0_connector.helpers.exec_config import build_exec_config
+from plugins._a0_connector.helpers.event_bridge import get_context_log_entries
 from plugins._a0_connector.helpers.ws_runtime import (
     clear_remote_tree_snapshot,
+    clear_sid_computer_use_metadata,
+    fail_pending_computer_use_ops_for_sid,
     fail_pending_file_ops_for_sid,
     fail_pending_exec_ops_for_sid,
     register_sid,
-    resolve_pending_file_op,
+    resolve_pending_computer_use_op,
     resolve_pending_exec_op,
+    resolve_pending_file_op,
     store_remote_tree_snapshot,
+    store_sid_computer_use_metadata,
     subscribe_sid_to_context,
     subscribed_contexts_for_sid,
     subscribed_sids_for_context,
@@ -36,6 +40,7 @@ WS_FEATURES = [
     "text_editor_remote",
     "remote_file_tree",
     "code_execution_remote",
+    "computer_use_remote",
 ]
 
 
@@ -71,6 +76,11 @@ class WsConnector(WsHandler):
             sid,
             error="CLI disconnected before completing the requested remote execution",
         )
+        fail_pending_computer_use_ops_for_sid(
+            sid,
+            error="CLI disconnected before completing the requested computer-use operation",
+        )
+        clear_sid_computer_use_metadata(sid)
         PrintStyle.debug(f"[a0-connector] /ws disconnected: {sid}")
 
     async def process(
@@ -80,6 +90,11 @@ class WsConnector(WsHandler):
         sid: str,
     ) -> dict[str, Any] | WsResult | None:
         if event == "connector_hello":
+            computer_use = data.get("computer_use")
+            if isinstance(computer_use, dict):
+                store_sid_computer_use_metadata(sid, computer_use)
+            else:
+                clear_sid_computer_use_metadata(sid)
             return {
                 "protocol": PROTOCOL_VERSION,
                 "features": WS_FEATURES,
@@ -103,6 +118,9 @@ class WsConnector(WsHandler):
 
         if event == "connector_exec_op_result":
             return self._handle_exec_op_result(data, sid)
+
+        if event == "connector_computer_use_op_result":
+            return self._handle_computer_use_op_result(data, sid)
 
         if event.startswith("connector_"):
             return WsResult.error(
@@ -342,6 +360,28 @@ class WsConnector(WsHandler):
             return WsResult.error(
                 code="UNKNOWN_OP_ID",
                 message=f"No pending exec operation for op_id '{op_id}'",
+                correlation_id=data.get("correlationId"),
+            )
+
+        return {"op_id": op_id, "accepted": True}
+
+    def _handle_computer_use_op_result(
+        self,
+        data: dict[str, Any],
+        sid: str,
+    ) -> dict[str, Any] | WsResult:
+        op_id = str(data.get("op_id", "")).strip()
+        if not op_id:
+            return WsResult.error(
+                code="MISSING_OP_ID",
+                message="op_id is required",
+                correlation_id=data.get("correlationId"),
+            )
+
+        if not resolve_pending_computer_use_op(op_id, sid=sid, payload=data):
+            return WsResult.error(
+                code="UNKNOWN_OP_ID",
+                message=f"No pending computer-use operation for op_id '{op_id}'",
                 correlation_id=data.get("correlationId"),
             )
 
