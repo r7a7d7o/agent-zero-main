@@ -51,6 +51,20 @@ class ComputerUseMetadata:
     updated_at: float
 
 
+@dataclass(frozen=True)
+class RemoteFileMetadata:
+    enabled: bool
+    write_enabled: bool
+    mode: str
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class RemoteExecMetadata:
+    enabled: bool
+    updated_at: float
+
+
 _context_subscriptions: dict[str, set[str]] = {}
 _sid_contexts: dict[str, set[str]] = {}
 _pending_file_ops: dict[str, PendingFileOperation] = {}
@@ -58,6 +72,8 @@ _pending_exec_ops: dict[str, PendingExecOperation] = {}
 _pending_computer_use_ops: dict[str, PendingComputerUseOperation] = {}
 _remote_tree_snapshots: dict[str, RemoteTreeSnapshot] = {}
 _sid_computer_use_metadata: dict[str, ComputerUseMetadata] = {}
+_sid_remote_file_metadata: dict[str, RemoteFileMetadata] = {}
+_sid_remote_exec_metadata: dict[str, RemoteExecMetadata] = {}
 _state_lock = threading.RLock()
 
 
@@ -71,6 +87,8 @@ def unregister_sid(sid: str) -> set[str]:
         contexts = _sid_contexts.pop(sid, set())
         _remote_tree_snapshots.pop(sid, None)
         _sid_computer_use_metadata.pop(sid, None)
+        _sid_remote_file_metadata.pop(sid, None)
+        _sid_remote_exec_metadata.pop(sid, None)
         for context_id in contexts:
             subscribers = _context_subscriptions.get(context_id)
             if not subscribers:
@@ -165,6 +183,99 @@ def select_target_sid(context_id: str) -> str | None:
         if not subscribers:
             return None
         return sorted(subscribers)[0]
+
+
+def store_sid_remote_file_metadata(sid: str, payload: dict[str, Any]) -> RemoteFileMetadata:
+    write_enabled = bool(payload.get("write_enabled"))
+    mode = str(payload.get("mode", "") or "").strip().lower()
+    if mode not in {"read_only", "read_write"}:
+        mode = "read_write" if write_enabled else "read_only"
+    metadata = RemoteFileMetadata(
+        enabled=bool(payload.get("enabled", True)),
+        write_enabled=write_enabled,
+        mode=mode,
+        updated_at=time.time(),
+    )
+    with _state_lock:
+        _sid_remote_file_metadata[sid] = metadata
+    return metadata
+
+
+def clear_sid_remote_file_metadata(sid: str) -> None:
+    with _state_lock:
+        _sid_remote_file_metadata.pop(sid, None)
+
+
+def remote_file_metadata_for_sid(sid: str) -> dict[str, Any] | None:
+    with _state_lock:
+        metadata = _sid_remote_file_metadata.get(sid)
+    if metadata is None:
+        return None
+    return {
+        "enabled": metadata.enabled,
+        "write_enabled": metadata.write_enabled,
+        "mode": metadata.mode,
+        "updated_at": metadata.updated_at,
+    }
+
+
+def select_remote_file_target_sid(context_id: str, *, require_writes: bool = False) -> str | None:
+    with _state_lock:
+        subscribers = sorted(_context_subscriptions.get(context_id, set()))
+        fallback_sid: str | None = None
+        for sid in subscribers:
+            metadata = _sid_remote_file_metadata.get(sid)
+            if metadata is None:
+                if fallback_sid is None:
+                    fallback_sid = sid
+                continue
+            if not metadata.enabled:
+                continue
+            if require_writes and not metadata.write_enabled:
+                continue
+            return sid
+    return fallback_sid
+
+
+def store_sid_remote_exec_metadata(sid: str, payload: dict[str, Any]) -> RemoteExecMetadata:
+    metadata = RemoteExecMetadata(
+        enabled=bool(payload.get("enabled")),
+        updated_at=time.time(),
+    )
+    with _state_lock:
+        _sid_remote_exec_metadata[sid] = metadata
+    return metadata
+
+
+def clear_sid_remote_exec_metadata(sid: str) -> None:
+    with _state_lock:
+        _sid_remote_exec_metadata.pop(sid, None)
+
+
+def remote_exec_metadata_for_sid(sid: str) -> dict[str, Any] | None:
+    with _state_lock:
+        metadata = _sid_remote_exec_metadata.get(sid)
+    if metadata is None:
+        return None
+    return {
+        "enabled": metadata.enabled,
+        "updated_at": metadata.updated_at,
+    }
+
+
+def select_remote_exec_target_sid(context_id: str) -> str | None:
+    with _state_lock:
+        subscribers = sorted(_context_subscriptions.get(context_id, set()))
+        fallback_sid: str | None = None
+        for sid in subscribers:
+            metadata = _sid_remote_exec_metadata.get(sid)
+            if metadata is None:
+                if fallback_sid is None:
+                    fallback_sid = sid
+                continue
+            if metadata.enabled:
+                return sid
+    return fallback_sid
 
 
 def store_sid_computer_use_metadata(sid: str, payload: dict[str, Any]) -> ComputerUseMetadata:

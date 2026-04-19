@@ -13,6 +13,8 @@ from plugins._a0_connector.helpers.event_bridge import get_context_log_entries
 from plugins._a0_connector.helpers.ws_runtime import (
     clear_remote_tree_snapshot,
     clear_sid_computer_use_metadata,
+    clear_sid_remote_exec_metadata,
+    clear_sid_remote_file_metadata,
     fail_pending_computer_use_ops_for_sid,
     fail_pending_file_ops_for_sid,
     fail_pending_exec_ops_for_sid,
@@ -22,6 +24,8 @@ from plugins._a0_connector.helpers.ws_runtime import (
     resolve_pending_file_op,
     store_remote_tree_snapshot,
     store_sid_computer_use_metadata,
+    store_sid_remote_exec_metadata,
+    store_sid_remote_file_metadata,
     subscribe_sid_to_context,
     subscribed_contexts_for_sid,
     subscribed_sids_for_context,
@@ -81,6 +85,8 @@ class WsConnector(WsHandler):
             error="CLI disconnected before completing the requested computer-use operation",
         )
         clear_sid_computer_use_metadata(sid)
+        clear_sid_remote_file_metadata(sid)
+        clear_sid_remote_exec_metadata(sid)
         PrintStyle.debug(f"[a0-connector] /ws disconnected: {sid}")
 
     async def process(
@@ -91,10 +97,20 @@ class WsConnector(WsHandler):
     ) -> dict[str, Any] | WsResult | None:
         if event == "connector_hello":
             computer_use = data.get("computer_use")
+            remote_files = data.get("remote_files")
+            remote_exec = data.get("remote_exec")
             if isinstance(computer_use, dict):
                 store_sid_computer_use_metadata(sid, computer_use)
             else:
                 clear_sid_computer_use_metadata(sid)
+            if isinstance(remote_files, dict):
+                store_sid_remote_file_metadata(sid, remote_files)
+            else:
+                clear_sid_remote_file_metadata(sid)
+            if isinstance(remote_exec, dict):
+                store_sid_remote_exec_metadata(sid, remote_exec)
+            else:
+                clear_sid_remote_exec_metadata(sid)
             return {
                 "protocol": PROTOCOL_VERSION,
                 "features": WS_FEATURES,

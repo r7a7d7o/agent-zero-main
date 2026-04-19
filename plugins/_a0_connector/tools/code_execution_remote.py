@@ -11,8 +11,9 @@ from helpers.ws_manager import ConnectionNotFoundError, get_shared_ws_manager
 
 from plugins._a0_connector.helpers.ws_runtime import (
     clear_pending_exec_op,
-    select_target_sid,
+    select_remote_exec_target_sid,
     store_pending_exec_op,
+    subscribed_sids_for_context,
 )
 
 
@@ -60,11 +61,15 @@ class CodeExecutionRemote(Tool):
             )
 
         context_id = self.agent.context.id
-        sid = select_target_sid(context_id)
+        subscribers = subscribed_sids_for_context(context_id)
+        sid = select_remote_exec_target_sid(context_id)
         if not sid:
             return Response(
                 message=(
-                    "code_execution_remote: no CLI client connected to this context. "
+                    "code_execution_remote: no subscribed CLI in this context currently has "
+                    "remote execution enabled. Connect the CLI and press F4 to switch exec on."
+                    if subscribers
+                    else "code_execution_remote: no CLI client connected to this context. "
                     "Make sure the CLI is connected and subscribed."
                 ),
                 break_loop=False,

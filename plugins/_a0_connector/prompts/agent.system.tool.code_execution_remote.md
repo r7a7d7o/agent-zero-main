@@ -1,9 +1,8 @@
 # code_execution_remote tool
 
 This tool runs shell-backed execution on the **remote machine where the CLI is running**.
-It converges onto Agent Zero Core's persistent local-shell model, so the frontend session
-can execute terminal commands and shell-launched `python` / `nodejs` snippets while keeping
-session ids stable across calls.
+Detailed usage guidance is injected separately only when the current context has a
+subscribed CLI, so the base system prompt stays small when remote execution is not in play.
 
 ## Requirements
 - A CLI client must be connected to this context via the shared `/ws` namespace.
@@ -21,79 +20,6 @@ Runtime-specific fields:
 - `terminal`, `python`, `nodejs`: require `code`
 - `input`: requires `keyboard` (or `code` as fallback)
 - `reset`: optional `reason`
-
-## Usage
-
-### Execute a terminal command
-```json
-{
-  "tool_name": "code_execution_remote",
-  "tool_args": {
-    "runtime": "terminal",
-    "session": 0,
-    "code": "pwd && ls -la"
-  }
-}
-```
-
-### Execute Python through the shell-backed runtime
-```json
-{
-  "tool_name": "code_execution_remote",
-  "tool_args": {
-    "runtime": "python",
-    "session": 0,
-    "code": "import os\nprint(os.getcwd())"
-  }
-}
-```
-
-### Execute Node.js through the shell-backed runtime
-```json
-{
-  "tool_name": "code_execution_remote",
-  "tool_args": {
-    "runtime": "nodejs",
-    "session": 0,
-    "code": "console.log(process.cwd())"
-  }
-}
-```
-
-### Poll output from a running session
-```json
-{
-  "tool_name": "code_execution_remote",
-  "tool_args": {
-    "runtime": "output",
-    "session": 0
-  }
-}
-```
-
-### Send keyboard input to a running session
-```json
-{
-  "tool_name": "code_execution_remote",
-  "tool_args": {
-    "runtime": "input",
-    "session": 0,
-    "keyboard": "yes"
-  }
-}
-```
-
-### Reset a session
-```json
-{
-  "tool_name": "code_execution_remote",
-  "tool_args": {
-    "runtime": "reset",
-    "session": 0,
-    "reason": "stuck process"
-  }
-}
-```
 
 ## Notes
 - Session state is frontend-local and shell-backed.

@@ -18,8 +18,9 @@ from plugins._a0_connector.helpers.text_editor_freshness import (
 )
 from plugins._a0_connector.helpers.ws_runtime import (
     clear_pending_file_op,
-    select_target_sid,
+    select_remote_file_target_sid,
     store_pending_file_op,
+    subscribed_sids_for_context,
 )
 
 
@@ -125,14 +126,28 @@ class TextEditorRemote(Tool):
         **payload_extra: Any,
     ) -> dict[str, Any]:
         context_id = self.agent.context.id
-        sid = select_target_sid(context_id)
+        require_writes = op in {"write", "patch"}
+        subscribers = subscribed_sids_for_context(context_id)
+        sid = select_remote_file_target_sid(context_id, require_writes=require_writes)
         if not sid:
-            return {
-                "ok": False,
-                "error": (
+            if not subscribers:
+                error = (
                     "text_editor_remote: no CLI client connected to this context. "
                     "Make sure the CLI is connected and subscribed."
-                ),
+                )
+            elif require_writes:
+                error = (
+                    "text_editor_remote: no subscribed CLI in this context currently allows "
+                    "remote file writes. Press F3 to switch the CLI to Read&Write."
+                )
+            else:
+                error = (
+                    "text_editor_remote: no subscribed CLI in this context currently advertises "
+                    "remote file access."
+                )
+            return {
+                "ok": False,
+                "error": error,
             }
 
         op_id = str(uuid.uuid4())
