@@ -9,6 +9,9 @@ subscribed CLI, so the base system prompt stays small when remote execution is n
 - The CLI client must support `connector_exec_op`.
 - Frontend execution may be locally disabled in the CLI session; in that case the result is
   a structured `{ok: false}` error and no fallback runtime is used.
+- Mutating runtimes (`terminal`, `python`, `nodejs`, and `input`) also require the CLI
+  session to advertise local access mode `Read&Write` via F3. `output` and `reset` can
+  still be used for existing sessions while the CLI is in `Read only`.
 
 ## Arguments
 - `runtime`: one of `terminal`, `python`, `nodejs`, `output`, `reset`
@@ -25,4 +28,5 @@ Runtime-specific fields:
 - Session state is frontend-local and shell-backed.
 - `output` is for long-running operations where a prior call returned control before the
   shell reached a prompt.
+- Use shell syntax that matches the remote host (for example, PowerShell on Windows).
 - The transport uses `connector_exec_op` and `connector_exec_op_result` with shared `op_id`.

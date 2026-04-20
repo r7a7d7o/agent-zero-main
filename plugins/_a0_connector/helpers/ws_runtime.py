@@ -263,7 +263,7 @@ def remote_exec_metadata_for_sid(sid: str) -> dict[str, Any] | None:
     }
 
 
-def select_remote_exec_target_sid(context_id: str) -> str | None:
+def select_remote_exec_target_sid(context_id: str, *, require_writes: bool = False) -> str | None:
     with _state_lock:
         subscribers = sorted(_context_subscriptions.get(context_id, set()))
         fallback_sid: str | None = None
@@ -274,6 +274,12 @@ def select_remote_exec_target_sid(context_id: str) -> str | None:
                     fallback_sid = sid
                 continue
             if metadata.enabled:
+                if require_writes:
+                    file_metadata = _sid_remote_file_metadata.get(sid)
+                    if file_metadata is not None and (
+                        not file_metadata.enabled or not file_metadata.write_enabled
+                    ):
+                        continue
                 return sid
     return fallback_sid
 

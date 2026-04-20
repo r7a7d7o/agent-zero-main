@@ -11,6 +11,8 @@ from helpers.ws_manager import ConnectionNotFoundError, get_shared_ws_manager
 
 from plugins._a0_connector.helpers.ws_runtime import (
     clear_pending_exec_op,
+    remote_exec_metadata_for_sid,
+    remote_file_metadata_for_sid,
     select_remote_exec_target_sid,
     store_pending_exec_op,
     subscribed_sids_for_context,
@@ -23,6 +25,10 @@ EXEC_OP_EVENT = "connector_exec_op"
 
 class CodeExecutionRemote(Tool):
     """Send shell-backed frontend execution operations to the connected CLI machine."""
+
+    @staticmethod
+    def _runtime_requires_write_access(runtime: str) -> bool:
+        return runtime in {"terminal", "python", "nodejs", "input"}
 
     def get_log_object(self):
         import uuid
@@ -62,11 +68,36 @@ class CodeExecutionRemote(Tool):
 
         context_id = self.agent.context.id
         subscribers = subscribed_sids_for_context(context_id)
-        sid = select_remote_exec_target_sid(context_id)
+        require_writes = self._runtime_requires_write_access(runtime)
+        sid = select_remote_exec_target_sid(context_id, require_writes=require_writes)
         if not sid:
+            exec_enabled = False
+            write_blocked = False
+            for subscriber_sid in subscribers:
+                exec_metadata = remote_exec_metadata_for_sid(subscriber_sid)
+                if exec_metadata is None:
+                    exec_enabled = True
+                    continue
+                if not exec_metadata.get("enabled"):
+                    continue
+                exec_enabled = True
+                if not require_writes:
+                    break
+                file_metadata = remote_file_metadata_for_sid(subscriber_sid)
+                if file_metadata is not None and (
+                    not file_metadata.get("enabled", True)
+                    or not file_metadata.get("write_enabled")
+                ):
+                    write_blocked = True
+
             return Response(
                 message=(
-                    "code_execution_remote: no subscribed CLI in this context currently has "
+                    "code_execution_remote: no subscribed CLI in this context currently allows "
+                    "shell-backed execution that may modify local files. Press F3 to switch "
+                    "the CLI to Read&Write. `runtime=output` and `runtime=reset` remain "
+                    "available for existing sessions."
+                    if subscribers and require_writes and exec_enabled and write_blocked
+                    else "code_execution_remote: no subscribed CLI in this context currently has "
                     "remote execution enabled. Connect the CLI and press F4 to switch exec on."
                     if subscribers
                     else "code_execution_remote: no CLI client connected to this context. "
