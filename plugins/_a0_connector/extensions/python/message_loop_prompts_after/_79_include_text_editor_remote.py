@@ -27,7 +27,8 @@ class IncludeTextEditorRemote(Extension):
             access_mode = "Read&Write (legacy/unknown)"
             write_guidance = (
                 "- Writes and patches are expected to be available, but this CLI did not "
-                "advertise an explicit F3 access mode."
+                "advertise an explicit F3 access mode.\n"
+                "- Prefer `patch_text` for context-anchored edits when supported."
             )
             write_examples = """```json
 {
@@ -46,9 +47,7 @@ class IncludeTextEditorRemote(Extension):
   "tool_args": {
     "op": "patch",
     "path": "/path/on/remote/machine/file.py",
-    "edits": [
-      {"from": 5, "to": 5, "content": "    if x == 2:\\n"}
-    ]
+    "patch_text": "*** Begin Patch\\n*** Update File: /path/on/remote/machine/file.py\\n@@ def main():\\n+    setup()\\n*** End Patch"
   }
 }
 ```"""
@@ -56,8 +55,9 @@ class IncludeTextEditorRemote(Extension):
             access_mode = "Read&Write"
             write_guidance = (
                 "- Use `write` only when replacing or creating the full file is the right operation.\n"
-                "- Use `patch` for surgical line-range edits. Keep the edit set tight and based on the latest remote read.\n"
-                "- Freshness-aware patching may reject stale edits. If a patch requires a reread, read the file again and then retry with updated ranges."
+                "- Use `patch` with `patch_text` for context-anchored edits, especially after inserts/deletes or when line numbers may have shifted.\n"
+                "- Use `patch` with `edits` only for surgical line-range edits based on the latest remote read.\n"
+                "- Freshness-aware line patching may reject stale edits. If a line patch requires a reread, read the file again and then retry with updated ranges."
             )
             write_examples = """```json
 {
@@ -66,6 +66,28 @@ class IncludeTextEditorRemote(Extension):
     "op": "write",
     "path": "/path/on/remote/machine/file.py",
     "content": "import os\\nprint('hello')\\n"
+  }
+}
+```
+
+```json
+{
+  "tool_name": "text_editor_remote",
+  "tool_args": {
+    "op": "patch",
+    "path": "/path/on/remote/machine/file.py",
+    "patch_text": "*** Begin Patch\\n*** Update File: /path/on/remote/machine/file.py\\n@@ def main():\\n+    setup()\\n*** End Patch"
+  }
+}
+```
+
+```json
+{
+  "tool_name": "text_editor_remote",
+  "tool_args": {
+    "op": "patch",
+    "path": "/path/on/remote/machine/file.py",
+    "patch_text": "*** Begin Patch\\n*** Update File: /path/on/remote/machine/file.py\\n@@ def main():\\n-    old_helper()\\n+    new_helper()\\n*** End Patch"
   }
 }
 ```

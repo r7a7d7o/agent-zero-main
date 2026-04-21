@@ -22,6 +22,7 @@ from plugins._a0_connector.helpers.ws_runtime import (
     store_pending_file_op,
     subscribed_sids_for_context,
 )
+from plugins._text_editor.helpers.patch_request import parse_patch_request
 
 
 FILE_OP_TIMEOUT = 30.0
@@ -70,18 +71,40 @@ class TextEditorRemote(Tool):
             result = await self._execute_file_op(op, path, content=content)
             self._record_success_state(result)
         else:
-            edits = self.args.get("edits")
-            if not edits:
+            patch_request, err = parse_patch_request(
+                self.args.get("edits"),
+                self.args.get("patch_text"),
+                both_error="provide either edits or patch_text for patch, not both",
+            )
+            if err:
                 return Response(
-                    message="edits is required for patch",
+                    message=err,
                     break_loop=False,
                 )
-            result = await self._execute_patch(path, edits)
+            if patch_request and patch_request.mode == "patch_text":
+                result = await self._execute_context_patch(
+                    path, patch_request.patch_text
+                )
+            else:
+                result = await self._execute_patch(
+                    path,
+                    patch_request.edits if patch_request else self.args.get("edits"),
+                )
 
         return Response(
             message=self._extract_result(result, op, path),
             break_loop=False,
         )
+
+    async def _execute_context_patch(self, path: str, patch_text: str) -> dict[str, Any]:
+        patch_result = await self._execute_file_op("patch", path, patch_text=patch_text)
+        if not self._result_ok(patch_result):
+            return patch_result
+
+        patch_file = self._extract_file_metadata(patch_result)
+        if patch_file is not None:
+            mark_file_state_stale(self.agent, patch_file)
+        return patch_result
 
     async def _execute_patch(self, path: str, edits: Any) -> dict[str, Any]:
         stat_result = await self._execute_file_op("stat", path)
