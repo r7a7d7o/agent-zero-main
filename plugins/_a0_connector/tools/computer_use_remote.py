@@ -2,14 +2,9 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
-import math
 from pathlib import Path
 import uuid
 from typing import Any
-
-from PIL import Image
 
 from helpers import history
 from helpers.tool import Response, Tool
@@ -26,8 +21,6 @@ from plugins._a0_connector.helpers.ws_runtime import (
 COMPUTER_USE_OP_TIMEOUT = 180.0
 COMPUTER_USE_OP_EVENT = "connector_computer_use_op"
 CAPTURE_TOKENS_ESTIMATE = 1500
-CAPTURE_MAX_PIXELS = 768_000
-CAPTURE_JPEG_QUALITY = 75
 _AUTO_CAPTURE_ACTIONS = {
     "start_session",
     "move",
@@ -313,13 +306,13 @@ class ComputerUseRemote(Tool):
         return f"Computer use status={status}, trust_mode={trust_mode or 'unknown'}, active_contexts={active_text}."
 
     def _record_capture(self, data: dict[str, Any]) -> str:
-        mime_type, image_b64 = self._capture_image_data(data)
+        _image_path, display_path = self._resolve_capture_path(data)
         width = data.get("width", "?")
         height = data.get("height", "?")
         summary = f"Computer-use capture {width}x{height}."
         content = [
             {"type": "text", "text": summary},
-            {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_b64}"}},
+            {"type": "image_url", "image_url": {"url": display_path}},
         ]
         raw_message = history.RawMessage(raw_content=content, preview=summary)
         self.agent.hist_add_message(False, content=raw_message, tokens=CAPTURE_TOKENS_ESTIMATE)
@@ -342,7 +335,7 @@ class ComputerUseRemote(Tool):
             preview = self._capture_preview_from_message(message)
             if not preview:
                 continue
-            message.content = f"{preview} [embedded image removed]"
+            message.content = f"{preview} [image reference superseded]"
             if hasattr(message, "summary"):
                 message.summary = ""
             if hasattr(message, "calculate_tokens"):
@@ -398,43 +391,6 @@ class ComputerUseRemote(Tool):
         if preview.startswith("Computer-use capture "):
             return preview
         return ""
-
-    def _capture_image_data(self, data: dict[str, Any]) -> tuple[str, str]:
-        image_bytes = self._capture_image_bytes(data)
-        optimized_bytes = self._optimize_capture_image(image_bytes)
-        if optimized_bytes is not None:
-            return "image/jpeg", base64.b64encode(optimized_bytes).decode("utf-8")
-        return "image/png", base64.b64encode(image_bytes).decode("utf-8")
-
-    def _capture_image_bytes(self, data: dict[str, Any]) -> bytes:
-        inline_payload = str(data.get("png_base64", "") or "").strip()
-        if inline_payload:
-            try:
-                return base64.b64decode(inline_payload, validate=True)
-            except Exception:
-                pass
-
-        image_path, _display_path = self._resolve_capture_path(data)
-        return image_path.read_bytes()
-
-    def _optimize_capture_image(self, image_bytes: bytes) -> bytes | None:
-        try:
-            image = Image.open(io.BytesIO(image_bytes))
-            current_pixels = image.width * image.height
-            if current_pixels > CAPTURE_MAX_PIXELS:
-                scale = math.sqrt(CAPTURE_MAX_PIXELS / current_pixels)
-                resized = (
-                    max(1, int(image.width * scale)),
-                    max(1, int(image.height * scale)),
-                )
-                image = image.resize(resized, Image.Resampling.LANCZOS)
-            if image.mode not in {"RGB", "L"}:
-                image = image.convert("RGB")
-            output = io.BytesIO()
-            image.save(output, format="JPEG", quality=CAPTURE_JPEG_QUALITY, optimize=True)
-            return output.getvalue()
-        except Exception:
-            return None
 
     def _resolve_capture_path(self, data: dict[str, Any]) -> tuple[Path, str]:
         candidates = [

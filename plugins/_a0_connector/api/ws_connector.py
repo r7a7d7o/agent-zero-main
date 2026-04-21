@@ -217,20 +217,26 @@ class WsConnector(WsHandler):
         from plugins._a0_connector.helpers.chat_context import ConnectorContextError
 
         message = str(data.get("message", "")).strip()
-        if not message:
-            return WsResult.error(
-                code="MISSING_MESSAGE",
-                message="message is required",
-                correlation_id=data.get("correlationId"),
-        )
-
         context_id = str(data.get("context_id", "")).strip() or None
         current_context_id = (
             str(data.get("current_context", data.get("current_context_id", ""))).strip()
             or None
         )
         client_message_id = str(data.get("client_message_id", "")).strip()
-        attachments = list(data.get("attachments", [])) if isinstance(data.get("attachments"), list) else []
+        raw_attachments = list(data.get("attachments", [])) if isinstance(data.get("attachments"), list) else []
+        attachments, attachment_error = self._normalize_attachment_refs(raw_attachments)
+        if attachment_error:
+            return WsResult.error(
+                code="INVALID_ATTACHMENTS",
+                message=attachment_error,
+                correlation_id=data.get("correlationId"),
+            )
+        if not message and not attachments:
+            return WsResult.error(
+                code="MISSING_MESSAGE",
+                message="message or attachments are required",
+                correlation_id=data.get("correlationId"),
+            )
         project_name = str(data.get("project_name", "")).strip() or None
         agent_profile = str(data.get("agent_profile", "")).strip() or None
 
@@ -298,6 +304,34 @@ class WsConnector(WsHandler):
             "status": "accepted",
             "client_message_id": client_message_id or None,
         }
+
+    def _normalize_attachment_refs(self, attachments: list[Any]) -> tuple[list[str], str]:
+        refs: list[str] = []
+        for attachment in attachments:
+            if isinstance(attachment, str):
+                ref = attachment.strip()
+            elif isinstance(attachment, dict):
+                if str(attachment.get("base64", "") or "").strip():
+                    return [], (
+                        "WebSocket attachments must be file paths or URLs. "
+                        "Use the HTTP message_send upload path for base64 file uploads."
+                    )
+                ref = str(
+                    attachment.get("path")
+                    or attachment.get("url")
+                    or attachment.get("file")
+                    or ""
+                ).strip()
+            else:
+                return [], "attachments must be file paths, URLs, or metadata objects with path/url"
+
+            if not ref:
+                continue
+            if ref.lower().startswith("data:"):
+                return [], "data URL attachments are not accepted; provide a file path or URL"
+            refs.append(ref)
+
+        return refs, ""
 
     def _handle_file_op_result(
         self,

@@ -20,7 +20,7 @@ import openai
 from litellm.types.utils import ModelResponse
 
 from helpers import dotenv
-from helpers import settings, dirty_json
+from helpers import settings, dirty_json, images
 from helpers.dotenv import load_dotenv
 from helpers.providers import ModelType as ProviderModelType, get_provider_config
 from helpers.rate_limiter import RateLimiter
@@ -329,7 +329,7 @@ class LiteLLMChatWrapper(SimpleChatModel):
         }
         for m in messages:
             role = role_mapping.get(m.type, m.type)
-            message_dict = {"role": role, "content": m.content}
+            message_dict = {"role": role, "content": images.prepare_content(m.content)}
 
             # Handle tool calls for AI messages
             tool_calls = getattr(m, "tool_calls", None)

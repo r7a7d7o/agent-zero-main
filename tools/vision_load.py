@@ -1,13 +1,10 @@
-import base64
 from helpers.print_style import PrintStyle
 from helpers.tool import Tool, Response
-from helpers import runtime, files, images, plugins
+from helpers import runtime, files, plugins
 from mimetypes import guess_type
 from helpers import history
 
-# image optimization and token estimation for context window
-MAX_PIXELS = 768_000
-QUALITY = 75
+# image token estimation for context window
 TOKENS_ESTIMATE = 1500
 
 
@@ -17,7 +14,6 @@ class VisionLoad(Tool):
         self.images_dict = {}
         self.loaded_paths: list[str] = []
         self.skipped_paths: list[str] = []
-        template: list[dict[str, str]] = []  # type: ignore
 
         max_embeds = self._get_max_embeds()
         limited_paths = paths if max_embeds <= 0 else paths[-max_embeds:]
@@ -30,31 +26,8 @@ class VisionLoad(Tool):
             if path not in self.images_dict:
                 mime_type, _ = guess_type(str(path))
                 if mime_type and mime_type.startswith("image/"):
-                    try:
-                        # Read binary file
-                        file_content = await runtime.call_development_function(
-                            files.read_file_base64, str(path)
-                        )
-                        file_content = base64.b64decode(file_content)
-                        # Compress and convert to JPEG
-                        compressed = images.compress_image(
-                            file_content, max_pixels=MAX_PIXELS, quality=QUALITY
-                        )
-                        # Encode as base64
-                        file_content_b64 = base64.b64encode(compressed).decode("utf-8")
-
-                        # DEBUG: Save compressed image
-                        # await runtime.call_development_function(
-                        #     files.write_file_base64, str(path), file_content_b64
-                        # )
-
-                        # Construct the data URL (always JPEG after compression)
-                        self.images_dict[path] = file_content_b64
-                        self.loaded_paths.append(path)
-                    except Exception as e:
-                        self.images_dict[path] = None
-                        PrintStyle().error(f"Error processing image {path}: {e}")
-                        self.agent.context.log.log("warning", f"Error processing image {path}: {e}")
+                    self.images_dict[path] = str(path)
+                    self.loaded_paths.append(path)
 
         return Response(message="dummy", break_loop=False)
 
@@ -80,12 +53,12 @@ class VisionLoad(Tool):
         )
         if self.images_dict:
             self.agent.hist_add_tool_result(self.name, summary, id=self.log.id if self.log else "")
-            for path, image in self.images_dict.items():
-                if image:
+            for path, image_path in self.images_dict.items():
+                if image_path:
                     content.append(
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{image}"},
+                            "image_url": {"url": image_path},
                         }
                     )
                 else:
@@ -96,7 +69,7 @@ class VisionLoad(Tool):
                         }
                     )
             # append as raw message content for LLMs with vision tokens estimate
-            msg = history.RawMessage(raw_content=content, preview="<Base64 encoded image data>")
+            msg = history.RawMessage(raw_content=content, preview="<Image attachments loaded by path>")
             self.agent.hist_add_message(
                 False, content=msg, tokens=TOKENS_ESTIMATE * len(content)
             )

@@ -80,7 +80,8 @@ class Capabilities(connector_base.PublicConnectorApiHandler):
             "websocket_namespace": "/ws",
             "websocket_handlers": ["plugins/_a0_connector/ws_connector"],
             "attachments": {
-                "mode": "base64",
+                "mode": "path_or_url",
+                "http_upload": "base64_to_file",
                 "max_files": 20,
             },
             "features": _feature_list(),
