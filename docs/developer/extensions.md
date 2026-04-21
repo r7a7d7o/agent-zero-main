@@ -343,6 +343,7 @@ Each project directory contains a hidden `.a0proj` folder with project metadata 
     ├── instructions/         # additional prompt/instruction files
     ├── knowledge/            # files to be imported into memory
     ├── memory/               # project-specific memory storage
+    ├── plugins/              # project-scoped plugin configuration
     ├── secrets.env           # sensitive variables (secrets)
     └── variables.env         # non-sensitive variables
 ```
@@ -368,6 +369,25 @@ Each project manages its own configuration values via environment files in `.a0p
 - `variables.env` – **non-sensitive variables**, such as configuration flags or identifiers
 
 These files allow you to keep credentials and configuration tightly scoped to a single project.
+
+Plugin-owned project configuration is stored under `.a0proj/plugins/<plugin_name>/`. For example, `_model_config` stores project model settings and project-only presets here:
+
+```text
+/a0/usr/projects/{project_name}/.a0proj/plugins/_model_config/config.json
+/a0/usr/projects/{project_name}/.a0proj/plugins/_model_config/presets.yaml
+```
+
+The `_model_config/presets.yaml` file is a plain YAML list:
+
+```yaml
+- name: Research
+  chat:
+    provider: openrouter
+    name: anthropic/claude-sonnet-4.6
+  utility:
+    provider: openrouter
+    name: openai/gpt-5.4-mini
+```
 
 ### When to Use Projects
 

@@ -36,6 +36,14 @@
                         </div>
                     </template>
 
+                    <div class="project-detail-inline-section">
+                        <div class="project-detail-header">
+                            <span class="projects-project-card-title">LLM</span>
+                        </div>
+                        <x-component path="projects/project-edit-llm.html">
+                        </x-component>
+                    </div>
+
                     <div class="buttons-right">
                         <button type="button" class="button cancel"
                             @click="$store.projects.cancelCreate()"
@@ -72,6 +80,12 @@
 
     .project-detail-header {
         margin-bottom: 1em;
+    }
+
+    .project-detail-inline-section {
+        border-top: 1px solid var(--color-border);
+        margin-top: 1em;
+        padding-top: 1em;
     }
 
     .button-loading {

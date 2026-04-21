@@ -76,18 +76,22 @@ def delete_project(name: str):
 
 
 def create_project(name: str, data: BasicProjectData):
+    llm_data = data.get("llm") if isinstance(data, dict) else None
     abs_path = files.create_dir_safe(
         files.get_abs_path(PROJECTS_PARENT_DIR, name), rename_format="{name}_{number}"
     )
     create_project_meta_folders(name)
     data = _normalizeBasicData(data)
     save_project_header(name, data)
+    save_project_llm_settings(name, llm_data)
     return name
 
 
 def clone_git_project(name: str, git_url: str, git_token: str, data: BasicProjectData):
     """Clone a git repository as a new A0 project. Token is used only for cloning via http header."""
     from helpers import git
+
+    llm_data = data.get("llm") if isinstance(data, dict) else None
     
     abs_path = files.create_dir_safe(
         files.get_abs_path(PROJECTS_PARENT_DIR, name), rename_format="{name}_{number}"
@@ -114,6 +118,8 @@ def clone_git_project(name: str, git_url: str, git_token: str, data: BasicProjec
             data = _normalizeBasicData(data)
             data["git_url"] = clean_url
             save_project_header(actual_name, data)
+
+        save_project_llm_settings(actual_name, llm_data)
         
         return actual_name
     except Exception as e:
@@ -206,6 +212,8 @@ def _basic_data_to_edit_data(data: BasicProjectData) -> EditProjectData:
 
 
 def update_project(name: str, data: EditProjectData):
+    llm_data = data.get("llm") if isinstance(data, dict) else None
+
     # merge with current state
     current = load_edit_project_data(name)
     current.update(data)
@@ -219,6 +227,7 @@ def update_project(name: str, data: EditProjectData):
     save_project_variables(name, current["variables"])
     save_project_secrets(name, current["secrets"])
     save_project_subagents(name, current["subagents"])
+    save_project_llm_settings(name, llm_data)
 
     reactivate_project_in_chats(name)
     return name
@@ -255,6 +264,7 @@ def load_edit_project_data(name: str) -> EditProjectData:
         },
     )
     data = _normalizeEditData(data)
+    data["llm"] = load_project_llm_data(name)  # type: ignore[typeddict-unknown-key]
     return data
 
 
@@ -266,6 +276,55 @@ def save_project_header(name: str, data: BasicProjectData):
     )
 
     files.write_file(abs_path, header)
+
+
+def load_project_llm_data(name: str) -> dict:
+    from plugins._model_config.helpers import model_config
+
+    config = model_config.normalize_config_for_save(
+        model_config.get_config(project_name=name) or {}
+    )
+    return {
+        "config": config,
+        "selected_preset": {
+            "scope": "current",
+            "project_name": name,
+            "name": "Current config",
+        },
+        "presets": model_config.get_combined_presets(name),
+        "global_presets": model_config.get_presets(),
+        "project_presets": model_config.get_project_presets(name),
+    }
+
+
+def save_project_llm_settings(name: str, llm_data: object):
+    if not isinstance(llm_data, dict):
+        return
+
+    from helpers import plugins
+    from plugins._model_config.helpers import model_config
+
+    project_presets = llm_data.get("project_presets")
+    if isinstance(project_presets, list):
+        model_config.save_presets(project_presets, project_name=name)
+
+    config_to_save = None
+    selected_preset = llm_data.get("selected_preset")
+    if isinstance(selected_preset, dict) and selected_preset.get("scope") in {
+        "global",
+        "project",
+    }:
+        preset = model_config.resolve_preset_selection(selected_preset, project_name=name)
+        if preset:
+            base_config = model_config.get_config(project_name=name) or {}
+            config_to_save = model_config.build_config_from_preset(preset, base_config)
+
+    config = llm_data.get("config")
+    if config_to_save is None and isinstance(config, dict):
+        config_to_save = model_config.normalize_config_for_save(config)
+
+    if config_to_save is not None:
+        plugins.save_plugin_config("_model_config", name, "", config_to_save)
 
 
 def get_active_projects_list():

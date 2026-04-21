@@ -18,6 +18,7 @@ This plugin centralizes model selection and model-related settings for the appli
   - Reads plugin config through the standard plugin config system with project and agent overrides.
 - **Preset management**
   - Loads presets from a user file when present and falls back to bundled defaults.
+  - Project presets can be stored beside a project's scoped model config.
 - **Per-chat override**
   - Allows a chat context to store a temporary override or preset reference in context data.
 - **Model object construction**
@@ -46,6 +47,41 @@ This plugin centralizes model selection and model-related settings for the appli
 - **Per-project config**: `true`
 - **Per-agent config**: `true`
 - **Always enabled**: `true`
+
+## Project-Scoped Model Config
+
+Projects store copied model settings in the standard scoped plugin path:
+
+```text
+/a0/usr/projects/<project>/.a0proj/plugins/_model_config/config.json
+```
+
+Project-only presets live beside that config:
+
+```text
+/a0/usr/projects/<project>/.a0proj/plugins/_model_config/presets.yaml
+```
+
+The project preset file uses the same plain YAML list schema as global presets. It does not contain scope metadata:
+
+```yaml
+- name: Research
+  chat:
+    provider: openrouter
+    name: anthropic/claude-sonnet-4.6
+    api_base: ""
+    ctx_length: 200000
+    ctx_history: 0.7
+    vision: true
+  utility:
+    provider: openrouter
+    name: openai/gpt-5.4-mini
+    api_base: ""
+    ctx_length: 128000
+    ctx_input: 0.7
+```
+
+Selecting a preset for a project copies the preset's `chat` and optional `utility` settings into the project's `config.json`. The embedding model is copied from the current effective config, because presets currently define chat and utility only.
 
 ## Plugin Metadata
 

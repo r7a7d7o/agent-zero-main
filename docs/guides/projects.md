@@ -223,6 +223,41 @@ SMTP_PASSWORD=email_pwd_here
 
 Projects can enable or disable specific subagents. This is configured via the UI and stored in `.a0proj/agents.json`. The Browser Agent is not a subagent; it is a built-in plugin.
 
+### Project LLM Configuration
+
+Projects can carry their own model settings without adding model data to `.a0proj/project.json`. The selected project model config is stored in the `_model_config` plugin's project-scoped path:
+
+```text
+/a0/usr/projects/<project_name>/.a0proj/plugins/_model_config/config.json
+```
+
+Project-only presets are stored next to that config:
+
+```text
+/a0/usr/projects/<project_name>/.a0proj/plugins/_model_config/presets.yaml
+```
+
+The project preset YAML is the same plain list used by global model presets:
+
+```yaml
+- name: Research
+  chat:
+    provider: openrouter
+    name: anthropic/claude-sonnet-4.6
+    api_base: ""
+    ctx_length: 200000
+    ctx_history: 0.7
+    vision: true
+  utility:
+    provider: openrouter
+    name: openai/gpt-5.4-mini
+    api_base: ""
+    ctx_length: 128000
+    ctx_input: 0.7
+```
+
+When you select a preset for a project, Agent Zero copies the preset's chat and utility settings into the project config. It does not keep a live link to the preset, and embedding model settings remain copied from the current effective config.
+
 ### Knowledge Files
 
 Import project-specific knowledge documents:
