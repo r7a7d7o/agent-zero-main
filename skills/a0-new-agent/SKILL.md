@@ -82,19 +82,25 @@ A profile with only `agent.yaml` is valid — it inherits everything from `defau
 
 ## Step 3: Override prompts (the most common customization)
 
-Profiles inherit all prompts from `/a0/prompts/default/` and from `/a0/agents/default/prompts/`. To change behavior, drop a file with the **same filename** into `<PROFILE_ROOT>/<name>/prompts/`. The loader searches profile-specific prompts first, then falls back.
+Profiles inherit all prompts from `/a0/prompts/` and from `/a0/agents/default/`. To change behavior, drop a file with the **same filename** into `<PROFILE_ROOT>/<name>/prompts/`. The loader searches profile-specific prompts first and falls back to the defaults.
 
-The usual overrides:
+### The canonical override: `agent.system.main.specifics.md`
 
-| File | What it controls |
+This is the designated extension slot for profile-specific role, identity, and behavior instructions. The file ships **empty** in both `/a0/prompts/agent.system.main.specifics.md` and `/a0/agents/default/agent.system.main.specifics.md` precisely so profiles can fill it in without fighting the base prompt. It is included from `agent.system.main.md` right after `agent.system.main.role.md`, so whatever you put here layers on top of the inherited role.
+
+**Every shipped profile in `/a0/agents/` overrides this file** — a good sanity check that this is the right place for your specialization. Look at the existing profiles for concrete shape:
+
+| Profile | What its `agent.system.main.specifics.md` does |
 |---|---|
-| `agent.system.main.role.md` | The agent's role / identity (most common) |
-| `agent.system.main.specifics.md` | Specialized behavioral instructions for this profile |
-| `agent.system.main.communication.md` | Communication style / reply format |
-| `agent.system.main.environment.md` | Environment & tooling context (e.g. `hacker` uses this for Kali) |
-| `agent.system.tool.<name>.md` | Usage instructions for a profile-specific tool |
+| `/a0/agents/agent0/prompts/agent.system.main.specifics.md` | Establishes the top-level user-facing agent's behavior |
+| `/a0/agents/developer/prompts/agent.system.main.specifics.md` | Full "Master Developer" role + process spec (most elaborate example) |
+| `/a0/agents/hacker/prompts/agent.system.main.specifics.md` | Concise red/blue team pentester identity |
+| `/a0/agents/researcher/prompts/agent.system.main.specifics.md` | Research methodology and deliverable expectations |
+| `/a0/agents/_example/prompts/agent.system.main.specifics.md` | Minimal demo override (fictional "Agent Zero" persona) |
 
-Example `agent.system.main.role.md`:
+Start by copying whichever existing profile's `specifics.md` is closest to your target, then rewrite.
+
+Example `agent.system.main.specifics.md` for a data analyst:
 
 ```markdown
 ## Your role
@@ -106,10 +112,26 @@ Your expertise includes:
 - Statistical modeling and hypothesis testing
 - SQL queries and database analysis
 - Data cleaning and preprocessing
+
+## Process
+1. Understand the data and the question
+2. Choose appropriate tools and methods
+3. Execute analysis with `code_execution_tool`
+4. Visualize results when applicable
+5. Provide clear interpretation of findings
 ```
 
+### Secondary overrides (use only when needed)
+
+| File | When to override | Shipped example |
+|---|---|---|
+| `agent.system.main.role.md` | Replace the base role framing wholesale (rare — most profiles layer via `specifics.md` instead) | `/a0/agents/agent0/prompts/agent.system.main.role.md` |
+| `agent.system.main.communication.md` | Change reply format / communication style | `/a0/agents/developer/prompts/agent.system.main.communication.md`, `/a0/agents/researcher/prompts/...` |
+| `agent.system.main.environment.md` | Describe a non-default runtime environment | `/a0/agents/hacker/prompts/agent.system.main.environment.md` (Kali/Docker) |
+| `agent.system.tool.<name>.md` | Document a profile-specific tool (see Step 4) | `/a0/agents/_example/prompts/agent.system.tool.example_tool.md` |
+
 > [!TIP]
-> Only override what you need. Copying unchanged prompt files creates drift when the framework updates the originals.
+> Only override what you actually need to change. Copying unchanged prompt files creates silent drift when the framework updates the originals — `specifics.md` is safe to own because its default is empty by design.
 
 ---
 
