@@ -6,7 +6,7 @@
     </script>
 </head>
 <body>
-    <div x-data="(() => {
+        <div x-data="(() => {
         const context = $instantiate($store.pluginSettingsPrototype);
         return {
             context,
@@ -17,7 +17,14 @@
     })()">
         <template x-if="context">
             <div>
-            <div x-create="(() => { const modal = $el.closest('.modal'); if (modal) modal.__pluginSettingsContext = context; })()"
+            <div x-create="(() => {
+                     const modal = $el.closest('.modal');
+                     if (modal) {
+                         modal.__pluginSettingsContext = context;
+                         const modalTitle = modal.querySelector('.modal-title');
+                         if (modalTitle) modalTitle.textContent = context.modalTitle || 'Plugin Settings';
+                     }
+                  })()"
                  x-destroy="context.cleanup()">
 
                 <!-- Context toolbar: Project + Agent profile (only when at least one scope is configurable) -->

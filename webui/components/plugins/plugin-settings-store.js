@@ -37,6 +37,19 @@ const model = {
         return this._toComparableJson(this.settings) !== (this.settingsSnapshotJson || "");
     },
 
+    get pluginTitle() {
+        return (
+            this.pluginMeta?.display_name ||
+            this.pluginMeta?.name ||
+            this.pluginName ||
+            "Plugin"
+        );
+    },
+
+    get modalTitle() {
+        return `${this.pluginTitle} Settings`;
+    },
+
     confirmDiscardUnsavedChanges() {
         if (!this.hasUnsavedChanges) return true;
         return window.confirm("You have unsaved changes that will be lost. Continue?");

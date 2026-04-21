@@ -10,11 +10,6 @@ const model = {
   error: "",
   status: null,
 
-  async openModelSettings() {
-    await import("/components/plugins/plugin-settings-store.js");
-    await $store.pluginSettingsPrototype.openConfig("_model_config");
-  },
-
   async refreshStatus() {
     this.status = await callJsonApi(STATUS_API, {});
   },

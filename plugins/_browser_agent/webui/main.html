@@ -13,7 +13,6 @@
         x-destroy="$store.browserAgentPage.cleanup()"
         class="browser-agent-page"
       >
-        <div class="section-title">Browser Agent</div>
         <div class="section-description">
           Built-in browser automation plugin backed by `browser-use` and Playwright.
           Model selection stays in `_model_config`; the browser agent can follow the effective Main Model or use one saved preset just for browser tasks.
@@ -111,12 +110,6 @@
         </template>
 
         <div class="browser-agent-actions">
-          <button
-            class="btn btn-field"
-            @click="$store.browserAgentPage.openModelSettings()"
-          >
-            Open Model Settings
-          </button>
           <button class="btn btn-field" @click="openModal('/plugins/_model_config/webui/main.html')">
             Open Presets
           </button>
