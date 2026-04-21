@@ -71,6 +71,59 @@
       </div>
     </div>
 
+    <!-- API key (store mode: config.html) -->
+    <template x-if="apiKeyMode === 'store'">
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">API key</div>
+          <div class="field-description">Authentication key for this provider. Shared across all model slots using the same provider.</div>
+        </div>
+        <div class="field-control" style="position:relative;" x-data="{ showKey: false }">
+          <input :type="showKey ? 'text' : 'password'"
+                 :value="$store.modelConfig.apiKeyValues[_prov]"
+                 :placeholder="$store.modelConfig.apiKeyStatus[_prov] ? '&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;' : ''"
+                 autocomplete="off"
+                 @input="$store.modelConfig.setApiKeyValue(_prov, $el.value)"
+                 style="padding-right:32px;" />
+          <span class="material-symbols-outlined eye-toggle"
+                @click="
+                  showKey = !showKey;
+                  const prov = _prov;
+                  if (showKey && !$store.modelConfig.apiKeyValues[prov] && $store.modelConfig.apiKeyStatus[prov]) {
+                    $store.modelConfig.revealApiKey(prov).then(v => { if (v) $store.modelConfig.apiKeyValues[prov] = v; });
+                  }
+                "
+                x-text="showKey ? 'visibility' : 'visibility_off'"></span>
+        </div>
+      </div>
+    </template>
+
+    <!-- API key (inline mode: presets) -->
+    <template x-if="apiKeyMode === 'inline'">
+      <div class="field">
+        <div class="field-label">
+          <div class="field-title">API key</div>
+          <div class="field-description">Authentication key for this provider. Shared across all model slots using the same provider.</div>
+        </div>
+        <div class="field-control" style="position:relative;" x-data="{ showKey: false, _revealed: '' }">
+          <input :type="showKey ? 'text' : 'password'" x-model="model.api_key" autocomplete="off"
+                 :placeholder="$store.modelConfig.apiKeyStatus[_prov] ? '&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;' : ''"
+                 style="padding-right:32px;" />
+          <span class="material-symbols-outlined eye-toggle"
+                @click="
+                  showKey = !showKey;
+                  if (showKey && !model.api_key && $store.modelConfig.apiKeyStatus[_prov]) {
+                    $store.modelConfig.revealApiKey(_prov).then(v => { if (v) { model.api_key = v; _revealed = v; } });
+                  }
+                  if (!showKey && _revealed && model.api_key === _revealed) {
+                    model.api_key = ''; _revealed = '';
+                  }
+                "
+                x-text="showKey ? 'visibility' : 'visibility_off'"></span>
+        </div>
+      </div>
+    </template>
+
     <!-- Advanced Settings (collapsed by default) -->
     <div class="advanced-section" x-data="{ advOpen: false }">
       <div class="advanced-toggle" @click="advOpen = !advOpen">
@@ -81,60 +134,6 @@
       </div>
 
       <div class="advanced-body" x-show="advOpen" x-transition.opacity>
-
-        <!-- API key (store mode: config.html) -->
-        <template x-if="apiKeyMode === 'store'">
-          <div class="field">
-            <div class="field-label">
-              <div class="field-title">API key</div>
-              <div class="field-description">Authentication key for this provider. Shared across all model slots using the same provider.</div>
-            </div>
-            <div class="field-control" style="position:relative;" x-data="{ showKey: false }">
-              <input :type="showKey ? 'text' : 'password'"
-                     :value="$store.modelConfig.apiKeyValues[_prov]"
-                     :placeholder="$store.modelConfig.apiKeyStatus[_prov] ? '&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;' : ''"
-                     autocomplete="off"
-                     @input="$store.modelConfig.setApiKeyValue(_prov, $el.value)"
-                     style="padding-right:32px;" />
-              <span class="material-symbols-outlined eye-toggle"
-                    @click="
-                      showKey = !showKey;
-                      const prov = _prov;
-                      if (showKey && !$store.modelConfig.apiKeyValues[prov] && $store.modelConfig.apiKeyStatus[prov]) {
-                        $store.modelConfig.revealApiKey(prov).then(v => { if (v) $store.modelConfig.apiKeyValues[prov] = v; });
-                      }
-                    "
-                    x-text="showKey ? 'visibility' : 'visibility_off'"></span>
-            </div>
-          </div>
-        </template>
-
-        <!-- API key (inline mode: presets) -->
-        <template x-if="apiKeyMode === 'inline'">
-          <div class="field">
-            <div class="field-label">
-              <div class="field-title">API key</div>
-              <div class="field-description">Authentication key for this provider. Shared across all model slots using the same provider.</div>
-            </div>
-            <div class="field-control" style="position:relative;" x-data="{ showKey: false, _revealed: '' }">
-              <input :type="showKey ? 'text' : 'password'" x-model="model.api_key" autocomplete="off"
-                     :placeholder="$store.modelConfig.apiKeyStatus[_prov] ? '&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;' : ''"
-                     style="padding-right:32px;" />
-              <span class="material-symbols-outlined eye-toggle"
-                    @click="
-                      showKey = !showKey;
-                      if (showKey && !model.api_key && $store.modelConfig.apiKeyStatus[_prov]) {
-                        $store.modelConfig.revealApiKey(_prov).then(v => { if (v) { model.api_key = v; _revealed = v; } });
-                      }
-                      if (!showKey && _revealed && model.api_key === _revealed) {
-                        model.api_key = ''; _revealed = '';
-                      }
-                    "
-                    x-text="showKey ? 'visibility' : 'visibility_off'"></span>
-            </div>
-          </div>
-        </template>
-
         <!-- API base URL -->
         <div class="field">
           <div class="field-label">
