@@ -170,23 +170,23 @@ globalThis.toastFetchError = toastFetchError;
 // Event listeners will be set up in DOMContentLoaded
 
 export function updateChatInput(text) {
-  const chatInputEl = document.getElementById("chat-input");
-  if (!chatInputEl) {
-    console.warn("`chatInput` element not found, cannot update.");
+  if (!inputStore) {
+    console.warn("`chatInput` store not found, cannot update.");
     return;
   }
   console.log("updateChatInput called with:", text);
 
-  // Append text with proper spacing
-  const currentValue = chatInputEl.value;
+  // Append text with proper spacing in Alpine store first.
+  const currentValue = inputStore.message || "";
   const needsSpace = currentValue.length > 0 && !currentValue.endsWith(" ");
-  chatInputEl.value = currentValue + (needsSpace ? " " : "") + text + " ";
+  inputStore.message = currentValue + (needsSpace ? " " : "") + text + " ";
 
-  // Adjust height and trigger input event
-  adjustTextareaHeight();
-  chatInputEl.dispatchEvent(new Event("input"));
+  // Adjust height after Alpine applies store value.
+  setTimeout(() => {
+    adjustTextareaHeight();
+  }, 0);
 
-  console.log("Updated chat input value:", chatInputEl.value);
+  console.log("Updated chat input value:", inputStore.message);
 }
 
 async function updateUserTime() {
