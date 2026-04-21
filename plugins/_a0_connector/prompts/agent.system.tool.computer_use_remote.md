@@ -23,3 +23,6 @@ Action-specific fields:
 ## Runtime Notes
 - Successful `start_session`, `move`, `click`, `scroll`, `key`, and `type` calls automatically attach a fresh screenshot.
 - `status` reports the current computer-use state without starting a session.
+- Prefer accessibility, semantic UI controls, hotkeys, focus traversal, and other keyboard paths before pointer actions.
+- For viewport movement, prefer keyboard scrolling first; use `scroll` when a wheel-style scroll is the most reliable way to move an already-focused viewport or pane.
+- Use `move` and `click` only as a last resort when no reliable accessibility or keyboard route is available and the latest screenshot makes the target unambiguous.
