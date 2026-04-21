@@ -26,22 +26,174 @@ Primary references:
 
 ---
 
-## Step 0: Ask First — Where should this profile live?
+## Existing Profile Pattern
 
-Before creating anything, ask the user one question:
+The built-in profiles are intentionally split into two layers:
 
-> "Where should this profile live?
-> 1. **User profile** — `/a0/usr/agents/<name>/` (survives framework updates, this is the normal choice).
-> 2. **Plugin-distributed** — shipped with a plugin at `/a0/usr/plugins/<plugin>/agents/<name>/` (for reusable profiles tied to a plugin's tools).
-> 3. **Project-scoped** — `project/.a0proj/agents/<name>/` (only available inside that project)."
+1. `agent.yaml` is tiny metadata for discovery and delegation:
+   - `title`
+   - `description`
+   - `context`
+2. The actual profile behavior usually lives in `prompts/agent.system.main.specifics.md`.
 
-Pick the path based on the answer. The rest of the skill uses `<PROFILE_ROOT>` for whichever was chosen.
+Use the shipped profiles as calibration:
+
+| Profile | Pattern to copy |
+|---|---|
+| `agent0` | Minimal top-level assistant identity |
+| `developer` | Rich capabilities, methodology, output requirements |
+| `researcher` | Rich capabilities, methodology, evidence standards |
+| `hacker` | Short, direct operational identity plus optional environment override |
+| `_example` | Minimal demo of prompt/tool/extension override surfaces |
+
+For most new profiles, create `agent.yaml` plus one strong `agent.system.main.specifics.md`. Add other prompt overrides, tools, or extensions only when the blueprint explicitly needs them.
 
 ---
 
-## Step 1: Collect the four inputs
+## Step 0: Progressive Intake
 
-Gather these before writing any files:
+Do not ask the user a long form. New users are easily overwhelmed. Guide them with lossy compression: ask only the next highest-value question, one or two questions per turn maximum.
+
+Default assumptions unless the user says otherwise:
+
+- Scope: user profile in `/a0/usr/agents/<name>`.
+- Models: inherit global/project `_model_config`.
+- Response contract: keep the standard Agent Zero JSON tool-call contract.
+- Extras: no custom tools or lifecycle extensions.
+- Prompt strategy: `agent.yaml` plus `prompts/agent.system.main.specifics.md`.
+
+Recommended interview flow:
+
+1. First ask only:
+   - "What should this agent be excellent at?"
+   - Optionally: "Do you already have a name/title in mind?"
+2. After the purpose is clear, propose a short summary with inferred `name`, `title`, `description`, and `context`, then ask for confirmation or corrections.
+3. Ask about behavior only if needed:
+   - "Should it work more like a concise specialist, a rigorous researcher, a code-heavy implementer, or something else?"
+4. Ask about advanced options only when the user's request implies them:
+   - custom output format
+   - profile-specific Main/Utility models
+   - custom tools
+   - lifecycle extensions
+   - plugin/project scope
+5. Before writing files, show the compact blueprint summary and ask for confirmation.
+6. Only after confirmation, produce the full AgentProfileBlueprint JSON in Step 1 and write files from it.
+
+Never open with all blueprint fields. Do not mention obscure paths until they matter. Hide defaults, but use them.
+
+If the user gives a broad idea, infer sensible defaults and mark uncertainties in `validation.open_questions` instead of stalling.
+
+---
+
+## Step 1: Create an AgentProfileBlueprint JSON
+
+Before writing files, produce exactly one valid JSON object in a fenced `json` block using this schema. This blueprint is the source of truth. Do not require a utility model or prose post-processing to extract fields.
+
+```json
+{
+  "schema": "agent_zero.agent_profile_blueprint.v1",
+  "status": "draft",
+  "profile": {
+    "scope": "user",
+    "root": "/a0/usr/agents",
+    "name": "data-analyst",
+    "title": "Data Analyst",
+    "description": "Agent specialized in data analysis, visualization, and statistical modeling.",
+    "context": "Use this agent for data analysis tasks, creating visualizations, statistical analysis, and working with datasets in Python."
+  },
+  "behavior": {
+    "role": "You are a specialized data analysis agent.",
+    "primary_capabilities": [
+      "Python data analysis with pandas, numpy, and scipy",
+      "Data visualization with matplotlib, seaborn, and plotly",
+      "Statistical modeling and hypothesis testing"
+    ],
+    "operating_principles": [
+      "Inspect data before drawing conclusions",
+      "Prefer reproducible code and explicit assumptions",
+      "Explain uncertainty and limitations"
+    ],
+    "workflow": [
+      "Clarify the question and available data",
+      "Profile and clean the dataset",
+      "Run analysis with appropriate methods",
+      "Visualize and interpret results"
+    ],
+    "output_preferences": [
+      "Concise findings first",
+      "Tables or charts when useful",
+      "Reproducible code when analysis is performed"
+    ]
+  },
+  "prompt_strategy": {
+    "base_pattern": "specifics_only",
+    "override_rationale": [
+      "Use agent.system.main.specifics.md for role, expertise, and process.",
+      "Keep the inherited communication contract unchanged."
+    ],
+    "root_prompt_overrides": [
+      {
+        "file": "agent.system.main.communication.md",
+        "reason": "Only include if the profile needs a different response JSON schema or output format."
+      }
+    ]
+  },
+  "llm_config": {
+    "enabled": false,
+    "path": "/a0/usr/agents/data-analyst/plugins/_model_config/config.json",
+    "source": "inherit_global",
+    "chat_model": null,
+    "utility_model": null,
+    "embedding_model": null,
+    "notes": [
+      "Do not put model settings in agent.yaml.",
+      "Only create this config file if the user wants profile-specific Main or Utility models.",
+      "Scoped _model_config config is not deep-merged; include a complete config with chat_model, utility_model, and embedding_model."
+    ]
+  },
+  "files": [
+    {
+      "path": "/a0/usr/agents/data-analyst/agent.yaml",
+      "kind": "yaml",
+      "content": "title: Data Analyst\ndescription: Agent specialized in data analysis, visualization, and statistical modeling.\ncontext: Use this agent for data analysis tasks, creating visualizations, statistical analysis, and working with datasets in Python.\n"
+    },
+    {
+      "path": "/a0/usr/agents/data-analyst/prompts/agent.system.main.specifics.md",
+      "kind": "markdown",
+      "content": "## Your role\n\nYou are a specialized data analysis agent.\n\n## Expertise\n- Python data analysis with pandas, numpy, and scipy\n- Data visualization with matplotlib, seaborn, and plotly\n- Statistical modeling and hypothesis testing\n\n## Process\n1. Clarify the question and available data\n2. Profile and clean the dataset\n3. Run analysis with appropriate methods\n4. Visualize and interpret results\n"
+    }
+  ],
+  "optional_components": {
+    "extra_prompt_overrides": [],
+    "tools": [],
+    "extensions": []
+  },
+  "validation": {
+    "needs_user_confirmation": true,
+    "unique_name_checked": false,
+    "yaml_valid": false,
+    "open_questions": []
+  }
+}
+```
+
+Rules for the blueprint:
+
+- Output strict JSON: no comments, no trailing commas, no markdown inside string values except the intended file content.
+- `profile.name` must be lowercase letters, numbers, hyphens, or underscores only.
+- `prompt_strategy.root_prompt_overrides` must list any inherited root `/prompts` files being considered or replaced and why.
+- If a root prompt override is only a possibility, list it in `prompt_strategy` but do not add it to `files` until confirmed.
+- `llm_config.enabled` controls whether a profile-scoped `_model_config/config.json` file is created. Keep it `false` when models should inherit from global/project settings.
+- `files[*].content` must be the exact file content to write.
+- Include only files that should actually be created.
+- Set `status` to `draft` until all required choices are known; set it to `ready` only after resolving open questions.
+- Ask the user to confirm or edit the blueprint before writing files unless they explicitly authorized immediate creation.
+
+---
+
+## Step 2: Required Fields
+
+The blueprint must contain these required profile inputs:
 
 | Input | Rule | Example |
 |---|---|---|
@@ -51,11 +203,13 @@ Gather these before writing any files:
 | **context** | instructions telling the *superior* agent when to delegate to this profile | `Use this agent for data analysis tasks, creating visualizations, statistical analysis, and working with datasets in Python.` |
 
 > [!NOTE]
-> `agent.yaml` has **only** these three content fields (`title`, `description`, `context`). There is no per-profile model, temperature, or `allowed_tools` setting — model config is handled by the `_model_config` plugin, and tool availability is controlled by plugin activation. Do not invent extra fields.
+> `agent.yaml` has **only** these three content fields (`title`, `description`, `context`). Do not add model, temperature, or `allowed_tools` fields to `agent.yaml`. Profile-specific model settings live in a companion `_model_config` plugin config file, and tool availability is controlled by plugin activation.
 
 ---
 
-## Step 2: Create the directory and `agent.yaml`
+## Step 3: Write Files from the Blueprint
+
+After the user confirms the blueprint, create exactly the paths listed in `files`.
 
 ```
 <PROFILE_ROOT>/<name>/
@@ -78,7 +232,69 @@ A profile with only `agent.yaml` is valid — it inherits everything from `defau
 
 ---
 
-## Step 3: Override prompts (the most common customization)
+## Step 4: Optional profile-specific LLM config
+
+Agent Zero does **not** read Main/Utility model settings from `agent.yaml`. The `_model_config` plugin is always enabled and supports per-agent-profile config. If the user wants this profile to use specific LLMs, create a companion config file:
+
+| Profile scope | Model config path |
+|---|---|
+| User profile | `/a0/usr/agents/<profile>/plugins/_model_config/config.json` |
+| Plugin-distributed profile | `/a0/usr/plugins/<plugin>/agents/<profile>/plugins/_model_config/config.json` |
+| Project-scoped profile | `<project>/.a0proj/agents/<profile>/plugins/_model_config/config.json` |
+
+Scoped `_model_config/config.json` files are selected as a whole; they are **not** deep-merged with broader global/project config. Therefore, if you create this file, include a complete effective model config. When the user only wants to customize Main or Utility, copy the other sections from the current effective config.
+
+Minimal complete profile-scoped config:
+
+```json
+{
+  "allow_chat_override": true,
+  "chat_model": {
+    "provider": "openrouter",
+    "name": "anthropic/claude-sonnet-4.6",
+    "api_base": "",
+    "ctx_length": 200000,
+    "ctx_history": 0.7,
+    "vision": true,
+    "rl_requests": 0,
+    "rl_input": 0,
+    "rl_output": 0,
+    "kwargs": {}
+  },
+  "utility_model": {
+    "provider": "openrouter",
+    "name": "openai/gpt-5.4-mini",
+    "api_base": "",
+    "ctx_length": 128000,
+    "ctx_input": 0.7,
+    "rl_requests": 0,
+    "rl_input": 0,
+    "rl_output": 0,
+    "kwargs": {}
+  },
+  "embedding_model": {
+    "provider": "huggingface",
+    "name": "sentence-transformers/all-MiniLM-L6-v2",
+    "api_base": "",
+    "rl_requests": 0,
+    "rl_input": 0,
+    "kwargs": {}
+  }
+}
+```
+
+Rules:
+
+- Ask the user whether Main/Utility should inherit defaults or be profile-specific.
+- Do not store API keys in this file; API keys are managed globally through settings/secrets.
+- Include `chat_model`, `utility_model`, and `embedding_model` in the generated file if any profile-scoped model config is created.
+- If only Main or Utility is customized, copy the non-customized model sections from the current effective `_model_config` config.
+- Use provider IDs and model names exactly as `_model_config` expects.
+- Add this file to `files` only when `llm_config.enabled` is `true`.
+
+---
+
+## Step 5: Override prompts (the most common customization)
 
 Profiles inherit all prompts from `/a0/prompts/` and from `/a0/agents/default/`. To change behavior, drop a file with the **same filename** into `<PROFILE_ROOT>/<name>/prompts/`. The loader searches profile-specific prompts first and falls back to the defaults.
 
@@ -119,6 +335,22 @@ Your expertise includes:
 5. Provide clear interpretation of findings
 ```
 
+### High-value inherited prompt levers
+
+The root `/a0/prompts` directory contains powerful defaults. A profile can override any of these by placing a file with the same name in `<PROFILE_ROOT>/<name>/prompts/`. Use this when the requested profile needs a different protocol, not just a different specialty.
+
+| File | Override when the user wants... |
+|---|---|
+| `agent.system.main.communication.md` | A different response contract, such as no `thoughts` array, a different JSON schema, plain Markdown answers, or a domain-specific output envelope. This is the main lever for output format changes. |
+| `agent.system.main.solving.md` | A different problem-solving loop, delegation policy, verification standard, or autonomy level. |
+| `agent.system.main.tips.md` | Different file-handling, skill-use, memory, or operational best-practice defaults. |
+| `agent.system.main.environment.md` | A different runtime/environment description than the default Kali/Docker Agent Zero environment. |
+| `agent.system.main.role.md` | A fundamentally different base identity. Rare; prefer `specifics.md` unless replacing the base role is intentional. |
+| `agent.system.tool.response.md` | Different final-response tool instructions, such as stricter final formatting or use of includes for long output. |
+| `fw.user_message.md` / `fw.ai_response.md` | Different framework message wrapping. Advanced and fragile; override only with a clear reason. |
+
+When a blueprint includes any of these, add an entry to `prompt_strategy.root_prompt_overrides` and include the exact override file in `files`.
+
 ### Secondary overrides (use only when needed)
 
 | File | When to override | Shipped example |
@@ -126,14 +358,14 @@ Your expertise includes:
 | `agent.system.main.role.md` | Replace the base role framing wholesale (rare — most profiles layer via `specifics.md` instead) | `/a0/agents/agent0/prompts/agent.system.main.role.md` |
 | `agent.system.main.communication.md` | Change reply format / communication style | `/a0/agents/developer/prompts/agent.system.main.communication.md`, `/a0/agents/researcher/prompts/...` |
 | `agent.system.main.environment.md` | Describe a non-default runtime environment | `/a0/agents/hacker/prompts/agent.system.main.environment.md` (Kali/Docker) |
-| `agent.system.tool.<name>.md` | Document a profile-specific tool (see Step 4) | `/a0/agents/_example/prompts/agent.system.tool.example_tool.md` |
+| `agent.system.tool.<name>.md` | Document a profile-specific tool (see Step 6) | `/a0/agents/_example/prompts/agent.system.tool.example_tool.md` |
 
 > [!TIP]
 > Only override what you actually need to change. Copying unchanged prompt files creates silent drift when the framework updates the originals — `specifics.md` is safe to own because its default is empty by design.
 
 ---
 
-## Step 4 (optional): Profile-specific tools
+## Step 6 (optional): Profile-specific tools
 
 Drop a Python tool class in `<PROFILE_ROOT>/<name>/tools/<tool_name>.py`:
 
@@ -156,7 +388,7 @@ Two important rules:
 
 ---
 
-## Step 5 (optional): Profile-specific extensions
+## Step 7 (optional): Profile-specific extensions
 
 Lifecycle hooks go in `<PROFILE_ROOT>/<name>/extensions/<hook_point>/_NN_<name>.py`. The `_NN_` prefix controls execution order.
 
@@ -174,7 +406,7 @@ Available hook points mirror the framework's own `/a0/extensions/python/<point>/
 
 ---
 
-## Step 6: Test the new profile
+## Step 8: Test the new profile
 
 1. The profile is picked up on next agent initialization — no restart of individual conversations needed, but a fresh agent/subordinate spawn is required.
 2. From the superior agent, delegate to it via `call_subordinate` using the profile's **directory name** (not the title).
@@ -213,6 +445,8 @@ Copy this shape when in doubt — it demonstrates every customization surface a 
 ## Quick checklist
 
 - [ ] Confirmed profile scope (user / plugin / project)
+- [ ] Produced and confirmed `agent_zero.agent_profile_blueprint.v1` JSON
+- [ ] Confirmed whether Main/Utility models inherit defaults or need `_model_config/config.json`
 - [ ] Directory name is unique and matches allowed characters
 - [ ] `agent.yaml` contains exactly `title`, `description`, `context`
 - [ ] Prompt overrides only include files that actually change behavior
