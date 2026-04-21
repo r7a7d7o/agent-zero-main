@@ -1,14 +1,13 @@
 import * as API from "/js/api.js";
-import { store as settingsStore } from "/components/settings/settings-store.js";
+import { store as markdownModalStore } from "/components/modals/markdown/markdown-store.js";
 import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
-import { store as projectsStore } from "/components/projects/projects-store.js";
 import {
   toastFrontendError,
   toastFrontendInfo,
 } from "/components/notifications/notification-store.js";
 
 const CATALOG_API = "/plugins/_skills/skills_catalog";
-const MAX_ACTIVE_SKILLS_FALLBACK = 5;
+const MAX_ACTIVE_SKILLS_FALLBACK = 20;
 
 function normalizeEntry(entry) {
   if (!entry) return null;
@@ -52,14 +51,28 @@ function ensureConfig(config) {
   config.active_skills = normalized;
 }
 
+function compactEntries(entries) {
+  return entries
+    .map((entry) => normalizeEntry(entry))
+    .filter(Boolean)
+    .map((entry) => ({
+      ...(entry.name ? { name: entry.name } : {}),
+      ...(entry.path ? { path: entry.path } : {}),
+    }));
+}
+
 window.createSkillsConfigModel = (context, config) => ({
   loadingCatalog: false,
+  mutatingChat: false,
   catalog: [],
   search: "",
   maxActiveSkills: MAX_ACTIVE_SKILLS_FALLBACK,
+  selectedSkills: [],
+  chatContextAvailable: false,
 
   initDefaults() {
     ensureConfig(config);
+    this.selectedSkills = [...this.activeEntries];
   },
 
   get activeEntries() {
@@ -68,26 +81,11 @@ window.createSkillsConfigModel = (context, config) => ({
   },
 
   get selectedCount() {
-    return this.activeEntries.length;
+    return this.selectedSkills.length;
   },
 
   get selectedCountLabel() {
     return `${this.selectedCount} / ${this.maxActiveSkills}`;
-  },
-
-  get limitDescription() {
-    return `Max in extras: ${this.maxActiveSkills}`;
-  },
-
-  get activeProject() {
-    return chatsStore.selectedContext?.project || null;
-  },
-
-  get scopeSummary() {
-    if (context.projectName) {
-      return `Project: ${context.projectLabel(context.projectName)}`;
-    }
-    return "Project: Global";
   },
 
   get catalogMap() {
@@ -124,11 +122,11 @@ window.createSkillsConfigModel = (context, config) => ({
   },
 
   isSelected(skill) {
-    return this.activeEntries.some((entry) => entryKey(entry) === entryKey(skill));
+    return this.selectedSkills.some((entry) => entryKey(entry) === entryKey(skill));
   },
 
   isCheckboxDisabled(skill) {
-    return !this.isSelected(skill) && this.selectedCount >= this.maxActiveSkills;
+    return this.mutatingChat || (!this.isSelected(skill) && this.selectedCount >= this.maxActiveSkills);
   },
 
   isEntryMissing(entry) {
@@ -147,11 +145,9 @@ window.createSkillsConfigModel = (context, config) => ({
 
   secondaryLabelForEntry(entry) {
     const skill = this._resolveEntry(entry);
-    if (skill) {
-      return `${skill.origin} | ${skill.path}`;
-    }
-    if (entry?.path) return `Not visible in the current catalog | ${entry.path}`;
-    return "Not visible in the current catalog";
+    if (skill) return `${skill.origin} | ${skill.path}`;
+    if (entry?.path) return `Not visible in the current list | ${entry.path}`;
+    return "Not visible in the current list";
   },
 
   _resolveEntry(entry) {
@@ -163,15 +159,31 @@ window.createSkillsConfigModel = (context, config) => ({
     return name ? this.catalogMap.get(name) || null : null;
   },
 
-  toggleSkill(skill, selected) {
-    ensureConfig(config);
+  _setSelectedSkills(entries) {
+    const normalized = [];
+    const seen = new Set();
+
+    for (const entry of entries) {
+      const item = normalizeEntry(entry);
+      const key = entryKey(item);
+      if (!item || !key || seen.has(key)) continue;
+      seen.add(key);
+      normalized.push(item);
+      if (normalized.length >= this.maxActiveSkills) break;
+    }
+
+    this.selectedSkills = normalized;
+    config.active_skills = compactEntries(normalized);
+  },
+
+  async toggleSkill(skill, selected) {
     const key = entryKey(skill);
-    const nextEntries = this.activeEntries.filter((entry) => entryKey(entry) !== key);
+    const nextEntries = this.selectedSkills.filter((entry) => entryKey(entry) !== key);
 
     if (selected) {
-      if (this.selectedCount >= this.maxActiveSkills) {
-        void toastFrontendInfo(
-          `You can activate at most ${this.maxActiveSkills} skills in extras.`,
+      if (this.selectedCount >= this.maxActiveSkills && !this.isSelected(skill)) {
+        await toastFrontendInfo(
+          `You can activate at most ${this.maxActiveSkills} skills.`,
           "Skills"
         );
         return;
@@ -183,18 +195,32 @@ window.createSkillsConfigModel = (context, config) => ({
       });
     }
 
-    config.active_skills = nextEntries;
+    this._setSelectedSkills(nextEntries);
+
+    if (this.chatContextAvailable) {
+      await this.submitChatAction(selected ? "activate" : "deactivate", skill);
+    }
   },
 
-  removeEntry(entry) {
-    ensureConfig(config);
-    const key = entryKey(entry);
-    config.active_skills = this.activeEntries.filter((item) => entryKey(item) !== key);
+  async removeEntry(entry) {
+    await this.toggleSkill(entry, false);
   },
 
-  clearSelections() {
-    ensureConfig(config);
-    config.active_skills = [];
+  async clearSelections() {
+    const previous = [...this.selectedSkills];
+    this._setSelectedSkills([]);
+    if (this.chatContextAvailable) {
+      for (const entry of previous) {
+        await this.submitChatAction("deactivate", entry);
+      }
+    }
+  },
+
+  applyCatalogState(response) {
+    this.chatContextAvailable = !!response?.context_available;
+    const activeFromChat = Array.isArray(response?.active_skills) ? response.active_skills : null;
+    const activeFromConfig = this.activeEntries;
+    this._setSelectedSkills(activeFromChat || activeFromConfig);
   },
 
   async loadCatalog() {
@@ -203,67 +229,85 @@ window.createSkillsConfigModel = (context, config) => ({
       const response = await API.callJsonApi(CATALOG_API, {
         action: "list",
         project_name: context.projectName || "",
+        context_id: chatsStore.selectedContext?.id || "",
       });
 
       if (!response?.ok) {
-        throw new Error(response?.error || "Failed to load skills catalog");
+        throw new Error(response?.error || "Failed to load skills");
       }
 
       this.catalog = Array.isArray(response.skills) ? response.skills : [];
       this.maxActiveSkills = Number(response.max_active_skills) || MAX_ACTIVE_SKILLS_FALLBACK;
+      this.applyCatalogState(response);
     } catch (error) {
       this.catalog = [];
       this.maxActiveSkills = MAX_ACTIVE_SKILLS_FALLBACK;
-      await toastFrontendError(error?.message || "Failed to load skills catalog", "Skills");
+      this.chatContextAvailable = false;
+      this._setSelectedSkills(this.activeEntries);
+      await toastFrontendError(error?.message || "Failed to load skills", "Skills");
     } finally {
       this.loadingCatalog = false;
     }
   },
 
-  async navigateAway(callback) {
-    if (context.hasUnsavedChanges && !context.confirmDiscardUnsavedChanges()) {
-      return;
-    }
+  async submitChatAction(action, skill = null) {
+    this.mutatingChat = true;
+    try {
+      const response = await API.callJsonApi(CATALOG_API, {
+        action,
+        context_id: chatsStore.selectedContext?.id || "",
+        project_name: context.projectName || "",
+        ...(skill
+          ? {
+              skill: {
+                name: String(skill.name || "").trim(),
+                path: String(skill.path || "").trim(),
+              },
+            }
+          : {}),
+      });
 
-    await window.closeModal?.();
-    await callback();
+      if (!response?.ok) {
+        throw new Error(response?.error || "Failed to update skills");
+      }
+
+      this.catalog = Array.isArray(response.skills) ? response.skills : this.catalog;
+      this.maxActiveSkills = Number(response.max_active_skills) || this.maxActiveSkills;
+      this.chatContextAvailable = !!response.context_available;
+      return true;
+    } catch (error) {
+      await toastFrontendError(error?.message || "Failed to update skills", "Skills");
+      return false;
+    } finally {
+      this.mutatingChat = false;
+    }
   },
 
-  async openSettingsSkills() {
-    await this.navigateAway(async () => {
-      await settingsStore.open("skills");
-    });
-  },
+  async openSkill(skill) {
+    try {
+      const response = await API.callJsonApi(CATALOG_API, {
+        action: "get_doc",
+        context_id: chatsStore.selectedContext?.id || "",
+        project_name: context.projectName || "",
+        skill: {
+          name: String(skill?.name || "").trim(),
+          path: String(skill?.path || "").trim(),
+        },
+      });
 
-  async openActiveProjectSkills() {
-    const projectName = this.activeProject?.name;
-    if (!projectName) {
-      await toastFrontendInfo("No active project is selected in the current chat.", "Skills");
-      return;
-    }
+      if (!response?.ok) {
+        throw new Error(response?.error || "Failed to open skill");
+      }
+      if (!markdownModalStore?.open) {
+        throw new Error("Markdown viewer is unavailable");
+      }
 
-    await this.navigateAway(async () => {
-      await projectsStore.openEditModal(projectName);
-      this.scrollProjectSkillsSection();
-    });
-  },
-
-  scrollProjectSkillsSection(attempt = 0) {
-    const headers = Array.from(
-      document.querySelectorAll(".project-detail-header .projects-project-card-title")
-    );
-    const target = headers.find(
-      (header) => header.textContent?.trim().toLowerCase() === "skills"
-    );
-    const section = target?.closest(".project-detail");
-
-    if (section) {
-      section.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
-
-    if (attempt < 12) {
-      window.setTimeout(() => this.scrollProjectSkillsSection(attempt + 1), 120);
+      markdownModalStore.open(response.filename || "SKILL.md", response.content || "", {
+        viewer: "ace",
+      });
+      window.openModal?.("components/modals/markdown/markdown-modal.html");
+    } catch (error) {
+      await toastFrontendError(error?.message || "Failed to open skill", "Skills");
     }
   },
 });

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
+from helpers import skills
 from agent import LoopData
-from helpers import plugins, projects
 from helpers.extension import Extension
-
-from plugins._skills.helpers.runtime import PLUGIN_NAME, resolve_active_skills
 
 
 class IncludeActiveSkills(Extension):
@@ -12,25 +10,14 @@ class IncludeActiveSkills(Extension):
         if not self.agent:
             return
 
-        project_name = projects.get_context_project_name(self.agent.context) or ""
-        config = (
-            plugins.get_plugin_config(
-                PLUGIN_NAME,
-                agent=self.agent,
-                project_name=project_name,
-                agent_profile="",
-            )
-            or {}
-        )
-        active_skills = resolve_active_skills(self.agent, config.get("active_skills"))
-        if not active_skills:
-            return
+        extras = loop_data.extras_persistent
+        extras.pop("active_skills", None)
 
-        content = "\n\n".join(item["content"] for item in active_skills if item.get("content")).strip()
+        content = skills.build_active_skills_prompt(self.agent)
         if not content:
             return
 
-        loop_data.extras_persistent["active_skills"] = self.agent.read_prompt(
+        extras["active_skills"] = self.agent.read_prompt(
             "agent.system.active_skills.md",
             skills=content,
         )

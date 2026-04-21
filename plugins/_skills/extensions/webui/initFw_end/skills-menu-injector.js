@@ -1,6 +1,6 @@
 import { store as pluginSettingsStore } from "/components/plugins/plugin-settings-store.js";
-import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
 import { store as chatInputStore } from "/components/chat/input/input-store.js";
+import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
 
 const MENU_SELECTOR = ".chat-bottom-actions-menu";
 const BUTTON_ID = "skills-chat-more-item";
@@ -16,9 +16,9 @@ function buildButton() {
   `;
 
   button.addEventListener("click", async () => {
-    const projectName = chatsStore.selectedContext?.project?.name || "";
     chatInputStore.closeChatMoreMenu();
-    await pluginSettingsStore.openConfig("_skills", projectName, "");
+    const projectName = chatsStore.selectedContext?.project?.name || "";
+    await pluginSettingsStore.openConfig("_skills", projectName, "", { focus: "chat" });
   });
 
   return button;

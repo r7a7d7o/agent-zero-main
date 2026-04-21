@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import List
 
 from helpers.tool import Tool, Response
-from helpers import projects, files, file_tree
-from helpers import skills as skills_helper, runtime
+from helpers import skills as skills_helper
 from helpers.print_style import PrintStyle
 
 
@@ -197,4 +195,4 @@ class SkillsTool(Tool):
 
 
 def max_loaded_skills() -> int:
-    return 5 # TODO move to settings
+    return skills_helper.MAX_ACTIVE_SKILLS
