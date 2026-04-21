@@ -12,6 +12,7 @@ import { store as pluginSettingsStore } from "/components/plugins/plugin-setting
 const PLUGIN_API = "plugins/_plugin_installer/plugin_install";
 const PER_PAGE = 24;
 const POPULAR_PLUGIN_MIN_STARS = 3;
+const NEW_PLUGIN_WINDOW_DAYS = 14;
 
 const SECURITY_WARNING = {
   title: "Security Warning",
@@ -68,7 +69,11 @@ const model = {
   },
 
   setBrowseFilter(filter) {
-    this.browseFilter = filter || "all";
+    const nextFilter = filter || "all";
+    this.browseFilter = nextFilter;
+    if (nextFilter === "new" && this.sortBy === "stars") {
+      this.sortBy = "updated";
+    }
     this.page = 1;
   },
 
@@ -98,6 +103,21 @@ const model = {
     return (plugin?.stars || 0) >= POPULAR_PLUGIN_MIN_STARS;
   },
 
+  _isNewPlugin(plugin) {
+    const updatedAt = (plugin?.updated || "").trim();
+    if (!updatedAt) return false;
+    const updatedMs = Date.parse(updatedAt);
+    if (Number.isNaN(updatedMs)) return false;
+
+    const nowMs = Date.now();
+    const cutoffMs = nowMs - NEW_PLUGIN_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    return updatedMs >= cutoffMs;
+  },
+
+  isNewPlugin(plugin) {
+    return this._isNewPlugin(plugin);
+  },
+
   _getSuspensionReason(plugin) {
     return typeof plugin?.suspended === "string" ? plugin.suspended.trim() : "";
   },
@@ -111,6 +131,7 @@ const model = {
     if (filterKey === "installed") return !!plugin?.installed;
     if (filterKey === "update") return !!plugin?.has_update;
     if (filterKey === "popular") return this._isPopularPlugin(plugin);
+    if (filterKey === "new") return this._isNewPlugin(plugin);
     if (filterKey.startsWith("tag:")) {
       return this._pluginPrimaryTag(plugin) === filterKey.slice(4);
     }
@@ -153,6 +174,14 @@ const model = {
     }
 
     return (a.title || a.key).localeCompare(b.title || b.key);
+  },
+
+  _comparePluginsByUpdated(a, b) {
+    const updatedComparison = this._compareTimestamp(a?.updated, b?.updated);
+    if (updatedComparison !== 0) {
+      return updatedComparison > 0 ? -1 : 1;
+    }
+    return this._comparePluginsByStars(a, b);
   },
 
   // ── ZIP Install ──────────────────────────────
@@ -400,6 +429,11 @@ const model = {
       filters.push({ key: "popular", label: "Popular", count: popularCount });
     }
 
+    const newCount = plugins.filter((plugin) => this._isNewPlugin(plugin)).length;
+    if (newCount) {
+      filters.push({ key: "new", label: "New", count: newCount });
+    }
+
     const tagCounts = new Map();
     for (const plugin of plugins) {
       const tag = this._pluginPrimaryTag(plugin);
@@ -435,7 +469,9 @@ const model = {
           (p.tags || []).some((t) => t.toLowerCase().includes(q))
       );
     }
-    if (this.sortBy === "stars") {
+    if (this.sortBy === "updated" || this.browseFilter === "new") {
+      list.sort((a, b) => this._comparePluginsByUpdated(a, b));
+    } else if (this.sortBy === "stars") {
       list.sort((a, b) => this._comparePluginsByStars(a, b));
     } else {
       list.sort((a, b) =>
