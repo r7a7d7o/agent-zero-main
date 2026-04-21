@@ -1,7 +1,6 @@
 import { createStore } from "/js/AlpineStore.js";
+import { fetchApi } from "/js/api.js";
 import { store as settingsStore } from "/components/plugins/plugin-settings-store.js";
-
-const fetchApi = globalThis.fetchApi;
 
 const model = {
     pluginName: null,

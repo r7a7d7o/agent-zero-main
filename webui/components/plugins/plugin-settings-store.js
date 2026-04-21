@@ -1,9 +1,9 @@
 import { createStore } from "/js/AlpineStore.js";
 import * as api from "/js/api.js";
+import { fetchApi } from "/js/api.js";
 import { showConfirmDialog } from "/js/confirmDialog.js";
 import { store as pluginToggleStore } from "/components/plugins/toggle/plugin-toggle-store.js";
 
-const fetchApi = globalThis.fetchApi;
 const justToast = globalThis.justToast;
 
 const model = {

@@ -1,13 +1,48 @@
+import { fetchApi } from "/js/api.js";
+
 const API_BASE = "/plugins/_model_config";
+const CREATE_AGENT_PROFILE_PROMPT = `I want to create a new Agent Zero agent profile.
+
+Use the a0-create-agent skill and guide me through the questionnaire. Start by asking what kind of agent profile I want to create, where it should live, and what behavior/personality/tools it should have. Prefer a normal user profile in /a0/usr/agents unless I choose another scope.`;
 
 export const switcherState = {
   switcherAllowed: false,
   switcherOverride: null,
   switcherPresets: [],
   switcherLoading: true,
+  agentProfiles: [],
+  agentProfilesLoading: true,
+  agentProfileSettings: null,
+  agentProfileSaving: false,
 };
 
 export const switcherMethods = {
+  async loadAgentProfiles(force = false) {
+    if (!force && this.agentProfiles.length > 0 && this.agentProfileSettings) return this.agentProfiles;
+    this.agentProfilesLoading = true;
+    try {
+      const res = await fetchApi("/settings_get", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      this.agentProfileSettings = data.settings || {};
+      this.agentProfiles = (data.additional?.agent_subdirs || [])
+        .map(profile => ({
+          key: profile.value || profile.key || "",
+          label: profile.label || profile.value || profile.key || "",
+        }))
+        .filter(profile => profile.key && profile.key !== "_example");
+    } catch (e) {
+      console.error("Agent profile list load failed:", e);
+      this.agentProfiles = [];
+    } finally {
+      this.agentProfilesLoading = false;
+    }
+    return this.agentProfiles;
+  },
+
   async loadSwitcherState(contextId) {
     const result = { allowed: false, presets: [], override: null };
     try {
@@ -54,6 +89,98 @@ export const switcherMethods = {
     } catch (e) {
       console.error("Failed to clear override:", e);
       return false;
+    }
+  },
+
+  getAgentProfileList(activeKey = "", activeLabel = "") {
+    const profiles = [...(this.agentProfiles || [])];
+    if (activeKey && !profiles.some(profile => profile.key === activeKey)) {
+      profiles.unshift({ key: activeKey, label: activeLabel || activeKey });
+    }
+    return profiles;
+  },
+
+  async createAgentProfileChat(currentContextId = "") {
+    try {
+      const res = await fetchApi("/chat_create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ current_context: currentContextId || "" }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.ctxid) return false;
+
+      const chatsStore = window.Alpine?.store("chats");
+      if (chatsStore?.selectChat) {
+        await chatsStore.selectChat(data.ctxid);
+      } else {
+        window.setContext?.(data.ctxid);
+      }
+
+      const chatInputStore = window.Alpine?.store("chatInput");
+      if (chatInputStore) {
+        chatInputStore.message = CREATE_AGENT_PROFILE_PROMPT;
+        setTimeout(() => {
+          chatInputStore.adjustTextareaHeight?.();
+          chatInputStore.focus?.();
+        }, 0);
+      }
+
+      return true;
+    } catch (e) {
+      console.error("Failed to create agent profile chat:", e);
+      window.toastFetchError?.("Failed to start profile creator", e);
+      return false;
+    }
+  },
+
+  async selectAgentProfile(contextId, agentProfile) {
+    if (!contextId || !agentProfile) return false;
+    if (this.agentProfileSaving) return false;
+    const chatsStore = window.Alpine?.store("chats");
+    const selectedContext = chatsStore?.selectedContext;
+    if (selectedContext?.running) {
+      window.justToast?.("Agent profile can be changed after the current run finishes.", "warning", 2500, "agent-profile-switch");
+      return false;
+    }
+
+    const activeProfile = selectedContext?.agent_profile || this.agentProfileSettings?.agent_profile || "";
+    if (activeProfile === agentProfile) return true;
+
+    this.agentProfileSaving = true;
+    try {
+      await this.loadAgentProfiles();
+      const settings = { ...(this.agentProfileSettings || {}), agent_profile: agentProfile };
+      const res = await fetchApi("/settings_set", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings }),
+      });
+      const data = await res.json();
+      if (!data.settings) return false;
+
+      this.agentProfileSettings = data.settings;
+      this.agentProfiles = (data.additional?.agent_subdirs || this.agentProfiles)
+        .map(profile => ({
+          key: profile.value || profile.key || "",
+          label: profile.label || profile.value || profile.key || "",
+        }))
+        .filter(profile => profile.key && profile.key !== "_example");
+
+      const label = this.agentProfiles.find(profile => profile.key === agentProfile)?.label || agentProfile;
+      if (selectedContext) {
+        selectedContext.agent_profile = agentProfile;
+        selectedContext.agent_profile_label = label;
+      }
+      document.dispatchEvent(new CustomEvent("settings-updated", { detail: this.agentProfileSettings }));
+      window.justToast?.(`Agent profile: ${label}`, "success", 1600, "agent-profile-switch");
+      return true;
+    } catch (e) {
+      console.error("Failed to set active agent profile:", e);
+      window.toastFetchError?.("Failed to set agent profile", e);
+      return false;
+    } finally {
+      this.agentProfileSaving = false;
     }
   },
 

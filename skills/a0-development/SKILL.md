@@ -455,7 +455,7 @@ class MyEndpoint(ApiHandler):
 
 Agent profiles define specialized subordinates with custom prompts and behaviors.
 
-> For a guided, step-by-step wizard (scope selection, `agent.yaml` schema, prompt overrides, tool/extension stubs, test checklist) use the dedicated `/a0/skills/a0-new-agent/SKILL.md` skill.
+> For a guided, step-by-step wizard (scope selection, `agent.yaml` schema, prompt overrides, tool/extension stubs, test checklist) use the dedicated `/a0/skills/a0-create-agent/SKILL.md` skill.
 
 ### Profile Directory Structure
 

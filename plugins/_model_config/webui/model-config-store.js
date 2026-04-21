@@ -1,4 +1,5 @@
 import { createStore } from "/js/AlpineStore.js";
+import { fetchApi } from "/js/api.js";
 import { store as pluginSettingsStore } from "/components/plugins/plugin-settings-store.js";
 import { apiKeysState, apiKeysMethods } from "/plugins/_model_config/webui/api-keys-mixin.js";
 import { switcherState, switcherMethods } from "/plugins/_model_config/webui/switcher-mixin.js";

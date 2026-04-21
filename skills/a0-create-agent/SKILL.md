@@ -1,15 +1,13 @@
 ---
-name: a0-new-agent
+name: a0-create-agent
 description: Create a new Agent Zero agent profile (subordinate). Covers where profiles live (user / plugin-distributed / project-scoped), the agent.yaml schema, the prompt inheritance & override model, and optional profile-specific tools and extensions. Use for any "create/add/new agent profile" request.
 version: 1.0.0
 tags: ["agents", "profile", "create", "new", "subordinate"]
 trigger_patterns:
-  - "create agent profile"
+  - "create agent"
   - "new agent profile"
   - "add agent profile"
   - "make agent profile"
-  - "new subordinate agent"
-  - "create subordinate"
   - "agent profile template"
   - "build agent profile"
 ---

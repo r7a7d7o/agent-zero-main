@@ -112,6 +112,34 @@ def _coerce_non_negative_int(value: Any, default: int = 0) -> int:
     return as_int if as_int >= 0 else default
 
 
+def _get_agent_profile_labels() -> dict[str, str]:
+    try:
+        from helpers import subagents
+
+        return {
+            str(item.get("key") or ""): str(item.get("label") or item.get("key") or "")
+            for item in subagents.get_all_agents_list()
+            if item.get("key")
+        }
+    except Exception:
+        return {}
+
+
+def _apply_agent_profile_metadata(
+    context_data: dict[str, Any],
+    ctx: AgentContext,
+    labels: dict[str, str],
+) -> None:
+    agent_config = getattr(getattr(ctx, "agent0", None), "config", None)
+    profile = str(
+        getattr(agent_config, "profile", None)
+        or getattr(getattr(ctx, "config", None), "profile", "")
+        or ""
+    )
+    context_data["agent_profile"] = profile
+    context_data["agent_profile_label"] = labels.get(profile, profile) if profile else ""
+
+
 def parse_state_request_payload(payload: Mapping[str, Any]) -> StateRequestV1:
     context = payload.get("context")
     log_from = payload.get("log_from")
@@ -240,6 +268,7 @@ async def build_snapshot_from_request(*, request: StateRequestV1) -> SnapshotV1:
     ctxs: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
     processed_contexts: set[str] = set()
+    agent_profile_labels = _get_agent_profile_labels()
 
     all_ctxs = AgentContext.all()
     for ctx in all_ctxs:
@@ -251,6 +280,7 @@ async def build_snapshot_from_request(*, request: StateRequestV1) -> SnapshotV1:
             continue
 
         context_data = ctx.output()
+        _apply_agent_profile_metadata(context_data, ctx, agent_profile_labels)
 
         context_task = scheduler.get_task_by_uuid(ctx.id)
         is_task_context = context_task is not None and context_task.context_id == ctx.id
