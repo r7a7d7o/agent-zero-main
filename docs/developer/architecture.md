@@ -224,6 +224,8 @@ The `prompts` directory contains various Markdown files that control agent behav
 3. Agent Zero merges these overrides with the default prompts automatically
 4. Select the **Agent Profile** in Settings to activate the overrides
 
+For user-created profiles, prefer `/a0/usr/agents/<agent_profile>/` so updates do not overwrite custom files. See the [Agent Profiles guide](../guides/agent-profiles.md) for the current `agent.yaml` structure, prompt override paths, and profile-specific `_model_config` model settings.
+
 #### Prompt Inheritance with `{{include original}}`
 When overriding a prompt, you can extend the original instead of replacing it entirely. Use `{{include original}}` to pull in the default version and add your changes on top:
 

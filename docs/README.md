@@ -16,6 +16,7 @@ Welcome to the Agent Zero documentation hub. Whether you're getting started or d
 
 - **[Usage Guide](guides/usage.md):** Comprehensive guide to Agent Zero's features and capabilities.
 - **[A0 CLI Connector](guides/a0-cli-connector.md):** Terminal-first companion workflow for Agent Zero.
+- **[Agent Profiles](guides/agent-profiles.md):** Create and select specialized profiles, prompt overrides, and profile-specific model config.
 - **[Projects Tutorial](guides/projects.md):** Learn to create isolated workspaces with dedicated context and memory.
 - **[API Integration](guides/api-integration.md):** Add external APIs without writing code.
 - **[MCP Setup](guides/mcp-setup.md):** Configure Model Context Protocol servers.
@@ -95,6 +96,7 @@ Welcome to the Agent Zero documentation hub. Whether you're getting started or d
     - [Memory Management](guides/usage.md#memory-management)
     - [Backup & Restore](guides/usage.md#backup--restore)
   - [A0 CLI Connector](guides/a0-cli-connector.md)
+  - [Agent Profiles](guides/agent-profiles.md)
   - [Projects Tutorial](guides/projects.md)
   - [API Integration](guides/api-integration.md)
   - [MCP Setup](guides/mcp-setup.md)

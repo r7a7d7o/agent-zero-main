@@ -312,6 +312,8 @@ Agent Zero provides a comprehensive settings interface to customize various aspe
 - **Memory Subdirectory:** Select the subdirectory for agent memory storage, allowing separation between different instances.
 - **Knowledge Subdirectory:** Specify the location of custom knowledge files to enhance the agent's understanding.
 
+See the [Agent Profiles guide](../guides/agent-profiles.md) for profile file locations, `agent.yaml`, prompt overrides, and profile-specific Main/Utility model configuration.
+
 > [!NOTE]
 > Since v0.9.7, custom prompts belong in `/a0/agents/<agent_name>/prompts/` rather than a shared `/prompts` folder. See the [Extensions guide](../developer/extensions.md#prompts) for details.
 

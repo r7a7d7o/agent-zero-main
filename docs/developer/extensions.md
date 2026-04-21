@@ -290,21 +290,26 @@ Agent Zero supports creating specialized subagents with customized behavior. The
 
 ### Creating a Subagent
 
-1. Create a directory in `/agents/{agent_profile}/`
+1. Create a directory in `/usr/agents/{agent_profile}/` for user-created profiles, or `/agents/{agent_profile}/` only for built-in framework profiles.
 2. Override or extend default components by mirroring the structure in the root directories:
-   - `/agents/{agent_profile}/extensions/` - for custom extensions
-   - `/agents/{agent_profile}/tools/` - for custom tools
-   - `/agents/{agent_profile}/prompts/` - for custom prompts
-   - `/agents/{agent_profile}/settings.json` - for agent-specific configuration overrides
+   - `/usr/agents/{agent_profile}/agent.yaml` - required profile metadata
+   - `/usr/agents/{agent_profile}/extensions/` - custom extensions
+   - `/usr/agents/{agent_profile}/tools/` - custom tools
+   - `/usr/agents/{agent_profile}/prompts/` - custom prompts
 
-The `settings.json` file for an agent uses the same structure as `usr/settings.json`, but you only need to specify the fields you want to override. Any field omitted from the agent-specific `settings.json` will continue to use the global value.
+Model settings are not stored in `agent.yaml` or profile `settings.json`. Main, Utility, and Embedding model configuration is handled by the `_model_config` plugin. For a user-created profile, profile-scoped model settings live at:
 
-This allows power users to, for example, change the AI model, context window size, or other settings for a single agent without affecting the rest of the system.
+```text
+/a0/usr/agents/{agent_profile}/plugins/_model_config/config.json
+```
+
+Scoped `_model_config/config.json` files are selected as a whole, not deep-merged with global settings. If you create one, include a complete effective config with `chat_model`, `utility_model`, and `embedding_model`. See the [Agent Profiles guide](../guides/agent-profiles.md) for details.
 
 ### Example Subagent Structure
 
 ```
-/agents/_example/
+/usr/agents/my-profile/
+├── agent.yaml
 ├── extensions/
 │   └── agent_init/
 │       └── _10_example_extension.py
@@ -313,14 +318,16 @@ This allows power users to, for example, change the AI model, context window siz
 ├── tools/
 │   ├── example_tool.py
 │   └── response.py
-└── settings.json
+└── plugins/
+    └── _model_config/
+        └── config.json
 ```
 
 In this example:
 - `_10_example_extension.py` is an extension that renames the agent when initialized
 - `response.py` overrides the default response tool with custom behavior
 - `example_tool.py` is a new tool specific to this agent
-- `settings.json` overrides any global settings for this specific agent (only for the fields defined in this file)
+- `plugins/_model_config/config.json` optionally gives this profile its own Main, Utility, and Embedding model settings
 
 ## Projects
 
