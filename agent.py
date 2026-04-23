@@ -875,7 +875,10 @@ class Agent:
         # Only validate when extraction produced an object; None means no JSON tool
         # block was found — the misformat warning path below handles that.
         if tool_request is not None:
-            await self.validate_tool_request(tool_request)
+            try:
+                await self.validate_tool_request(tool_request)
+            except ValueError:
+                tool_request = None  # treat structural validation errors as misformat
 
         if tool_request is not None:
             raw_tool_name = tool_request.get("tool_name", tool_request.get("tool",""))  # Get the raw tool name
@@ -976,9 +979,11 @@ class Agent:
     async def validate_tool_request(self, tool_request: Any):
         if not isinstance(tool_request, dict):
             raise ValueError("Tool request must be a dictionary")
-        if not tool_request.get("tool_name") or not isinstance(tool_request.get("tool_name"), str):
+        tool_name = tool_request.get("tool_name") or tool_request.get("tool")
+        if not tool_name or not isinstance(tool_name, str):
             raise ValueError("Tool request must have a tool_name (type string) field")
-        if "tool_args" not in tool_request or not isinstance(tool_request.get("tool_args"), dict):
+        tool_args = tool_request.get("tool_args", tool_request.get("args"))
+        if tool_args is None or not isinstance(tool_args, dict):
             raise ValueError("Tool request must have a tool_args (type dictionary) field")
 
 
