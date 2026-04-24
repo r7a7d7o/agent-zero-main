@@ -79,7 +79,11 @@
 			                        @click="$store.browserPage.installExtensionFromUrl()"
 			                        :disabled="$store.browserPage.extensionActionLoading"
 			                      >
-			                        <span class="material-symbols-outlined" x-text="$store.browserPage.extensionActionLoading ? 'progress_activity' : 'download'"></span>
+			                        <span
+			                          class="material-symbols-outlined"
+			                          :class="{ spinning: $store.browserPage.extensionActionLoading }"
+			                          x-text="$store.browserPage.extensionActionLoading ? 'progress_activity' : 'download'"
+			                        ></span>
 			                        <span>Install URL</span>
 			                      </button>
 			                      <button type="button" class="btn btn-field" @click="$store.browserPage.askAgentInstallExtension()">
@@ -135,7 +139,7 @@
 
         <div class="browser-status" x-show="$store.browserPage.loading">
           <span class="material-symbols-outlined spinning">progress_activity</span>
-          <span>Connecting browser...</span>
+          <span x-text="$store.browserPage.loadingMessage()">Connecting browser...</span>
         </div>
         <div class="browser-error" x-show="$store.browserPage.error" x-text="$store.browserPage.error"></div>
 
@@ -507,6 +511,19 @@
     .browser-status,
     .browser-error {
       padding: 0 12px;
+    }
+
+    .browser-modal .spinning,
+    .browser-panel .spinning {
+      display: inline-block;
+      transform-origin: center;
+      animation: browser-spin 0.8s linear infinite;
+    }
+
+    @keyframes browser-spin {
+      to {
+        transform: rotate(360deg);
+      }
     }
 
     .browser-error {

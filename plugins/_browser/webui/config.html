@@ -64,8 +64,8 @@
           <div class="section-title">Chrome Extensions</div>
           <div class="section-description">
             Load unpacked Chromium extensions into the Browser tool. When extensions are active,
-            Browser switches from Playwright's lightweight headless shell to bundled Chromium so
-            the extensions can actually load.
+            Browser loads them into the same persistent full Chromium runtime used for every
+            Browser session.
           </div>
 
           <div class="browser-config-warning">
@@ -106,7 +106,7 @@
                 :value="$store.browserConfig.extensionPathsText"
                 @input="$store.browserConfig.setExtensionPathsText($event.target.value)"
                 rows="6"
-                placeholder="/a0/usr/browser-extensions/my-extension"
+                placeholder="/a0/usr/plugins/_browser/extensions/my-extension"
               ></textarea>
             </div>
           </div>
@@ -115,16 +115,15 @@
             <span class="material-symbols-outlined">info</span>
             <span>
               Chrome Web Store URL installs are converted into unpacked folders under
-              /a0/usr/browser-extensions/chrome-web-store, then loaded from the directory list above.
+              /a0/usr/plugins/_browser/extensions/chrome-web-store, then loaded from the directory list above.
             </span>
           </div>
 
           <div class="browser-config-note">
             <span class="material-symbols-outlined">deployed_code</span>
             <span>
-              Playwright currently requires a persistent Chromium context for extension loading, so
-              Browser stays in its faster headless-shell mode until valid extension folders are both
-              configured and enabled.
+              Browser caches Playwright Chromium under /a0/usr/plugins/_browser/playwright. The first Browser
+              run can take a few minutes while Chromium is installed; later starts reuse that cache.
             </span>
           </div>
 
@@ -194,6 +193,18 @@
     .browser-config-warning .material-symbols-outlined {
       color: #b45309;
       font-size: 20px;
+    }
+
+    .browser-config-sections .spinning {
+      display: inline-block;
+      transform-origin: center;
+      animation: browser-config-spin 0.8s linear infinite;
+    }
+
+    @keyframes browser-config-spin {
+      to {
+        transform: rotate(360deg);
+      }
     }
 
     .browser-config-pill-row {

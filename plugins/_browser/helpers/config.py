@@ -248,7 +248,7 @@ def build_browser_launch_config(settings: dict[str, Any] | None) -> dict[str, An
     extensions = describe_browser_extensions(settings)
     args = list(BASE_BROWSER_ARGS)
     channel: str | None = None
-    browser_mode = "headless_shell"
+    browser_mode = "chromium"
 
     if extensions["active"]:
         joined_paths = ",".join(extensions["active_paths"])
@@ -258,15 +258,11 @@ def build_browser_launch_config(settings: dict[str, Any] | None) -> dict[str, An
                 f"--load-extension={joined_paths}",
             ]
         )
-        channel = "chromium"
-        browser_mode = "chromium_extensions"
-    else:
-        args.insert(0, "--headless=new")
 
     return {
         "args": args,
         "browser_mode": browser_mode,
         "channel": channel,
         "extensions": extensions,
-        "requires_full_browser": bool(extensions["active"]),
+        "requires_full_browser": True,
     }

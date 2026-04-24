@@ -16,6 +16,8 @@ from helpers import files, plugins
 from plugins._browser.helpers.config import PLUGIN_NAME, get_browser_config
 
 
+EXTENSIONS_ROOT_DIR = ("usr", "plugins", PLUGIN_NAME, "extensions")
+LEGACY_EXTENSIONS_ROOT_DIR = ("usr", "browser-extensions")
 EXTENSION_ID_RE = re.compile(r"^[a-p]{32}$")
 WEB_STORE_ID_RE = re.compile(r"(?<![a-p])([a-p]{32})(?![a-p])")
 CHROME_VERSION_RE = re.compile(r"(\d+(?:\.\d+){0,3})")
@@ -36,9 +38,25 @@ WEB_STORE_DOWNLOAD_URL = (
 
 
 def get_extensions_root() -> Path:
-    root = Path(files.get_abs_path("usr/browser-extensions"))
+    root = Path(files.get_abs_path(*EXTENSIONS_ROOT_DIR))
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def get_extension_roots() -> list[Path]:
+    roots = [
+        get_extensions_root(),
+        Path(files.get_abs_path(*LEGACY_EXTENSIONS_ROOT_DIR)),
+    ]
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(root)
+    return unique
 
 
 def parse_chrome_web_store_extension_id(value: str) -> str:
@@ -54,26 +72,28 @@ def parse_chrome_web_store_extension_id(value: str) -> str:
 
 
 def list_browser_extensions() -> list[dict[str, Any]]:
-    root = get_extensions_root()
     config = get_browser_config()
     enabled_paths = {str(Path(path).expanduser()) for path in config["extension_paths"]}
     entries: list[dict[str, Any]] = []
 
-    for manifest_path in sorted(root.glob("**/manifest.json")):
-        extension_dir = manifest_path.parent
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
-            manifest = {}
-        extension_path = str(extension_dir)
-        entries.append(
-            {
-                "name": manifest.get("name") or extension_dir.name,
-                "version": manifest.get("version") or "",
-                "path": extension_path,
-                "enabled": extension_path in enabled_paths,
-            }
-        )
+    for root in get_extension_roots():
+        if not root.exists():
+            continue
+        for manifest_path in sorted(root.glob("**/manifest.json")):
+            extension_dir = manifest_path.parent
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                manifest = {}
+            extension_path = str(extension_dir)
+            entries.append(
+                {
+                    "name": manifest.get("name") or extension_dir.name,
+                    "version": manifest.get("version") or "",
+                    "path": extension_path,
+                    "enabled": extension_path in enabled_paths,
+                }
+            )
 
     return entries
 

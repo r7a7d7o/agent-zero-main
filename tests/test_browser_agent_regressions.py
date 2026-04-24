@@ -21,10 +21,18 @@ from plugins._browser.helpers.extension_manager import (
     _crx_zip_payload,
     _detect_chrome_prodversion,
     _normalize_chrome_prodversion,
+    get_extension_roots,
+    get_extensions_root,
     parse_chrome_web_store_extension_id,
 )
+import plugins._browser.helpers.extension_manager as browser_extension_manager_module
 from plugins._browser.helpers.runtime import _BrowserRuntimeCore, normalize_url
 import plugins._browser.helpers.runtime as browser_runtime_module
+from plugins._browser.helpers.playwright import (
+    get_playwright_binary,
+    get_playwright_cache_dir,
+)
+import plugins._browser.helpers.playwright as browser_playwright_module
 import plugins._browser.hooks as browser_hooks_module
 import plugins._browser.tools.browser as browser_tool_module
 import plugins._browser.api.ws_browser as ws_browser_module
@@ -117,7 +125,20 @@ def test_browser_model_preset_options_include_missing_selected(monkeypatch):
     assert options[-1]["missing"] is True
 
 
-def test_browser_launch_config_switches_to_chromium_for_extensions(tmp_path):
+def test_browser_launch_config_uses_full_chromium_for_all_sessions(tmp_path):
+    default_launch = build_browser_launch_config(
+        {
+            "extensions_enabled": False,
+            "extension_paths": [],
+        }
+    )
+
+    assert default_launch["browser_mode"] == "chromium"
+    assert default_launch["channel"] is None
+    assert default_launch["requires_full_browser"] is True
+    assert not any(arg.startswith("--load-extension=") for arg in default_launch["args"])
+    assert "--headless=new" not in default_launch["args"]
+
     extension_dir = tmp_path / "extension"
     extension_dir.mkdir()
 
@@ -128,12 +149,50 @@ def test_browser_launch_config_switches_to_chromium_for_extensions(tmp_path):
         }
     )
 
-    assert launch["browser_mode"] == "chromium_extensions"
-    assert launch["channel"] == "chromium"
+    assert launch["browser_mode"] == "chromium"
+    assert launch["channel"] is None
     assert launch["requires_full_browser"] is True
     assert launch["extensions"]["active"] is True
     assert any(arg.startswith("--load-extension=") for arg in launch["args"])
     assert "--headless=new" not in launch["args"]
+
+
+def test_browser_playwright_cache_uses_persistent_usr_path(monkeypatch, tmp_path):
+    monkeypatch.delenv("A0_BROWSER_PLAYWRIGHT_CACHE_DIR", raising=False)
+    monkeypatch.setattr(
+        browser_playwright_module.files,
+        "get_abs_path",
+        lambda *parts: str(tmp_path.joinpath(*parts)),
+    )
+    legacy_binary = (
+        tmp_path
+        / "tmp"
+        / "playwright"
+        / "chromium-1169"
+        / "chrome-linux"
+        / "chrome"
+    )
+    legacy_binary.parent.mkdir(parents=True)
+    legacy_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert get_playwright_cache_dir() == str(
+        tmp_path / "usr" / "plugins" / "_browser" / "playwright"
+    )
+    assert get_playwright_binary() == legacy_binary
+
+
+def test_browser_extension_storage_uses_plugin_user_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        browser_extension_manager_module.files,
+        "get_abs_path",
+        lambda *parts: str(tmp_path.joinpath(*parts)),
+    )
+
+    assert get_extensions_root() == tmp_path / "usr" / "plugins" / "_browser" / "extensions"
+    assert get_extension_roots() == [
+        tmp_path / "usr" / "plugins" / "_browser" / "extensions",
+        tmp_path / "usr" / "browser-extensions",
+    ]
 
 
 def test_browser_extension_manager_parses_web_store_urls():
@@ -196,7 +255,33 @@ def test_browser_viewer_allows_slow_extension_startup():
     )
 
     assert "const BROWSER_SUBSCRIBE_TIMEOUT_MS = 60000;" in js
-    assert "{ timeoutMs: BROWSER_SUBSCRIBE_TIMEOUT_MS }" in js
+    assert "const BROWSER_FIRST_INSTALL_TIMEOUT_MS = 300000;" in js
+    assert "? BROWSER_FIRST_INSTALL_TIMEOUT_MS" in js
+    assert ": BROWSER_SUBSCRIBE_TIMEOUT_MS" in js
+    assert "Installing Chromium for the first Browser run" in js
+
+
+def test_browser_ui_spinners_have_browser_local_animation():
+    main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "main.html").read_text(
+        encoding="utf-8"
+    )
+    config_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "config.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert ":class=\"{ spinning: $store.browserPage.extensionActionLoading }\"" in main_html
+    assert "@keyframes browser-spin" in main_html
+    assert "@keyframes browser-config-spin" in config_html
+
+
+def test_browser_docker_installs_full_chromium_to_persistent_cache():
+    script = (
+        PROJECT_ROOT / "docker" / "run" / "fs" / "ins" / "install_playwright.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "PLAYWRIGHT_BROWSERS_PATH=/a0/usr/plugins/_browser/playwright" in script
+    assert "playwright install chromium" in script
+    assert "--only-shell" not in script
 
 
 def test_browser_runtime_removes_stale_profile_singletons(monkeypatch, tmp_path):

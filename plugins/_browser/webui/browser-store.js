@@ -8,8 +8,9 @@ import { store as pluginSettingsStore } from "/components/plugins/plugin-setting
 const websocket = getNamespacedClient("/ws");
 websocket.addHandlers(["ws_webui"]);
 
-const EXTENSIONS_ROOT_FALLBACK = "/a0/usr/browser-extensions";
+const EXTENSIONS_ROOT_FALLBACK = "/a0/usr/plugins/_browser/extensions";
 const BROWSER_SUBSCRIBE_TIMEOUT_MS = 60000;
+const BROWSER_FIRST_INSTALL_TIMEOUT_MS = 300000;
 
 function firstOk(response) {
   const result = response?.results?.find((item) => item?.ok);
@@ -52,9 +53,11 @@ const model = {
   extensionActionError: "",
   extensionsRoot: "",
   extensionsList: [],
+  browserInstallExpected: false,
 
   async refreshStatus() {
     this.status = await callJsonApi("/plugins/_browser/status", {});
+    this.browserInstallExpected = Boolean(this.status?.playwright?.install_required);
   },
 
   async refreshExtensionsList() {
@@ -216,12 +219,17 @@ const model = {
         context_id: this.contextId,
         browser_id: this.activeBrowserId,
       },
-      { timeoutMs: BROWSER_SUBSCRIBE_TIMEOUT_MS },
+      {
+        timeoutMs: this.browserInstallExpected
+          ? BROWSER_FIRST_INSTALL_TIMEOUT_MS
+          : BROWSER_SUBSCRIBE_TIMEOUT_MS,
+      },
     );
       const data = firstOk(response);
       this.browsers = data.browsers || [];
       this.setActiveBrowserId(data.active_browser_id || this.activeBrowserId || null);
       this.connected = true;
+      this.browserInstallExpected = false;
       this.queueViewportSync(true);
   },
 
@@ -591,6 +599,14 @@ const model = {
 
   get activeUrl() {
     return this.frameState?.currentUrl || this.address || "about:blank";
+  },
+
+  loadingMessage() {
+    if (this.browserInstallExpected) {
+      const cacheDir = this.status?.playwright?.cache_dir || "/a0/usr/plugins/_browser/playwright";
+      return `Installing Chromium for the first Browser run. This can take a few minutes; future starts reuse ${cacheDir}.`;
+    }
+    return "Connecting browser...";
   },
 };
 
