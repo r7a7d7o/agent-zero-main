@@ -535,7 +535,7 @@ def register_ws_namespace(
         return True
 
     @socketio_server.on("disconnect", namespace=NAMESPACE)  # type: ignore
-    async def _on_disconnect(sid):
+    async def _on_disconnect(sid, reason=None):
         with _contexts_lock:
             activated = _active_handlers.pop(sid, {})
             _ws_contexts.pop(sid, None)
