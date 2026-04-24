@@ -30,9 +30,15 @@ _AUTO_CAPTURE_ACTIONS = {
     "type",
 }
 _SETTLE_DELAY_START_SESSION = 0.2
+_SETTLE_DELAY_MOVE = 0.1
+_SETTLE_DELAY_CLICK = 0.35
+_SETTLE_DELAY_SCROLL = 0.35
+_SETTLE_DELAY_KEY = 0.2
+_SETTLE_DELAY_TYPE = 0.25
 _SETTLE_DELAY_GLOBAL_FOCUS = 0.45
 _SETTLE_DELAY_PLAIN_ENTER = 0.3
 _SETTLE_DELAY_SUBMIT = 0.45
+_FRESH_CAPTURE_TIMEOUT = 0.45
 _SUPPORTED_ACTIONS = {
     "start_session",
     "status",
@@ -160,15 +166,15 @@ class ComputerUseRemote(Tool):
         if settle_seconds > 0:
             await asyncio.sleep(settle_seconds)
 
-        capture_result = await self._dispatch_payload(
-            sid=sid,
-            payload={
-                "op_id": str(uuid.uuid4()),
-                "context_id": context_id,
-                "action": "capture",
-                "session_id": session_id,
-            },
-        )
+        capture_payload = {
+            "op_id": str(uuid.uuid4()),
+            "context_id": context_id,
+            "action": "capture",
+            "session_id": session_id,
+            "fresh": True,
+            "fresh_timeout_seconds": _FRESH_CAPTURE_TIMEOUT,
+        }
+        capture_result = await self._dispatch_payload(sid=sid, payload=capture_payload)
         if not bool(capture_result.get("ok")):
             return f"Automatic screen refresh failed: {self._format_error(capture_result)}"
 
@@ -176,14 +182,22 @@ class ComputerUseRemote(Tool):
         if not isinstance(capture_data, dict):
             return "Automatic screen refresh failed: missing capture payload."
 
-        self._record_capture(capture_data)
-        return "Latest screen attached."
+        summary = self._record_capture(capture_data)
+        return f"Latest screen attached: {summary}"
 
     def _auto_capture_settle_seconds(self, action: str) -> float:
         if action == "start_session":
             return _SETTLE_DELAY_START_SESSION
+        if action == "move":
+            return _SETTLE_DELAY_MOVE
+        if action == "click":
+            return _SETTLE_DELAY_CLICK
+        if action == "scroll":
+            return _SETTLE_DELAY_SCROLL
         if action == "type" and self._coerce_bool(self.args.get("submit")):
             return _SETTLE_DELAY_SUBMIT
+        if action == "type":
+            return _SETTLE_DELAY_TYPE
         if action != "key":
             return 0.0
 
@@ -192,7 +206,7 @@ class ComputerUseRemote(Tool):
             return _SETTLE_DELAY_GLOBAL_FOCUS
         if keyset == {"enter"}:
             return _SETTLE_DELAY_PLAIN_ENTER
-        return 0.0
+        return _SETTLE_DELAY_KEY
 
     def _requested_keys(self) -> list[str]:
         keys_value = self.args.get("keys")
@@ -252,8 +266,8 @@ class ComputerUseRemote(Tool):
             data = {}
 
         if action == "capture":
-            self._record_capture(data)
-            return "Current screen attached."
+            summary = self._record_capture(data)
+            return f"Current screen attached: {summary}"
         if action == "status":
             return self._format_status(data)
         if action == "start_session":
@@ -309,7 +323,18 @@ class ComputerUseRemote(Tool):
         _image_path, display_path = self._resolve_capture_path(data)
         width = data.get("width", "?")
         height = data.get("height", "?")
-        summary = f"Computer-use capture {width}x{height}."
+        capture_id = str(data.get("capture_id") or Path(display_path).stem or "?").strip()
+        coordinate_space = str(data.get("coordinate_space") or "normalized_global_screen").strip()
+        summary = (
+            f"Computer-use capture id={capture_id} {width}x{height}, "
+            f"coordinates={coordinate_space} [0,1]."
+        )
+        if data.get("fresh") is True:
+            if "fresh_after_satisfied" in data:
+                fresh_state = "confirmed" if data.get("fresh_after_satisfied") is not False else "not confirmed"
+                summary = f"{summary} Fresh frame {fresh_state}."
+            else:
+                summary = f"{summary} Fresh capture requested."
         content = [
             {"type": "text", "text": summary},
             {"type": "image_url", "image_url": {"url": display_path}},

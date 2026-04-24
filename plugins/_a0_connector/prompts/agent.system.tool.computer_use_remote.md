@@ -21,7 +21,10 @@ Action-specific fields:
 - `type`: `text`, optional `submit` boolean
 
 ## Runtime Notes
+- The current action API uses normalized global screen coordinates; do not assume window IDs, element indices, background-safe input, or semantic click targets unless runtime guidance explicitly advertises them.
 - Successful `start_session`, `move`, `click`, `scroll`, `key`, and `type` calls automatically attach a fresh screenshot.
+- Attached screenshots include a `capture id`; use the latest capture as the coordinate basis.
+- If the attached screenshot appears unchanged after a state-changing action, verify once with `capture` before repeating the same action.
 - `status` reports the current computer-use state without starting a session.
 - Prefer accessibility, semantic UI controls, hotkeys, focus traversal, and other keyboard paths before pointer actions.
 - For viewport movement, prefer keyboard scrolling first; use `scroll` when a wheel-style scroll is the most reliable way to move an already-focused viewport or pane.

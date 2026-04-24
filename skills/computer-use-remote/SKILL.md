@@ -23,7 +23,7 @@ allowed_tools:
 
 Load this skill before using `computer_use_remote` for local desktop and native UI tasks on the connected machine.
 
-For ordinary website browsing, search, form filling, and web downloads, prefer `browser_agent` instead. If the user is flexible and the task is browser-only, guide them toward browser tools because they are usually more reliable and token-efficient than screenshot-driven computer use.
+For ordinary website browsing, search, form filling, and web downloads, prefer the direct `browser` tool instead. If the user is flexible and the task is browser-only, guide them toward browser tools because they are usually more reliable and token-efficient than screenshot-driven computer use.
 
 ## Core Loop
 

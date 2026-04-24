@@ -7,10 +7,14 @@ Features: `{{features}}`
 Support note: `{{support_reason}}`
 
 - Use this for local desktop and native UI tasks on the connected machine.
-- If the task is browser-only and the user is flexible, prefer `browser_agent` because it is usually more reliable and token-efficient than screenshot-driven desktop control.
+- If the task is browser-only and the user is flexible, prefer the direct `browser` tool because it is usually more reliable and token-efficient than screenshot-driven desktop control.
 - Use `start_session` before interactive desktop actions. `status` is for inspection; `stop_session` ends the session.
 - Base every decision on the latest screenshot or a definitive tool result, not memory.
+- The current action API uses normalized global screen coordinates. Do not assume window IDs, element indices, background-safe input, or semantic click targets unless the advertised features explicitly say they exist.
+- If features include `real-cursor-may-move` or `focus-risk`, expect pointer actions to affect the visible desktop state; prefer keyboard/accessibility routes even more strongly.
 - Successful `start_session`, `move`, `click`, `scroll`, `key`, and `type` calls already attach a fresh screenshot.
+- Each attached screenshot includes a `capture id`; treat the latest attached capture as authoritative and ignore superseded capture references.
+- If an attached screenshot looks unchanged after a state-changing action, use one explicit `capture` to verify before repeating the same action.
 - Use `capture` only when you need a screen refresh without taking another action.
 - Prefer accessibility and semantic UI paths first: application shortcuts, command palettes, menu accelerators, address/search bars, focus traversal, selection shortcuts, and other keyboard-accessible controls.
 - Prefer `key` and `type` over pointer actions whenever there is a plausible keyboard or accessibility path. Use `tab`, `shift+tab`, arrow keys, hotkeys, text search, and submit keys before reaching for the mouse.
