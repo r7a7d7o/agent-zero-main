@@ -17,10 +17,14 @@ from plugins._browser.helpers.config import (
     resolve_browser_model_selection,
 )
 from plugins._browser.helpers.extension_manager import (
+    _build_web_store_download_url,
     _crx_zip_payload,
+    _detect_chrome_prodversion,
+    _normalize_chrome_prodversion,
     parse_chrome_web_store_extension_id,
 )
-from plugins._browser.helpers.runtime import normalize_url
+from plugins._browser.helpers.runtime import _BrowserRuntimeCore, normalize_url
+import plugins._browser.helpers.runtime as browser_runtime_module
 import plugins._browser.hooks as browser_hooks_module
 import plugins._browser.tools.browser as browser_tool_module
 import plugins._browser.api.ws_browser as ws_browser_module
@@ -158,6 +162,21 @@ def test_browser_extension_manager_extracts_crx3_zip_payload():
     assert _crx_zip_payload(crx) == payload
 
 
+def test_browser_extension_manager_uses_modern_chrome_prodversion(monkeypatch):
+    extension_id = "a" * 32
+
+    assert _normalize_chrome_prodversion("Google Chrome 147.0.7727.55") == "147.0.7727.55"
+    assert _normalize_chrome_prodversion("Chromium 124") == "124.0.0.0"
+
+    monkeypatch.setenv("A0_BROWSER_EXTENSION_PRODVERSION", "147.0.7727.55")
+    assert _detect_chrome_prodversion() == "147.0.7727.55"
+
+    url = _build_web_store_download_url(extension_id, prodversion=_detect_chrome_prodversion())
+    assert "prod=chromecrx" in url
+    assert "prodversion=147.0.7727.55" in url
+    assert "prodversion=120.0.0.0" not in url
+
+
 def test_browser_extension_menu_exposes_agent_and_url_paths():
     html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "main.html").read_text(
         encoding="utf-8"
@@ -169,6 +188,35 @@ def test_browser_extension_menu_exposes_agent_and_url_paths():
     assert "My Browser Extensions" in html
     assert "malicious or buggy extensions" in html
     assert skill.exists()
+
+
+def test_browser_viewer_allows_slow_extension_startup():
+    js = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "const BROWSER_SUBSCRIBE_TIMEOUT_MS = 60000;" in js
+    assert "{ timeoutMs: BROWSER_SUBSCRIBE_TIMEOUT_MS }" in js
+
+
+def test_browser_runtime_removes_stale_profile_singletons(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        browser_runtime_module.files,
+        "get_abs_path",
+        lambda *parts: str(tmp_path.joinpath(*parts)),
+    )
+    core = _BrowserRuntimeCore("stale-profile")
+    core.profile_dir.mkdir(parents=True)
+
+    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        (core.profile_dir / name).symlink_to("missing-host-999999")
+
+    core._release_orphaned_profile_singleton()
+
+    assert not any(
+        (core.profile_dir / name).exists() or (core.profile_dir / name).is_symlink()
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket")
+    )
 
 
 def test_browser_save_plugin_config_restarts_runtimes_on_change(monkeypatch, tmp_path):

@@ -3,9 +3,12 @@ from __future__ import annotations
 import atexit
 import asyncio
 import base64
+import os
 import re
 import shutil
+import signal
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +26,7 @@ PLUGIN_DIR = Path(__file__).resolve().parents[1]
 CONTENT_HELPER_PATH = PLUGIN_DIR / "assets" / "browser-page-content.js"
 RUNTIME_DATA_KEY = "_browser_runtime"
 DEFAULT_VIEWPORT = {"width": 1024, "height": 768}
+CHROME_SINGLETON_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
 
 _SPECIAL_SCHEME_RE = re.compile(r"^(?:about|blob|data|file|mailto|tel):", re.I)
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z\d+\-.]*://", re.I)
@@ -117,6 +121,7 @@ class _BrowserRuntimeCore:
         self.next_browser_id = 1
         self.last_interacted_browser_id: int | None = None
         self._content_helper_source: str | None = None
+        self._start_lock: asyncio.Lock | None = None
 
     @property
     def profile_dir(self) -> Path:
@@ -130,10 +135,20 @@ class _BrowserRuntimeCore:
         if self.context:
             return
 
+        if self._start_lock is None:
+            self._start_lock = asyncio.Lock()
+
+        async with self._start_lock:
+            if self.context:
+                return
+            await self._start()
+
+    async def _start(self) -> None:
         from playwright.async_api import async_playwright
 
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
+        self._release_orphaned_profile_singleton()
         browser_config = get_browser_config()
         launch_config = build_browser_launch_config(browser_config)
         configure_playwright_env()
@@ -156,9 +171,18 @@ class _BrowserRuntimeCore:
             launch_kwargs["channel"] = launch_config["channel"]
         else:
             launch_kwargs["executable_path"] = str(browser_binary)
-        self.context = await self.playwright.chromium.launch_persistent_context(
-            **launch_kwargs
-        )
+        try:
+            self.context = await self.playwright.chromium.launch_persistent_context(
+                **launch_kwargs
+            )
+        except Exception:
+            if self.playwright:
+                try:
+                    await self.playwright.stop()
+                except Exception:
+                    pass
+                self.playwright = None
+            raise
         self.context.set_default_timeout(30000)
         self.context.set_default_navigation_timeout(30000)
         await self.context.add_init_script(self._shadow_dom_script())
@@ -172,6 +196,66 @@ class _BrowserRuntimeCore:
                     pass
                 continue
             self._register_page(page)
+
+    def _release_orphaned_profile_singleton(self) -> None:
+        lock_path = self.profile_dir / "SingletonLock"
+        owner_pid = self._profile_singleton_owner_pid(lock_path)
+        if owner_pid and self._process_owns_profile(owner_pid):
+            PrintStyle.warning(
+                f"Stopping orphaned Chromium process {owner_pid} for Browser profile {self.safe_context_id}."
+            )
+            self._terminate_process(owner_pid)
+
+        for name in CHROME_SINGLETON_FILES:
+            singleton_path = self.profile_dir / name
+            try:
+                if singleton_path.exists() or singleton_path.is_symlink():
+                    singleton_path.unlink()
+            except OSError as exc:
+                PrintStyle.warning(f"Could not remove stale Browser profile lock {singleton_path}: {exc}")
+
+    @staticmethod
+    def _profile_singleton_owner_pid(lock_path: Path) -> int | None:
+        try:
+            target = os.readlink(lock_path)
+        except OSError:
+            return None
+        raw_pid = target.rsplit("-", 1)[-1]
+        if not raw_pid.isdigit():
+            return None
+        return int(raw_pid)
+
+    def _process_owns_profile(self, pid: int) -> bool:
+        cmdline_path = Path("/proc") / str(pid) / "cmdline"
+        try:
+            raw = cmdline_path.read_bytes()
+        except OSError:
+            return False
+        cmdline = raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore")
+        return "chrome" in cmdline.lower() and str(self.profile_dir) in cmdline
+
+    @staticmethod
+    def _terminate_process(pid: int) -> None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            PrintStyle.warning(f"Could not stop orphaned Chromium process {pid}: {exc}")
+            return
+
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if not Path("/proc", str(pid)).exists():
+                return
+            time.sleep(0.1)
+
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            PrintStyle.warning(f"Could not force-stop orphaned Chromium process {pid}: {exc}")
 
     async def open(self, url: str = "about:blank") -> dict[str, Any]:
         await self.ensure_started()

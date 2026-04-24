@@ -9,6 +9,7 @@ const websocket = getNamespacedClient("/ws");
 websocket.addHandlers(["ws_webui"]);
 
 const EXTENSIONS_ROOT_FALLBACK = "/a0/usr/browser-extensions";
+const BROWSER_SUBSCRIBE_TIMEOUT_MS = 60000;
 
 function firstOk(response) {
   const result = response?.results?.find((item) => item?.ok);
@@ -215,7 +216,7 @@ const model = {
         context_id: this.contextId,
         browser_id: this.activeBrowserId,
       },
-      { timeoutMs: 10000 },
+      { timeoutMs: BROWSER_SUBSCRIBE_TIMEOUT_MS },
     );
       const data = firstOk(response);
       this.browsers = data.browsers || [];

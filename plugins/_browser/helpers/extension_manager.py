@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import subprocess
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -15,10 +18,18 @@ from plugins._browser.helpers.config import PLUGIN_NAME, get_browser_config
 
 EXTENSION_ID_RE = re.compile(r"^[a-p]{32}$")
 WEB_STORE_ID_RE = re.compile(r"(?<![a-p])([a-p]{32})(?![a-p])")
+CHROME_VERSION_RE = re.compile(r"(\d+(?:\.\d+){0,3})")
+DEFAULT_CHROME_PRODVERSION = "140.0.0.0"
+CHROME_VERSION_COMMANDS = (
+    ("google-chrome", "--version"),
+    ("chromium", "--version"),
+    ("chromium-browser", "--version"),
+)
 WEB_STORE_DOWNLOAD_URL = (
     "https://clients2.google.com/service/update2/crx"
     "?response=redirect"
-    "&prodversion=120.0.0.0"
+    "&prod=chromecrx"
+    "&prodversion={prodversion}"
     "&acceptformat=crx2,crx3"
     "&x=id%3D{extension_id}%26installsource%3Dondemand%26uc"
 )
@@ -101,21 +112,77 @@ def install_chrome_web_store_extension(source: str) -> dict[str, Any]:
 
 
 def _download_crx(extension_id: str, archive_path: Path) -> None:
-    url = WEB_STORE_DOWNLOAD_URL.format(extension_id=extension_id)
+    prodversion = _detect_chrome_prodversion()
+    url = _build_web_store_download_url(extension_id, prodversion=prodversion)
     request = urllib.request.Request(
         url,
         headers={
             "User-Agent": (
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                f"(KHTML, like Gecko) Chrome/{prodversion} Safari/537.36"
             )
         },
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
+    try:
+        response = urllib.request.urlopen(request, timeout=120)
+    except urllib.error.HTTPError as exc:
+        raise ValueError(
+            f"Chrome Web Store download failed with HTTP {exc.code} for Chrome {prodversion}."
+        ) from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise ValueError(f"Chrome Web Store download failed: {reason}.") from exc
+
+    with response:
+        status = response.getcode()
         data = response.read()
     if not data:
-        raise ValueError("Chrome Web Store returned an empty extension package.")
+        raise ValueError(
+            "Chrome Web Store did not return an extension package "
+            f"(HTTP {status}, Chrome {prodversion})."
+        )
     archive_path.write_bytes(data)
+
+
+def _build_web_store_download_url(extension_id: str, *, prodversion: str | None = None) -> str:
+    return WEB_STORE_DOWNLOAD_URL.format(
+        extension_id=extension_id,
+        prodversion=_normalize_chrome_prodversion(prodversion or "") or DEFAULT_CHROME_PRODVERSION,
+    )
+
+
+def _detect_chrome_prodversion() -> str:
+    env_version = _normalize_chrome_prodversion(os.environ.get("A0_BROWSER_EXTENSION_PRODVERSION", ""))
+    if env_version:
+        return env_version
+
+    for command in CHROME_VERSION_COMMANDS:
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+
+        version = _normalize_chrome_prodversion(
+            " ".join(part for part in (completed.stdout, completed.stderr) if part)
+        )
+        if version:
+            return version
+
+    return DEFAULT_CHROME_PRODVERSION
+
+
+def _normalize_chrome_prodversion(value: str) -> str:
+    match = CHROME_VERSION_RE.search(str(value or ""))
+    if not match:
+        return ""
+    parts = match.group(1).split(".")
+    return ".".join((parts + ["0", "0", "0", "0"])[:4])
 
 
 def _crx_zip_payload(data: bytes) -> bytes:
