@@ -1,0 +1,556 @@
+<html class="browser-modal">
+<head>
+  <title>Browser</title>
+  <script type="module">
+    import { store } from "/plugins/_browser/webui/browser-store.js";
+  </script>
+</head>
+<body class="browser-modal-body">
+  <div x-data>
+    <template x-if="$store.browserPage">
+      <div
+        class="browser-panel"
+        x-create="$store.browserPage.onOpen($el)"
+        x-destroy="$store.browserPage.cleanup()"
+        @keydown.window="$store.browserPage.sendKey($event)"
+      >
+		        <div class="browser-meta">
+		          <div class="browser-meta-top">
+		            <div class="browser-titleline">
+	              <span
+	                class="browser-live-dot"
+	                :class="{ active: $store.browserPage.connected && $store.browserPage.frameSrc }"
+	              ></span>
+		              <span class="browser-title">Browser</span>
+		              <span class="browser-id" x-show="$store.browserPage.activeBrowserId" x-text="'#' + $store.browserPage.activeBrowserId"></span>
+		            </div>
+			            <div class="browser-session-controls">
+		              <select class="browser-select" x-model="$store.browserPage.activeBrowserId" @change="$store.browserPage.selectBrowser($event.target.value)">
+		                <option value="">New Browser</option>
+		                <template x-for="browser in $store.browserPage.browsers" :key="browser.id">
+		                  <option :value="browser.id" x-text="'#' + browser.id + ' ' + (browser.title || browser.currentUrl || 'about:blank')"></option>
+		                </template>
+		              </select>
+			              <div
+			                class="browser-extension-menu"
+			                @click.outside="$store.browserPage.closeExtensionsMenu()"
+			                @keydown.escape.window="$store.browserPage.closeExtensionsMenu()"
+			              >
+			                <button
+			                  type="button"
+			                  class="btn btn-icon-action browser-extensions"
+			                  title="Browser extensions"
+			                  aria-label="Browser extensions"
+			                  @click.stop="$store.browserPage.toggleExtensionsMenu()"
+			                  :aria-expanded="$store.browserPage.extensionMenuOpen.toString()"
+			                  :class="{ 'is-active': $store.browserPage.status?.extensions?.active }"
+			                >
+			                  <span class="material-symbols-outlined">extension</span>
+			                </button>
+			                <div
+			                  class="browser-extension-dropdown"
+			                  x-show="$store.browserPage.extensionMenuOpen"
+			                  x-transition
+			                  style="display: none;"
+			                >
+			                  <div class="browser-extension-warning">
+			                    <span class="material-symbols-outlined">warning</span>
+			                    <span>
+			                      Extensions run inside the Docker browser sandbox, but malicious or buggy extensions can still damage that environment. Review what you install.
+			                    </span>
+			                  </div>
+			                  <button type="button" class="dropdown-item" @click="$store.browserPage.createExtensionWithAgent()">
+			                    <span class="material-symbols-outlined">add_circle</span>
+			                    <span>+ Create New with A0</span>
+			                  </button>
+			                  <div class="browser-extension-url">
+			                    <label for="browser-extension-url">Chrome Web Store URL</label>
+			                    <input
+			                      id="browser-extension-url"
+			                      type="url"
+			                      x-model="$store.browserPage.extensionInstallUrl"
+			                      @keydown.enter.prevent="$store.browserPage.installExtensionFromUrl()"
+			                      placeholder="https://chromewebstore.google.com/detail/..."
+			                    />
+			                    <div class="browser-extension-url-actions">
+			                      <button
+			                        type="button"
+			                        class="btn btn-ok"
+			                        @click="$store.browserPage.installExtensionFromUrl()"
+			                        :disabled="$store.browserPage.extensionActionLoading"
+			                      >
+			                        <span class="material-symbols-outlined" x-text="$store.browserPage.extensionActionLoading ? 'progress_activity' : 'download'"></span>
+			                        <span>Install URL</span>
+			                      </button>
+			                      <button type="button" class="btn btn-field" @click="$store.browserPage.askAgentInstallExtension()">
+			                        <span class="material-symbols-outlined">psychology_alt</span>
+			                        <span>Ask A0</span>
+			                      </button>
+			                    </div>
+			                  </div>
+			                  <button type="button" class="dropdown-item" @click="$store.browserPage.openExtensionsFolder()">
+			                    <span class="material-symbols-outlined">folder_open</span>
+			                    <span>My Browser Extensions</span>
+			                  </button>
+			                  <button type="button" class="dropdown-item" @click="$store.browserPage.openExtensionsSettings()">
+			                    <span class="material-symbols-outlined">tune</span>
+			                    <span>Browser Extension Settings</span>
+			                  </button>
+			                  <div class="browser-extension-message" x-show="$store.browserPage.extensionActionMessage" x-text="$store.browserPage.extensionActionMessage"></div>
+			                  <div class="browser-extension-error" x-show="$store.browserPage.extensionActionError" x-text="$store.browserPage.extensionActionError"></div>
+			                </div>
+			              </div>
+			              <button class="btn btn-icon-action browser-close" title="Close Browser" @click="$confirmClick($event, () => $store.browserPage.command('close'))" :disabled="!$store.browserPage.activeBrowserId">
+			                <span class="material-symbols-outlined">close</span>
+			              </button>
+			            </div>
+			          </div>
+		        </div>
+
+		        <div class="browser-toolbar">
+		          <div class="browser-navigation">
+	            <button class="btn btn-icon-action" title="Back" @click="$store.browserPage.command('back')" :disabled="!$store.browserPage.activeBrowserId">
+	              <span class="material-symbols-outlined">arrow_back</span>
+	            </button>
+	            <button class="btn btn-icon-action" title="Forward" @click="$store.browserPage.command('forward')" :disabled="!$store.browserPage.activeBrowserId">
+	              <span class="material-symbols-outlined">arrow_forward</span>
+	            </button>
+	            <button class="btn btn-icon-action" title="Reload" @click="$store.browserPage.command('reload')" :disabled="!$store.browserPage.activeBrowserId">
+	              <span class="material-symbols-outlined">refresh</span>
+	            </button>
+	          </div>
+	
+		          <form class="browser-address-form" @submit.prevent="$store.browserPage.go()">
+		            <span class="material-symbols-outlined browser-address-icon">language</span>
+		            <input
+		              class="browser-address"
+	              x-model="$store.browserPage.address"
+	              @focus="$store.browserPage.onAddressFocus()"
+	              @blur="$store.browserPage.onAddressBlur()"
+	              placeholder="https://example.com"
+		              autocomplete="off"
+		            />
+		          </form>
+		        </div>
+
+        <div class="browser-status" x-show="$store.browserPage.loading">
+          <span class="material-symbols-outlined spinning">progress_activity</span>
+          <span>Connecting browser...</span>
+        </div>
+        <div class="browser-error" x-show="$store.browserPage.error" x-text="$store.browserPage.error"></div>
+
+        <div
+          class="browser-stage"
+          tabindex="0"
+          @click="$el.focus()"
+          @wheel.prevent="$store.browserPage.sendWheel($event)"
+        >
+          <template x-if="$store.browserPage.frameSrc">
+            <img
+              class="browser-frame"
+              :src="$store.browserPage.frameSrc"
+              @click="$store.browserPage.sendMouse('click', $event)"
+              @mousemove.throttle.250ms="$store.browserPage.sendMouse('move', $event)"
+              draggable="false"
+            />
+          </template>
+          <template x-if="!$store.browserPage.frameSrc && !$store.browserPage.loading">
+            <div class="browser-empty">
+              <span class="material-symbols-outlined">captive_portal</span>
+              <button class="btn btn-field" @click="$store.browserPage.command('open', { url: 'about:blank' })">Open Browser</button>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <style>
+    .modal-inner.browser-modal {
+      box-sizing: border-box;
+      container-type: inline-size;
+      width: min(78vw, 1120px);
+      height: min(88vh, 900px);
+      min-width: min(320px, calc(100vw - 16px));
+      min-height: min(480px, calc(100vh - 16px));
+      max-width: calc(100vw - 16px);
+      max-height: calc(100vh - 16px);
+      resize: both;
+      border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+      border-radius: 7px;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+      background: color-mix(in srgb, var(--color-background) 94%, #000 6%);
+    }
+
+    .modal.modal-floating {
+      pointer-events: none;
+    }
+
+    .modal.modal-floating .modal-inner {
+      pointer-events: auto;
+    }
+
+    .modal-inner.browser-modal .modal-header {
+      min-height: 34px;
+      padding: 0.35rem 0.75rem 0.35rem 1rem;
+      cursor: move;
+      user-select: none;
+      background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+    }
+
+    .modal-inner.browser-modal .modal-title {
+      font-size: 0.95rem;
+      letter-spacing: 0;
+    }
+
+    .modal-inner.browser-modal .modal-close {
+      font-size: 1.35rem;
+      line-height: 1;
+    }
+
+    .modal-inner.browser-modal .modal-scroll {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+      padding: 0;
+    }
+
+    .modal-inner.browser-modal .modal-bd.browser-modal-body {
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      padding: 0;
+      min-height: 0;
+    }
+
+    .modal-inner.browser-modal .modal-bd.browser-modal-body > div[x-data] {
+      display: flex;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+
+    .browser-panel {
+      box-sizing: border-box;
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      gap: 0;
+      height: 100%;
+      min-height: 0;
+    }
+
+	    .browser-toolbar {
+	      display: grid;
+	      grid-template-columns: auto minmax(0, 1fr);
+	      grid-template-areas: "nav address";
+	      gap: 6px;
+	      align-items: center;
+	      padding: 7px 8px;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+      background: color-mix(in srgb, var(--color-panel) 90%, transparent);
+    }
+
+    .browser-navigation {
+      grid-area: nav;
+      display: flex;
+      gap: 4px;
+    }
+
+    .browser-address-form {
+      grid-area: address;
+      min-width: 0;
+      position: relative;
+      margin: 0;
+    }
+
+    .browser-address-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 18px;
+      opacity: 0.58;
+      pointer-events: none;
+    }
+
+    .browser-address,
+    .browser-select {
+      width: 100%;
+      min-height: 32px;
+      padding: 5px 9px;
+      border-radius: 6px;
+      border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+      background: var(--color-input);
+      color: var(--color-text);
+      font: inherit;
+    }
+
+    .browser-address {
+      padding-left: 34px;
+    }
+
+	    .browser-select {
+	      min-width: 0;
+	    }
+
+	    .browser-meta {
+	      display: grid;
+	      grid-template-columns: minmax(0, 1fr);
+	      gap: 6px;
+	      padding: 6px 10px;
+	      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+	      background: color-mix(in srgb, var(--color-panel) 82%, transparent);
+	    }
+
+	    .browser-meta-top {
+	      display: grid;
+	      grid-template-columns: minmax(0, 1fr) auto;
+	      gap: 10px;
+	      align-items: center;
+	    }
+
+	    .browser-titleline {
+	      display: flex;
+	      align-items: center;
+	      gap: 8px;
+	      min-width: 0;
+	    }
+
+	    .browser-session-controls {
+	      display: flex;
+	      align-items: center;
+	      gap: 6px;
+	      min-width: 0;
+	    }
+
+		    .browser-session-controls .browser-select {
+		      width: min(320px, 52cqw);
+		    }
+
+			    .browser-session-controls .browser-extensions.is-active {
+			      color: #2e7d32;
+			    }
+
+			    .browser-extension-menu {
+			      position: relative;
+			      display: flex;
+			      flex: 0 0 auto;
+			    }
+
+			    .browser-extension-dropdown {
+			      position: absolute;
+			      top: calc(100% + 6px);
+			      right: 0;
+			      z-index: 40;
+			      display: flex;
+			      flex-direction: column;
+			      gap: 7px;
+			      width: min(360px, calc(100vw - 24px));
+			      padding: 10px;
+			      border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+			      border-radius: 7px;
+			      background: var(--color-background);
+			      box-shadow: 0 16px 38px rgba(0, 0, 0, 0.28);
+			    }
+
+			    .browser-extension-dropdown .dropdown-item {
+			      display: flex;
+			      align-items: center;
+			      gap: 8px;
+			      width: 100%;
+			      min-height: 34px;
+			      padding: 7px 9px;
+			      border: 0;
+			      border-radius: 6px;
+			      background: transparent;
+			      color: var(--color-text);
+			      font-weight: 600;
+			      text-align: left;
+			      cursor: pointer;
+			    }
+
+			    .browser-extension-dropdown .dropdown-item:hover {
+			      background: color-mix(in srgb, var(--color-panel) 82%, transparent);
+			    }
+
+			    .browser-extension-warning,
+			    .browser-extension-message,
+			    .browser-extension-error {
+			      display: flex;
+			      align-items: flex-start;
+			      gap: 8px;
+			      padding: 9px 10px;
+			      border-radius: 7px;
+			      font-size: 0.8rem;
+			      line-height: 1.35;
+			    }
+
+			    .browser-extension-warning {
+			      border: 1px solid color-mix(in srgb, #d97706 42%, var(--color-border));
+			      background: color-mix(in srgb, #d97706 14%, var(--color-background));
+			      color: color-mix(in srgb, var(--color-text) 86%, #92400e);
+			    }
+
+			    .browser-extension-warning .material-symbols-outlined {
+			      color: #b45309;
+			      font-size: 19px;
+			    }
+
+			    .browser-extension-url {
+			      display: flex;
+			      flex-direction: column;
+			      gap: 7px;
+			      padding: 8px;
+			      border: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
+			      border-radius: 7px;
+			      background: var(--color-panel);
+			    }
+
+			    .browser-extension-url label {
+			      font-size: 0.76rem;
+			      color: var(--color-text-secondary);
+			    }
+
+			    .browser-extension-url input {
+			      min-width: 0;
+			      min-height: 32px;
+			      padding: 6px 8px;
+			      border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+			      border-radius: 6px;
+			      background: var(--color-input);
+			      color: var(--color-text);
+			    }
+
+			    .browser-extension-url-actions {
+			      display: flex;
+			      flex-wrap: wrap;
+			      gap: 7px;
+			    }
+
+			    .browser-extension-url-actions .btn {
+			      display: inline-flex;
+			      align-items: center;
+			      gap: 6px;
+			      min-height: 30px;
+			    }
+
+			    .browser-extension-message {
+			      background: color-mix(in srgb, #15803d 12%, var(--color-background));
+			      color: color-mix(in srgb, var(--color-text) 88%, #166534);
+			    }
+
+			    .browser-extension-error {
+			      background: color-mix(in srgb, #be123c 12%, var(--color-background));
+			      color: #9f1239;
+			    }
+
+	    .browser-live-dot {
+	      width: 8px;
+	      height: 8px;
+	      border-radius: 50%;
+      background: #777;
+      flex: 0 0 auto;
+    }
+
+    .browser-live-dot.active {
+      background: #2e7d32;
+      box-shadow: 0 0 0 4px rgba(46, 125, 50, 0.13);
+    }
+
+	    .browser-title {
+	      overflow: hidden;
+	      text-overflow: ellipsis;
+	      white-space: nowrap;
+	    }
+
+    .browser-title {
+      font-size: 0.9rem;
+      font-weight: 650;
+    }
+
+	    .browser-id {
+	      font-size: 0.78rem;
+	      opacity: 0.68;
+	    }
+
+    .browser-stage {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: auto;
+      background: #fff;
+      outline: none;
+    }
+
+    .browser-frame {
+      flex: 0 0 auto;
+      display: block;
+      width: 100%;
+      height: auto;
+      user-select: none;
+      background: #fff;
+    }
+
+    .browser-status,
+    .browser-error,
+    .browser-empty {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 42px;
+      font-size: 0.88rem;
+    }
+
+    .browser-status,
+    .browser-error {
+      padding: 0 12px;
+    }
+
+    .browser-error {
+      color: #9f1239;
+    }
+
+    .browser-empty {
+      display: grid;
+      flex: 1 1 auto;
+      width: 100%;
+      min-height: 0;
+      justify-items: center;
+      align-content: center;
+      text-align: center;
+      padding: 24px;
+      color: var(--color-text);
+      background: var(--color-background);
+    }
+
+	    @container (max-width: 460px) {
+	      .browser-meta-top {
+	        grid-template-columns: minmax(0, 1fr);
+	      }
+
+	      .browser-session-controls {
+	        width: 100%;
+	      }
+
+		      .browser-session-controls .browser-select {
+		        flex: 1 1 auto;
+		        width: auto;
+		      }
+
+		      .browser-extension-dropdown {
+		        right: 0;
+		        left: auto;
+		        width: min(296px, calc(100vw - 72px));
+		      }
+
+	      .browser-address,
+	      .browser-select {
+	        min-height: 34px;
+	      }
+    }
+  </style>
+</body>
+</html>

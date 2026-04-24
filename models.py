@@ -45,7 +45,7 @@ from sentence_transformers import SentenceTransformer
 from pydantic import ConfigDict
 
 
-# disable extra logging, must be done repeatedly, otherwise browser-use will turn it back on for some reason
+# keep provider logging quiet in normal operation
 def turn_off_logging():
     os.environ["LITELLM_LOG"] = "ERROR"  # only errors
     litellm.suppress_debug_info = True

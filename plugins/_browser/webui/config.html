@@ -1,0 +1,225 @@
+<html>
+<head>
+  <title>Browser Settings</title>
+  <script type="module">
+    import { store } from "/plugins/_browser/webui/browser-config-store.js";
+  </script>
+</head>
+
+<body>
+  <div x-data>
+    <template x-if="$store.browserConfig && config">
+      <div
+        class="browser-config-sections"
+        x-init="$store.browserConfig.init(config)"
+        x-effect="$store.browserConfig.bindConfig(config)"
+        x-destroy="$store.browserConfig.cleanup()"
+      >
+        <div class="browser-config-card">
+          <div class="section-title">Browser Model Preset</div>
+          <div class="section-description">
+            Choose an optional Model Configuration preset for Browser-owned model helpers. Leave it
+            on default to follow the effective Main Model.
+          </div>
+
+          <div class="field">
+            <div class="field-label">
+              <div class="field-title">Preset</div>
+              <div class="field-description" x-text="$store.browserConfig.selectedPresetSummary()"></div>
+            </div>
+            <div class="field-control">
+              <select x-model="config.model_preset" :disabled="$store.browserConfig.presetsLoading">
+                <option value="">Default Main Model</option>
+                <template x-for="preset in $store.browserConfig.presetOptions()" :key="preset.name">
+                  <option :value="preset.name" x-text="preset.label"></option>
+                </template>
+              </select>
+            </div>
+          </div>
+
+          <div class="browser-config-note" x-show="$store.browserConfig.presetsLoading">
+            <span class="material-symbols-outlined spinning">progress_activity</span>
+            <span>Loading model presets...</span>
+          </div>
+
+          <div class="browser-config-warning" x-show="$store.browserConfig.selectedPresetMissing()">
+            <span class="material-symbols-outlined">warning</span>
+            <span>The saved preset is missing. Browser will use the effective Main Model until you choose another preset.</span>
+          </div>
+
+          <div class="browser-config-note" x-show="$store.browserConfig.presetsError">
+            <span class="material-symbols-outlined">error</span>
+            <span x-text="$store.browserConfig.presetsError"></span>
+          </div>
+
+          <div class="browser-config-actions">
+            <button type="button" class="btn btn-field" @click="$store.browserConfig.openPresets()">
+              <span class="material-symbols-outlined">tune</span>
+              <span>Edit Presets</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="browser-config-card">
+          <div class="section-title">Chrome Extensions</div>
+          <div class="section-description">
+            Load unpacked Chromium extensions into the Browser tool. When extensions are active,
+            Browser switches from Playwright's lightweight headless shell to bundled Chromium so
+            the extensions can actually load.
+          </div>
+
+          <div class="browser-config-warning">
+            <span class="material-symbols-outlined">warning</span>
+            <span>
+              Browser extensions run inside the Docker browser sandbox, but malicious or buggy
+              extensions can still damage that sandboxed environment. Install only extensions you
+              trust and keep permissions as small as possible.
+            </span>
+          </div>
+
+          <div class="field">
+            <div class="field-label">
+              <div class="field-title">Enable extensions</div>
+              <div class="field-description">
+                Turn this on only when you have unpacked extension folders ready. Saving changes
+                restarts active Browser sessions so the new launch mode applies immediately.
+              </div>
+            </div>
+            <div class="field-control">
+              <label class="toggle">
+                <input type="checkbox" x-model="config.extensions_enabled" />
+                <span class="toggler"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label">
+              <div class="field-title">Extension directories</div>
+              <div class="field-description">
+                One unpacked extension directory per line. Use paths that are visible inside the
+                runtime environment itself, especially when Agent Zero is running in Docker.
+              </div>
+            </div>
+            <div class="field-control">
+              <textarea
+                :value="$store.browserConfig.extensionPathsText"
+                @input="$store.browserConfig.setExtensionPathsText($event.target.value)"
+                rows="6"
+                placeholder="/a0/usr/browser-extensions/my-extension"
+              ></textarea>
+            </div>
+          </div>
+
+          <div class="browser-config-note">
+            <span class="material-symbols-outlined">info</span>
+            <span>
+              This first version supports unpacked extension folders only. Chrome Web Store installs
+              and `.crx` files are out of scope for now.
+            </span>
+          </div>
+
+          <div class="browser-config-note">
+            <span class="material-symbols-outlined">deployed_code</span>
+            <span>
+              Playwright currently requires a persistent Chromium context for extension loading, so
+              Browser stays in its faster headless-shell mode until valid extension folders are both
+              configured and enabled.
+            </span>
+          </div>
+
+          <div class="browser-config-pill-row">
+            <span class="browser-config-pill" x-text="$store.browserConfig.pathCountLabel()"></span>
+            <span class="browser-config-pill tone-active" x-show="$store.browserConfig.extensionModeReady()">
+              Extension mode ready
+            </span>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <style>
+    .browser-config-sections {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .browser-config-card {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 16px;
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+    }
+
+    .browser-config-card textarea {
+      min-height: 132px;
+      resize: vertical;
+      font-family: var(--font-family-monospace, monospace);
+    }
+
+    .browser-config-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .browser-config-note {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--color-panel) 82%, transparent);
+      color: var(--color-text-secondary);
+      font-size: var(--font-size-small);
+    }
+
+    .browser-config-warning {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      padding: 11px 12px;
+      border: 1px solid color-mix(in srgb, #d97706 44%, var(--color-border));
+      border-radius: 8px;
+      background: color-mix(in srgb, #d97706 14%, var(--color-background));
+      color: color-mix(in srgb, var(--color-text) 86%, #92400e);
+      font-size: var(--font-size-small);
+      line-height: 1.4;
+    }
+
+    .browser-config-warning .material-symbols-outlined {
+      color: #b45309;
+      font-size: 20px;
+    }
+
+    .browser-config-pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .browser-config-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+      background: color-mix(in srgb, var(--color-panel) 88%, transparent);
+      font-size: 0.78rem;
+      color: var(--color-text-secondary);
+    }
+
+    .browser-config-pill.tone-active {
+      color: #1b5e20;
+      border-color: rgba(27, 94, 32, 0.18);
+      background: rgba(46, 125, 50, 0.12);
+    }
+  </style>
+</body>
+</html>

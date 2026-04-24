@@ -76,7 +76,7 @@ An external REST API is available for programmatic task submission. Agent-to-Age
 - **No persistent state between chats** unless explicitly memorized or saved to files.
 - **Context window**: long conversations are summarized automatically, which can lose detail.
 - **Memory recall is approximate**: similarity search may miss relevant memories or surface irrelevant ones.
-- **No GUI interaction** outside the browser agent (which is separate from the main agent).
+- **No GUI interaction** outside built-in browser tooling or configured computer-use integrations.
 - **Container boundary**: the agent cannot affect systems outside the Docker container unless network access or volume mounts are configured.
 - **Model capability ceiling**: tool usage quality and reasoning depth are bounded by the underlying LLM. Small models may struggle with complex multi-step tool use.
 - **No real-time data** beyond web search. The agent's own knowledge cutoff is the underlying model's training cutoff.

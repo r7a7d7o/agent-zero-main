@@ -741,10 +741,6 @@ class Agent:
         return None
 
     @extension.extensible
-    def get_browser_model(self):
-        return None
-
-    @extension.extensible
     def get_embedding_model(self):
         return None
 

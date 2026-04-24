@@ -5,6 +5,20 @@ import { callJsExtensions } from "/js/extensions.js";
 // Modal functionality
 const modalStack = [];
 
+function findModalIndexByPath(modalPath) {
+  return modalStack.findIndex((modal) => modal.path === modalPath);
+}
+
+function focusModal(modalPath) {
+  const modalIndex = findModalIndexByPath(modalPath);
+  if (modalIndex === -1) return false;
+  if (modalIndex === modalStack.length - 1) return true;
+  const [modal] = modalStack.splice(modalIndex, 1);
+  modalStack.push(modal);
+  updateModalZIndexes();
+  return true;
+}
+
 function getModalScrollElement(modal) {
   return modal?.element?.querySelector(".modal-scroll");
 }
@@ -38,6 +52,15 @@ backdrop.style.display = "none";
 backdrop.style.backdropFilter = "blur(5px)";
 document.body.appendChild(backdrop);
 
+function modalSuppressesBackdrop(modal) {
+  const path = String(modal?.path || "");
+  return path === "/plugins/_browser/webui/main.html"
+    || path === "plugins/_browser/webui/main.html"
+    || modal?.element?.classList?.contains("modal-floating")
+    || modal?.element?.classList?.contains("modal-no-backdrop")
+    || modal?.inner?.classList?.contains("modal-no-backdrop");
+}
+
 // Function to update z-index for all modals and backdrop
 function updateModalZIndexes() {
   // Base z-index for modals
@@ -51,20 +74,26 @@ function updateModalZIndexes() {
     modal.element.style.zIndex = baseZIndex + index * 20;
   });
 
-  // Always show backdrop
-  backdrop.style.display = "block";
+  const backdropModalStack = modalStack.filter((modal) => !modalSuppressesBackdrop(modal));
 
-  if (modalStack.length > 1) {
-    // For multiple modals, position backdrop between the top two
-    const topModalIndex = modalStack.length - 1;
-    const previousModalZIndex = baseZIndex + (topModalIndex - 1) * 20;
-    backdrop.style.zIndex = previousModalZIndex + 10;
-  } else if (modalStack.length === 1) {
-    // For single modal, position backdrop below it
-    backdrop.style.zIndex = baseZIndex - 1;
-  } else {
-    // No modals, hide backdrop
+  if (backdropModalStack.length === 0) {
     backdrop.style.display = "none";
+    return;
+  }
+
+  backdrop.style.display = "block";
+  backdrop.style.backdropFilter = "blur(5px)";
+  backdrop.style.backgroundColor = "";
+
+  if (backdropModalStack.length === modalStack.length && modalStack.length > 1) {
+    const topModalIndex = modalStack.length - 1;
+    backdrop.style.zIndex = baseZIndex + (topModalIndex - 1) * 20 + 10;
+  } else {
+    const topBackdropModal = backdropModalStack[backdropModalStack.length - 1];
+    const topBackdropModalIndex = modalStack.indexOf(topBackdropModal);
+    backdrop.style.zIndex = topBackdropModalIndex > 0
+      ? baseZIndex + (topBackdropModalIndex - 1) * 20 + 10
+      : baseZIndex - 1;
   }
 }
 
@@ -211,6 +240,26 @@ export async function openModal(modalPath, beforeClose = null) {
       resolve();
     }
   });
+}
+
+export function isModalOpen(modalPath) {
+  return findModalIndexByPath(modalPath) !== -1;
+}
+
+export async function ensureModalOpen(modalPath, beforeClose = null) {
+  if (focusModal(modalPath)) return null;
+  return openModal(modalPath, beforeClose);
+}
+
+export async function toggleModal(modalPath, beforeClose = null) {
+  if (!isModalOpen(modalPath)) {
+    return openModal(modalPath, beforeClose);
+  }
+  while (isModalOpen(modalPath)) {
+    const closed = await closeModal(modalPath);
+    if (closed === false) return false;
+  }
+  return true;
 }
 
 // Function to close modal
@@ -369,3 +418,6 @@ document.addEventListener("keydown", (e) => {
 globalThis.openModal = openModal;
 globalThis.closeModal = closeModal;
 globalThis.scrollModal = scrollModal;
+globalThis.isModalOpen = isModalOpen;
+globalThis.ensureModalOpen = ensureModalOpen;
+globalThis.toggleModal = toggleModal;

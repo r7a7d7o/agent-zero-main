@@ -706,7 +706,7 @@ The framework ships with these core plugins in `/a0/plugins/`:
 | `_memory` | Persistent vector memory system |
 | `_text_editor` | File read/write/patch with line numbers |
 | `_model_config` | LLM model selection and configuration |
-| `_browser_agent` | Browser automation and web interaction |
+| `_browser` | Direct browser automation and WebUI viewing |
 | `_infection_check` | Prompt injection safety checks |
 | `_error_retry` | Retry on critical exceptions |
 | `_email_integration` | Email communication via IMAP/SMTP |

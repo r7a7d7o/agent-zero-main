@@ -10,7 +10,7 @@ from typing import Iterator
 import pytest
 from flask import Flask
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -75,6 +75,19 @@ def _temporary_probe_plugin(surface: str) -> Iterator[tuple[str, str]]:
         dir=plugins_root,
     ) as temp_plugin_dir:
         plugin_id = Path(temp_plugin_dir).name
+        (Path(temp_plugin_dir) / "plugin.yaml").write_text(
+            (
+                f"name: {plugin_id}\n"
+                f"title: {plugin_id}\n"
+                "description: Temporary WebUI surface probe.\n"
+                "version: 0.0.0\n"
+                "always_enabled: false\n"
+            ),
+            encoding="utf-8",
+        )
+        from helpers import cache
+
+        cache.clear("*(plugins)*")
         probe_file = (
             Path(temp_plugin_dir)
             / "extensions"
@@ -91,7 +104,10 @@ def _temporary_probe_plugin(surface: str) -> Iterator[tuple[str, str]]:
             ),
             encoding="utf-8",
         )
-        yield plugin_id, probe_file.name
+        try:
+            yield plugin_id, probe_file.name
+        finally:
+            cache.clear("*(plugins)*")
 
 
 @pytest.mark.asyncio
@@ -117,8 +133,13 @@ async def test_webui_surface_extension_point_end_to_end(
             f"{plugin_id}/extensions/webui/{surface}/{probe_file_name}"
         )
 
-        assert any(
-            extension.get("plugin_id") == plugin_id
-            and str(extension.get("path", "")).replace("\\", "/").endswith(expected_suffix)
+        extension_paths = [
+            str(
+                extension.get("path", "")
+                if isinstance(extension, dict)
+                else extension
+            ).replace("\\", "/")
             for extension in extensions
-        )
+        ]
+
+        assert any(path.endswith(expected_suffix) for path in extension_paths)

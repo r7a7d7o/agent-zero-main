@@ -126,8 +126,8 @@ Agent Zero's power comes from its ability to use [tools](../developer/architectu
 
 - **Understand Tools:** Agent Zero includes default tools like knowledge (powered by SearXNG), code execution, and communication. Understand the capabilities of these tools and how to invoke them.
 
-### Browser Agent Status & MCP Alternatives
-The built-in Browser Agent is provided by the `_browser_agent` plugin. It uses the effective Main Model from `_model_config`, including per-chat overrides and the Main Model vision flag. Playwright Chromium is preinstalled in **Docker**; in **local development** it is installed on demand when needed via `ensure_playwright_binary()` (see [Development Setup](../setup/dev-setup.md) to pre-install).
+### Browser Tool Status & MCP Alternatives
+The built-in browser is provided by the `_browser` plugin and direct `browser` tool. It uses Playwright operations controlled by the main agent, exposes typed page refs for links, buttons, images, and inputs, and includes a WebUI viewer for open browser sessions. Playwright Chromium is preinstalled in **Docker**; in **local development** it is installed on demand when needed via `ensure_playwright_binary()` (see [Development Setup](../setup/dev-setup.md) to pre-install).
 
 If you need a different browser stack or want external browser tooling, MCP-based browser tools are still a strong option:
 

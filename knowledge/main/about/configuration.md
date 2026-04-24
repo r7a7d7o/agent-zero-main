@@ -6,11 +6,11 @@ Agent Zero uses three configurable LLM roles:
 
 | Role | Purpose |
 |------|---------|
-| `chat_llm` | Primary model for all agent reasoning, tool use, and the Browser Agent |
+| `chat_llm` | Primary model for all agent reasoning and tool use |
 | `utility_llm` | Secondary model for internal framework tasks: memory summarization, query generation, history compression, memory recall filtering |
 | `embedding_llm` | Produces vector embeddings for memory and knowledge indexing |
 
-The utility model handles high-volume, lower-stakes operations and can be a cheaper/faster model than the chat model. The Browser Agent uses the effective chat model resolved by `_model_config`, including per-chat overrides and the chat model vision flag. Changing the embedding model invalidates the existing vector index - the entire knowledge base is re-indexed automatically.
+The utility model handles high-volume, lower-stakes operations and can be a cheaper/faster model than the chat model. Browser automation is exposed as the direct `browser` tool; the main agent decides when to call it. Changing the embedding model invalidates the existing vector index - the entire knowledge base is re-indexed automatically.
 
 ## Model Providers
 

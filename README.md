@@ -99,12 +99,12 @@ A detailed setup guide for Windows, macOS, and Linux can be found in the Agent Z
 
 ![Multi-agent](docs/res/usage/multi-agent.png)
 
-### Browser Agent
+### Browser
 
-- Browser automation is provided by the built-in `_browser_agent` plugin.
-- It uses the effective Main Model resolved by `_model_config`; there is no separate browser model slot.
-- Browser vision follows the Main Model's vision setting.
-- Playwright Chromium: **Docker** images ship the headless shell preinstalled. **Local development** installs it on first Browser Agent use via `ensure_playwright_binary()` in `plugins/_browser_agent/helpers/playwright.py` (into `tmp/playwright`); you can pre-install manually (see [Development Setup](docs/setup/dev-setup.md)) to skip the wait.
+- Browser automation is provided by the built-in `_browser` plugin and the direct `browser` tool.
+- The tool uses Playwright operations controlled by the main agent, with typed page refs such as `[link 3]` and `[button 6]`.
+- The plugin includes a visible WebUI browser viewer for open sessions.
+- Playwright Chromium: **Docker** images ship the headless shell preinstalled. **Local development** installs it on first browser use via `ensure_playwright_binary()` in `plugins/_browser/helpers/playwright.py` (into `tmp/playwright`); you can pre-install manually (see [Development Setup](docs/setup/dev-setup.md)) to skip the wait.
 
 4. **Completely Customizable and Extensible**
 

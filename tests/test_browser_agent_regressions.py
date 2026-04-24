@@ -1,74 +1,404 @@
-import asyncio
-import importlib
-import json
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import plugins._browser_agent.helpers.browser_use_monkeypatch as browser_use_monkeypatch
-import plugins._browser_agent.tools.browser_agent as browser_agent_module
+from plugins._browser.helpers.config import (
+    build_browser_launch_config,
+    get_browser_model_preset_options,
+    normalize_browser_config,
+    resolve_browser_model_selection,
+)
+from plugins._browser.helpers.extension_manager import (
+    _crx_zip_payload,
+    parse_chrome_web_store_extension_id,
+)
+from plugins._browser.helpers.runtime import normalize_url
+import plugins._browser.hooks as browser_hooks_module
+import plugins._browser.tools.browser as browser_tool_module
+import plugins._browser.api.ws_browser as ws_browser_module
 
 
-def test_gemini_clean_and_conform_normalizes_known_single_action_shapes():
-    raw = (
-        '{"action":['
-        '{"complete_task":{"title":"T","response":"R","page_summary":"S"}}'
-        ']}'
+def test_browser_url_normalization_matches_address_bar_hosts():
+    assert normalize_url("localhost:3000") == "http://localhost:3000/"
+    assert normalize_url("127.0.0.1:8000/path") == "http://127.0.0.1:8000/path"
+    assert normalize_url("novinky.cz") == "https://novinky.cz/"
+    assert normalize_url("https://example.com") == "https://example.com/"
+    assert normalize_url("about:blank") == "about:blank"
+
+
+def test_browser_config_normalizes_extension_paths(tmp_path):
+    extension_dir = tmp_path / "extension"
+    extension_dir.mkdir()
+
+    config = normalize_browser_config(
+        {
+            "extensions_enabled": 1,
+            "extension_paths": [str(extension_dir), "", "  ", str(extension_dir)],
+        }
     )
 
-    cleaned = browser_use_monkeypatch.gemini_clean_and_conform(raw)
+    assert config == {
+        "extensions_enabled": True,
+        "extension_paths": [str(extension_dir)],
+        "model_preset": "",
+    }
 
-    assert cleaned is not None
-    parsed = json.loads(cleaned)
-    assert parsed["action"] == [
+
+def test_browser_config_normalizes_model_preset():
+    assert normalize_browser_config({"model_preset": "  Research  "})["model_preset"] == "Research"
+    assert "model" not in normalize_browser_config({"model": "main"})
+
+
+def test_browser_model_selection_uses_presets(monkeypatch):
+    import plugins._browser.helpers.config as browser_config_module
+    from plugins._model_config.helpers import model_config
+
+    monkeypatch.setattr(
+        browser_config_module,
+        "get_browser_config",
+        lambda agent=None: {"model_preset": "Research", "extensions_enabled": False, "extension_paths": []},
+    )
+    monkeypatch.setattr(
+        model_config,
+        "get_preset_by_name",
+        lambda name: {
+            "name": "Research",
+            "chat": {"provider": "openrouter", "name": "example/model"},
+        } if name == "Research" else None,
+    )
+
+    selection = resolve_browser_model_selection(SimpleNamespace())
+
+    assert selection["source_kind"] == "preset"
+    assert selection["config"] == {"provider": "openrouter", "name": "example/model"}
+
+
+def test_browser_model_selection_falls_back_to_main_for_missing_preset(monkeypatch):
+    from plugins._model_config.helpers import model_config
+
+    monkeypatch.setattr(model_config, "get_preset_by_name", lambda name: None)
+    monkeypatch.setattr(
+        model_config,
+        "get_chat_model_config",
+        lambda agent=None: {"provider": "openrouter", "name": "main/model"},
+    )
+
+    selection = resolve_browser_model_selection(SimpleNamespace(), {"model_preset": "Missing"})
+
+    assert selection["source_kind"] == "main"
+    assert selection["preset_status"] == "missing"
+    assert selection["config"] == {"provider": "openrouter", "name": "main/model"}
+
+
+def test_browser_model_preset_options_include_missing_selected(monkeypatch):
+    from plugins._model_config.helpers import model_config
+
+    monkeypatch.setattr(
+        model_config,
+        "get_presets",
+        lambda: [{"name": "Balance", "chat": {"provider": "openrouter", "name": "model"}}],
+    )
+
+    options = get_browser_model_preset_options(settings={"model_preset": "Deleted"})
+
+    assert options[-1]["name"] == "Deleted"
+    assert options[-1]["missing"] is True
+
+
+def test_browser_launch_config_switches_to_chromium_for_extensions(tmp_path):
+    extension_dir = tmp_path / "extension"
+    extension_dir.mkdir()
+
+    launch = build_browser_launch_config(
         {
-            "done": {
-                "success": True,
-                "data": {
-                    "title": "T",
-                    "response": "R",
-                    "page_summary": "S",
-                },
-            }
+            "extensions_enabled": True,
+            "extension_paths": [str(extension_dir)],
+        }
+    )
+
+    assert launch["browser_mode"] == "chromium_extensions"
+    assert launch["channel"] == "chromium"
+    assert launch["requires_full_browser"] is True
+    assert launch["extensions"]["active"] is True
+    assert any(arg.startswith("--load-extension=") for arg in launch["args"])
+    assert "--headless=new" not in launch["args"]
+
+
+def test_browser_extension_manager_parses_web_store_urls():
+    extension_id = "a" * 32
+
+    assert parse_chrome_web_store_extension_id(extension_id) == extension_id
+    assert (
+        parse_chrome_web_store_extension_id(
+            f"https://chromewebstore.google.com/detail/example/{extension_id}"
+        )
+        == extension_id
+    )
+    assert (
+        parse_chrome_web_store_extension_id(
+            f"https://chrome.google.com/webstore/detail/example/{extension_id}?hl=en"
+        )
+        == extension_id
+    )
+
+
+def test_browser_extension_manager_extracts_crx3_zip_payload():
+    payload = b"PK\x03\x04zip-payload"
+    header = b"metadata"
+    crx = b"Cr24" + (3).to_bytes(4, "little") + len(header).to_bytes(4, "little") + header + payload
+
+    assert _crx_zip_payload(crx) == payload
+
+
+def test_browser_extension_menu_exposes_agent_and_url_paths():
+    html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "main.html").read_text(
+        encoding="utf-8"
+    )
+    skill = PROJECT_ROOT / "skills" / "a0-browser-ext" / "SKILL.md"
+
+    assert "+ Create New with A0" in html
+    assert "Chrome Web Store URL" in html
+    assert "My Browser Extensions" in html
+    assert "malicious or buggy extensions" in html
+    assert skill.exists()
+
+
+def test_browser_save_plugin_config_restarts_runtimes_on_change(monkeypatch, tmp_path):
+    extension_dir = tmp_path / "extension"
+    extension_dir.mkdir()
+    restarted = []
+
+    monkeypatch.setattr(
+        browser_hooks_module,
+        "_load_saved_browser_config",
+        lambda project_name="", agent_profile="": {
+            "extensions_enabled": False,
+            "extension_paths": [],
         },
-    ]
+    )
+    monkeypatch.setattr(
+        browser_hooks_module,
+        "close_all_runtimes_sync",
+        lambda: restarted.append(True),
+    )
+
+    result = browser_hooks_module.save_plugin_config(
+        {
+            "extensions_enabled": True,
+            "extension_paths": [str(extension_dir)],
+        },
+        project_name="",
+        agent_profile="",
+    )
+
+    assert result["extensions_enabled"] is True
+    assert result["extension_paths"] == [str(extension_dir)]
+    assert result["model_preset"] == ""
+    assert restarted == [True]
 
 
-class DummyBrowserSession:
-    def __init__(self) -> None:
-        self.kill_called = False
-        self.close_called = False
+def test_browser_save_plugin_config_does_not_restart_runtimes_for_preset_only(monkeypatch):
+    restarted = []
 
-    async def kill(self) -> None:
-        self.kill_called = True
+    monkeypatch.setattr(
+        browser_hooks_module,
+        "_load_saved_browser_config",
+        lambda project_name="", agent_profile="": {
+            "extensions_enabled": False,
+            "extension_paths": [],
+            "model_preset": "",
+        },
+    )
+    monkeypatch.setattr(
+        browser_hooks_module,
+        "close_all_runtimes_sync",
+        lambda: restarted.append(True),
+    )
 
-    async def close(self) -> None:
-        self.close_called = True
+    result = browser_hooks_module.save_plugin_config(
+        {
+            "extensions_enabled": False,
+            "extension_paths": [],
+            "model_preset": "Research",
+        },
+        project_name="",
+        agent_profile="",
+    )
+
+    assert result["model_preset"] == "Research"
+    assert restarted == []
 
 
-class DummyAgent:
-    def __init__(self) -> None:
-        self.context = SimpleNamespace(id="ctx", task=None)
+@pytest.mark.asyncio
+async def test_browser_tool_dispatches_direct_actions(monkeypatch):
+    calls = []
+
+    class FakeRuntime:
+        async def call(self, method, *args):
+            calls.append((method, args))
+            if method == "content":
+                return {"document": "[link 1] Example"}
+            return {"ok": True, "method": method, "args": args}
+
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx"
+        return FakeRuntime()
+
+    monkeypatch.setattr(browser_tool_module, "get_runtime", fake_get_runtime)
+    agent = SimpleNamespace(context=SimpleNamespace(id="ctx"))
+    tool = browser_tool_module.Browser(
+        agent=agent,
+        name="browser",
+        method=None,
+        args={},
+        message="",
+        loop_data=None,
+    )
+
+    response = await tool.execute(action="content", browser_id=1)
+
+    assert response.message == "[link 1] Example"
+    assert calls == [("content", (1, None))]
 
 
-def test_browser_session_teardown_prefers_kill_for_keep_alive_sessions():
-    state = browser_agent_module.State(DummyAgent())
-    session = DummyBrowserSession()
-    state.browser_session = session
+@pytest.mark.asyncio
+async def test_browser_viewer_subscribe_unregisters_stream(monkeypatch):
+    class FakeRuntime:
+        def __init__(self) -> None:
+            self.opened = False
 
-    state.kill_task()
+        async def call(self, method, *args):
+            if method == "list":
+                if self.opened:
+                    return {
+                        "browsers": [{"id": 1, "currentUrl": "about:blank", "title": ""}],
+                        "last_interacted_browser_id": 1,
+                    }
+                return {"browsers": [], "last_interacted_browser_id": None}
+            if method == "open":
+                self.opened = True
+                return {"id": 1, "state": {"id": 1, "currentUrl": "about:blank"}}
+            raise AssertionError(method)
 
-    assert session.kill_called is True
-    assert session.close_called is False
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx"
+        return FakeRuntime()
+
+    monkeypatch.setattr(ws_browser_module, "get_runtime", fake_get_runtime)
+    monkeypatch.setattr(
+        ws_browser_module.AgentContext,
+        "get",
+        staticmethod(lambda context_id: SimpleNamespace(id=context_id)),
+    )
+
+    handler = ws_browser_module.WsBrowser(
+        SimpleNamespace(),
+        threading.RLock(),
+        manager=None,
+    )
+
+    result = await handler.process(
+        "browser_viewer_subscribe",
+        {"context_id": "ctx", "correlationId": "c1"},
+        "sid-1",
+    )
+
+    assert result["context_id"] == "ctx"
+    assert ("sid-1", "ctx") in ws_browser_module.WsBrowser._streams
+
+    await handler.on_disconnect("sid-1")
+
+    assert ("sid-1", "ctx") not in ws_browser_module.WsBrowser._streams
 
 
-def test_browser_cleanup_extensions_follow_new_extensible_path_layout():
-    extension = importlib.import_module("helpers.extension")
+@pytest.mark.asyncio
+async def test_browser_viewer_viewport_input_dispatches_resize(monkeypatch):
+    calls = []
+
+    class FakeRuntime:
+        async def call(self, method, *args, **kwargs):
+            calls.append((method, args, kwargs))
+            return {"ok": True, "method": method, "args": args}
+
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx"
+        assert create is False
+        return FakeRuntime()
+
+    monkeypatch.setattr(ws_browser_module, "get_runtime", fake_get_runtime)
+
+    handler = ws_browser_module.WsBrowser(
+        SimpleNamespace(),
+        threading.RLock(),
+        manager=None,
+    )
+
+    result = await handler.process(
+        "browser_viewer_input",
+        {
+            "context_id": "ctx",
+            "browser_id": 7,
+            "input_type": "viewport",
+            "width": 1280,
+            "height": 720,
+        },
+        "sid-1",
+    )
+
+    assert result == {"state": {"ok": True, "method": "set_viewport", "args": (7, 1280, 720)}}
+    assert calls == [("set_viewport", (7, 1280, 720), {})]
+
+
+@pytest.mark.asyncio
+async def test_browser_viewer_wheel_input_dispatches_scroll(monkeypatch):
+    calls = []
+
+    class FakeRuntime:
+        async def call(self, method, *args, **kwargs):
+            calls.append((method, args, kwargs))
+            return {"ok": True, "method": method, "args": args}
+
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx"
+        assert create is False
+        return FakeRuntime()
+
+    monkeypatch.setattr(ws_browser_module, "get_runtime", fake_get_runtime)
+
+    handler = ws_browser_module.WsBrowser(
+        SimpleNamespace(),
+        threading.RLock(),
+        manager=None,
+    )
+
+    result = await handler.process(
+        "browser_viewer_input",
+        {
+            "context_id": "ctx",
+            "browser_id": 3,
+            "input_type": "wheel",
+            "x": 320,
+            "y": 480,
+            "delta_x": 0,
+            "delta_y": 640,
+        },
+        "sid-1",
+    )
+
+    assert result == {"state": {"ok": True, "method": "wheel", "args": (3, 320.0, 480.0, 0.0, 640.0)}}
+    assert calls == [("wheel", (3, 320.0, 480.0, 0.0, 640.0), {})]
+
+
+def test_browser_cleanup_extensions_follow_extensible_path_layout():
+    extension = __import__("helpers.extension", fromlist=["_get_extension_classes"])
     remove_classes = extension._get_extension_classes(  # type: ignore[attr-defined]
         "_functions/agent/AgentContext/remove/start"
     )
@@ -76,5 +406,12 @@ def test_browser_cleanup_extensions_follow_new_extensible_path_layout():
         "_functions/agent/AgentContext/reset/start"
     )
 
-    assert any(cls.__name__ == "CleanupBrowserStateOnRemove" for cls in remove_classes)
-    assert any(cls.__name__ == "CleanupBrowserStateOnReset" for cls in reset_classes)
+    assert any(cls.__name__ == "CleanupBrowserRuntimeOnRemove" for cls in remove_classes)
+    assert any(cls.__name__ == "CleanupBrowserRuntimeOnReset" for cls in reset_classes)
+
+
+def test_legacy_browser_dependency_is_removed():
+    assert not (PROJECT_ROOT / "plugins" / ("_browser" + "_agent")).exists()
+    assert ("browser" + "-use") not in (PROJECT_ROOT / "requirements.txt").read_text(
+        encoding="utf-8"
+    )
