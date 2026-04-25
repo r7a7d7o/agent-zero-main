@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from plugins._browser.helpers.config import (
     build_browser_launch_config,
+    get_browser_main_model_summary,
     get_browser_model_preset_options,
     normalize_browser_config,
     resolve_browser_model_selection,
@@ -21,7 +22,6 @@ from plugins._browser.helpers.extension_manager import (
     _crx_zip_payload,
     _detect_chrome_prodversion,
     _normalize_chrome_prodversion,
-    get_extension_roots,
     get_extensions_root,
     parse_chrome_web_store_extension_id,
 )
@@ -52,13 +52,11 @@ def test_browser_config_normalizes_extension_paths(tmp_path):
 
     config = normalize_browser_config(
         {
-            "extensions_enabled": 1,
             "extension_paths": [str(extension_dir), "", "  ", str(extension_dir)],
         }
     )
 
     assert config == {
-        "extensions_enabled": True,
         "extension_paths": [str(extension_dir)],
         "model_preset": "",
     }
@@ -76,7 +74,7 @@ def test_browser_model_selection_uses_presets(monkeypatch):
     monkeypatch.setattr(
         browser_config_module,
         "get_browser_config",
-        lambda agent=None: {"model_preset": "Research", "extensions_enabled": False, "extension_paths": []},
+        lambda agent=None: {"model_preset": "Research", "extension_paths": []},
     )
     monkeypatch.setattr(
         model_config,
@@ -125,10 +123,21 @@ def test_browser_model_preset_options_include_missing_selected(monkeypatch):
     assert options[-1]["missing"] is True
 
 
+def test_browser_main_model_summary_shows_current_model(monkeypatch):
+    from plugins._model_config.helpers import model_config
+
+    monkeypatch.setattr(
+        model_config,
+        "get_chat_model_config",
+        lambda agent=None: {"provider": "openrouter", "name": "example/main"},
+    )
+
+    assert get_browser_main_model_summary() == "openrouter / example/main"
+
+
 def test_browser_launch_config_uses_full_chromium_for_all_sessions(tmp_path):
     default_launch = build_browser_launch_config(
         {
-            "extensions_enabled": False,
             "extension_paths": [],
         }
     )
@@ -144,7 +153,6 @@ def test_browser_launch_config_uses_full_chromium_for_all_sessions(tmp_path):
 
     launch = build_browser_launch_config(
         {
-            "extensions_enabled": True,
             "extension_paths": [str(extension_dir)],
         }
     )
@@ -189,10 +197,6 @@ def test_browser_extension_storage_uses_plugin_user_path(monkeypatch, tmp_path):
     )
 
     assert get_extensions_root() == tmp_path / "usr" / "plugins" / "_browser" / "extensions"
-    assert get_extension_roots() == [
-        tmp_path / "usr" / "plugins" / "_browser" / "extensions",
-        tmp_path / "usr" / "browser-extensions",
-    ]
 
 
 def test_browser_extension_manager_parses_web_store_urls():
@@ -242,9 +246,17 @@ def test_browser_extension_menu_exposes_agent_and_url_paths():
     )
     skill = PROJECT_ROOT / "skills" / "a0-browser-ext" / "SKILL.md"
 
-    assert "+ Create New with A0" in html
-    assert "Chrome Web Store URL" in html
-    assert "My Browser Extensions" in html
+    assert "Create New Extension with A0" in html
+    assert "+ Create New with A0" not in html
+    assert "Input a Chrome Web Store URL" in html
+    assert "My Browser Extensions" not in html
+    assert "Browser LLM Preset" in html
+    assert "Chrome Extensions" in html
+    assert "Installed extensions" in html
+    assert "No extensions installed yet." not in html
+    assert "Browser Extension Settings" not in html
+    assert "<span>Settings</span>" in html
+    assert "hasExtensionInstallUrl()" in html
     assert "malicious or buggy extensions" in html
     assert skill.exists()
 
@@ -272,6 +284,40 @@ def test_browser_ui_spinners_have_browser_local_animation():
     assert ":class=\"{ spinning: $store.browserPage.extensionActionLoading }\"" in main_html
     assert "@keyframes browser-spin" in main_html
     assert "@keyframes browser-config-spin" in config_html
+
+
+def test_browser_extension_settings_stay_user_facing():
+    config_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "config.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Choose which installed Chrome extensions Browser loads." in config_html
+    assert "Installed extensions" in config_html
+    assert "<textarea" not in config_html
+    assert "Enabled extension directories" not in config_html
+    assert "Chrome Web Store URL installs" not in config_html
+    assert "Browser caches Playwright Chromium" not in config_html
+
+
+def test_browser_viewer_uses_tabs_for_session_switching():
+    main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "main.html").read_text(
+        encoding="utf-8"
+    )
+    browser_store = (
+        PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'class="browser-session-tabs" role="tablist"' in main_html
+    assert 'class="browser-tab"' in main_html
+    assert 'class="browser-new-tab"' in main_html
+    assert "$store.browserPage.openNewBrowser()" in main_html
+    assert "browser-select" not in main_html
+    assert "browser-live-dot" not in main_html
+    assert "async openNewBrowser()" in browser_store
+    assert "browserTabTitle(browser)" in browser_store
+    assert "Scan with A0" in browser_store
+    assert "Review with A0" not in browser_store
+    assert "Using ${this.mainModelSummary}" in browser_store
 
 
 def test_browser_docker_installs_full_chromium_to_persistent_cache():
@@ -313,7 +359,6 @@ def test_browser_save_plugin_config_restarts_runtimes_on_change(monkeypatch, tmp
         browser_hooks_module,
         "_load_saved_browser_config",
         lambda project_name="", agent_profile="": {
-            "extensions_enabled": False,
             "extension_paths": [],
         },
     )
@@ -325,14 +370,12 @@ def test_browser_save_plugin_config_restarts_runtimes_on_change(monkeypatch, tmp
 
     result = browser_hooks_module.save_plugin_config(
         {
-            "extensions_enabled": True,
             "extension_paths": [str(extension_dir)],
         },
         project_name="",
         agent_profile="",
     )
 
-    assert result["extensions_enabled"] is True
     assert result["extension_paths"] == [str(extension_dir)]
     assert result["model_preset"] == ""
     assert restarted == [True]
@@ -345,7 +388,6 @@ def test_browser_save_plugin_config_does_not_restart_runtimes_for_preset_only(mo
         browser_hooks_module,
         "_load_saved_browser_config",
         lambda project_name="", agent_profile="": {
-            "extensions_enabled": False,
             "extension_paths": [],
             "model_preset": "",
         },
@@ -358,7 +400,6 @@ def test_browser_save_plugin_config_does_not_restart_runtimes_for_preset_only(mo
 
     result = browser_hooks_module.save_plugin_config(
         {
-            "extensions_enabled": False,
             "extension_paths": [],
             "model_preset": "Research",
         },

@@ -17,7 +17,6 @@ from plugins._browser.helpers.config import PLUGIN_NAME, get_browser_config
 
 
 EXTENSIONS_ROOT_DIR = ("usr", "plugins", PLUGIN_NAME, "extensions")
-LEGACY_EXTENSIONS_ROOT_DIR = ("usr", "browser-extensions")
 EXTENSION_ID_RE = re.compile(r"^[a-p]{32}$")
 WEB_STORE_ID_RE = re.compile(r"(?<![a-p])([a-p]{32})(?![a-p])")
 CHROME_VERSION_RE = re.compile(r"(\d+(?:\.\d+){0,3})")
@@ -43,22 +42,6 @@ def get_extensions_root() -> Path:
     return root
 
 
-def get_extension_roots() -> list[Path]:
-    roots = [
-        get_extensions_root(),
-        Path(files.get_abs_path(*LEGACY_EXTENSIONS_ROOT_DIR)),
-    ]
-    unique: list[Path] = []
-    seen: set[str] = set()
-    for root in roots:
-        key = str(root)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(root)
-    return unique
-
-
 def parse_chrome_web_store_extension_id(value: str) -> str:
     source = str(value or "").strip()
     if EXTENSION_ID_RE.fullmatch(source):
@@ -75,25 +58,22 @@ def list_browser_extensions() -> list[dict[str, Any]]:
     config = get_browser_config()
     enabled_paths = {str(Path(path).expanduser()) for path in config["extension_paths"]}
     entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
 
-    for root in get_extension_roots():
-        if not root.exists():
-            continue
+    root = get_extensions_root()
+    if root.exists():
         for manifest_path in sorted(root.glob("**/manifest.json")):
-            extension_dir = manifest_path.parent
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except Exception:
-                manifest = {}
-            extension_path = str(extension_dir)
-            entries.append(
-                {
-                    "name": manifest.get("name") or extension_dir.name,
-                    "version": manifest.get("version") or "",
-                    "path": extension_path,
-                    "enabled": extension_path in enabled_paths,
-                }
-            )
+            entry = _extension_entry(manifest_path.parent, enabled_paths)
+            seen.add(entry["path"])
+            entries.append(entry)
+
+    for configured_path in config["extension_paths"]:
+        extension_dir = Path(configured_path).expanduser()
+        extension_path = str(extension_dir)
+        if extension_path in seen or not (extension_dir / "manifest.json").is_file():
+            continue
+        entries.append(_extension_entry(extension_dir, enabled_paths))
+        seen.add(extension_path)
 
     return entries
 
@@ -126,9 +106,31 @@ def install_chrome_web_store_extension(source: str) -> dict[str, Any]:
         "name": manifest.get("name") or extension_id,
         "version": manifest.get("version") or "",
         "path": str(target),
-        "extensions_enabled": config["extensions_enabled"],
         "extension_paths": config["extension_paths"],
     }
+
+
+def set_browser_extension_enabled(extension_path: str, enabled: bool) -> dict[str, Any]:
+    raw_path = str(extension_path or "").strip()
+    if not raw_path:
+        raise ValueError("Choose an extension first.")
+
+    path = str(Path(raw_path).expanduser())
+    directory = Path(path)
+    if enabled and not (directory / "manifest.json").is_file():
+        raise ValueError("Extension folder must contain a manifest.json file.")
+
+    config = get_browser_config()
+    paths = list(config["extension_paths"])
+    if enabled:
+        if path not in paths:
+            paths.append(path)
+    else:
+        paths = [item for item in paths if str(Path(item).expanduser()) != path]
+
+    config["extension_paths"] = paths
+    plugins.save_plugin_config(PLUGIN_NAME, "", "", config)
+    return config
 
 
 def _download_crx(extension_id: str, archive_path: Path) -> None:
@@ -250,10 +252,20 @@ def _enable_extension_path(extension_path: Path) -> dict[str, Any]:
     paths = list(config["extension_paths"])
     if path not in paths:
         paths.append(path)
-    config["extensions_enabled"] = True
     config["extension_paths"] = paths
     plugins.save_plugin_config(PLUGIN_NAME, "", "", config)
     return config
+
+
+def _extension_entry(extension_dir: Path, enabled_paths: set[str]) -> dict[str, Any]:
+    manifest = _read_manifest(extension_dir)
+    extension_path = str(extension_dir)
+    return {
+        "name": manifest.get("name") or extension_dir.name,
+        "version": manifest.get("version") or "",
+        "path": extension_path,
+        "enabled": extension_path in enabled_paths,
+    }
 
 
 def _read_manifest(extension_path: Path) -> dict[str, Any]:

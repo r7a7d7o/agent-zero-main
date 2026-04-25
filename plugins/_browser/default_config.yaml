@@ -1,8 +1,5 @@
-# Load unpacked Chromium extension directories into the Browser tool.
+# Enabled unpacked Chromium extension directories.
 # Paths must be readable from the Agent Zero runtime itself.
-extensions_enabled: false
-
-# One unpacked extension directory per item.
 extension_paths: []
 
 # Optional _model_config preset used by Browser-owned model helpers.

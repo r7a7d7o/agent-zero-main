@@ -42,11 +42,19 @@ def _normalize_model_preset(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _model_config_summary(config: dict[str, Any] | None) -> str:
+    if not isinstance(config, dict):
+        return ""
+    provider = str(config.get("provider", "") or "").strip()
+    model_name = str(config.get("name", "") or "").strip()
+    return " / ".join(part for part in (provider, model_name) if part)
+
+
 def normalize_browser_config(settings: dict[str, Any] | None) -> dict[str, Any]:
     raw = settings if isinstance(settings, dict) else {}
+    extension_paths = _normalize_extension_paths(raw.get("extension_paths", []))
     return {
-        "extensions_enabled": bool(raw.get("extensions_enabled", False)),
-        "extension_paths": _normalize_extension_paths(raw.get("extension_paths", [])),
+        "extension_paths": extension_paths,
         MODEL_PRESET_KEY: _normalize_model_preset(raw.get(MODEL_PRESET_KEY, "")),
     }
 
@@ -54,7 +62,6 @@ def normalize_browser_config(settings: dict[str, Any] | None) -> dict[str, Any]:
 def browser_runtime_config(settings: dict[str, Any] | None) -> dict[str, Any]:
     config = normalize_browser_config(settings)
     return {
-        "extensions_enabled": config["extensions_enabled"],
         "extension_paths": config["extension_paths"],
     }
 
@@ -96,9 +103,7 @@ def get_browser_model_preset_options(
         chat_cfg = preset.get("chat", {}) if isinstance(preset, dict) else {}
         if not isinstance(chat_cfg, dict):
             chat_cfg = {}
-        provider = str(chat_cfg.get("provider", "") or "").strip()
-        model_name = str(chat_cfg.get("name", "") or "").strip()
-        summary = " / ".join(part for part in (provider, model_name) if part)
+        summary = _model_config_summary(chat_cfg)
         options.append(
             {
                 "name": name,
@@ -119,6 +124,12 @@ def get_browser_model_preset_options(
         )
 
     return options
+
+
+def get_browser_main_model_summary(agent: "Agent | None" = None) -> str:
+    from plugins._model_config.helpers import model_config
+
+    return _model_config_summary(model_config.get_chat_model_config(agent))
 
 
 def resolve_browser_model_selection(
@@ -216,16 +227,12 @@ def describe_browser_extensions(settings: dict[str, Any] | None) -> dict[str, An
 
     active_paths = [item["path"] for item in path_details if item["loadable"]]
     invalid_paths = [item["path"] for item in path_details if not item["loadable"]]
-    active = bool(config["extensions_enabled"] and active_paths)
+    active = bool(active_paths)
 
     warnings: list[str] = []
-    if config["extensions_enabled"] and not config["extension_paths"]:
+    if config["extension_paths"] and not active_paths:
         warnings.append(
-            "Extensions are enabled, but no unpacked extension directories are configured."
-        )
-    elif config["extensions_enabled"] and not active_paths:
-        warnings.append(
-            "Extensions are enabled, but none of the configured extension directories are readable unpacked folders."
+            "None of the enabled extension directories are readable unpacked folders."
         )
     elif invalid_paths:
         warnings.append(
@@ -233,7 +240,6 @@ def describe_browser_extensions(settings: dict[str, Any] | None) -> dict[str, An
         )
 
     return {
-        "enabled": bool(config["extensions_enabled"]),
         "active": active,
         "configured_paths": config["extension_paths"],
         "active_paths": active_paths,

@@ -16,121 +16,53 @@
         x-destroy="$store.browserConfig.cleanup()"
       >
         <div class="browser-config-card">
-          <div class="section-title">Browser Model Preset</div>
+          <div class="section-title">Extensions</div>
           <div class="section-description">
-            Choose an optional Model Configuration preset for Browser-owned model helpers. Leave it
-            on default to follow the effective Main Model.
-          </div>
-
-          <div class="field">
-            <div class="field-label">
-              <div class="field-title">Preset</div>
-              <div class="field-description" x-text="$store.browserConfig.selectedPresetSummary()"></div>
-            </div>
-            <div class="field-control">
-              <select x-model="config.model_preset" :disabled="$store.browserConfig.presetsLoading">
-                <option value="">Default Main Model</option>
-                <template x-for="preset in $store.browserConfig.presetOptions()" :key="preset.name">
-                  <option :value="preset.name" x-text="preset.label"></option>
-                </template>
-              </select>
-            </div>
-          </div>
-
-          <div class="browser-config-note" x-show="$store.browserConfig.presetsLoading">
-            <span class="material-symbols-outlined spinning">progress_activity</span>
-            <span>Loading model presets...</span>
-          </div>
-
-          <div class="browser-config-warning" x-show="$store.browserConfig.selectedPresetMissing()">
-            <span class="material-symbols-outlined">warning</span>
-            <span>The saved preset is missing. Browser will use the effective Main Model until you choose another preset.</span>
-          </div>
-
-          <div class="browser-config-note" x-show="$store.browserConfig.presetsError">
-            <span class="material-symbols-outlined">error</span>
-            <span x-text="$store.browserConfig.presetsError"></span>
-          </div>
-
-          <div class="browser-config-actions">
-            <button type="button" class="btn btn-field" @click="$store.browserConfig.openPresets()">
-              <span class="material-symbols-outlined">tune</span>
-              <span>Edit Presets</span>
-            </button>
-          </div>
-        </div>
-
-        <div class="browser-config-card">
-          <div class="section-title">Chrome Extensions</div>
-          <div class="section-description">
-            Load unpacked Chromium extensions into the Browser tool. When extensions are active,
-            Browser loads them into the same persistent full Chromium runtime used for every
-            Browser session.
+            Choose which installed Chrome extensions Browser loads.
           </div>
 
           <div class="browser-config-warning">
             <span class="material-symbols-outlined">warning</span>
             <span>
-              Browser extensions run inside the Docker browser sandbox, but malicious or buggy
-              extensions can still damage that sandboxed environment. Install only extensions you
-              trust and keep permissions as small as possible.
+              Extensions run inside the Docker browser sandbox, but malicious or buggy extensions can
+              still damage that environment. Keep only the extensions you trust enabled.
             </span>
           </div>
 
-          <div class="field">
-            <div class="field-label">
-              <div class="field-title">Enable extensions</div>
-              <div class="field-description">
-                Turn this on only when you have unpacked extension folders ready. Saving changes
-                restarts active Browser sessions so the new launch mode applies immediately.
-              </div>
+          <div class="browser-config-extension-list">
+            <div class="browser-config-subtitle">
+              <span>Installed extensions</span>
+              <span class="material-symbols-outlined spinning" x-show="$store.browserConfig.extensionsLoading">progress_activity</span>
             </div>
-            <div class="field-control">
-              <label class="toggle">
-                <input type="checkbox" x-model="config.extensions_enabled" />
-                <span class="toggler"></span>
+            <template x-if="!$store.browserConfig.extensionsLoading && !$store.browserConfig.extensionsList.length">
+              <div class="browser-config-empty">No installed extensions found.</div>
+            </template>
+            <template x-for="extension in $store.browserConfig.extensionsList" :key="extension.path">
+              <label class="browser-config-extension-row" :title="extension.path">
+                <span class="browser-config-extension-text">
+                  <span class="browser-config-extension-name" x-text="extension.name || 'Unnamed extension'"></span>
+                  <span class="browser-config-extension-meta" x-text="$store.browserConfig.extensionVersionLabel(extension)"></span>
+                </span>
+                <span class="browser-config-toggle">
+                  <input
+                    type="checkbox"
+                    :checked="$store.browserConfig.extensionEnabled(extension)"
+                    @change="$store.browserConfig.setExtensionEnabled(extension, $event.target.checked)"
+                  />
+                  <span class="browser-config-switch"></span>
+                </span>
               </label>
+            </template>
+            <div class="browser-config-note" x-show="$store.browserConfig.extensionsError">
+              <span class="material-symbols-outlined">error</span>
+              <span x-text="$store.browserConfig.extensionsError"></span>
             </div>
-          </div>
-
-          <div class="field">
-            <div class="field-label">
-              <div class="field-title">Extension directories</div>
-              <div class="field-description">
-                One unpacked extension directory per line. Use paths that are visible inside the
-                runtime environment itself, especially when Agent Zero is running in Docker.
-              </div>
-            </div>
-            <div class="field-control">
-              <textarea
-                :value="$store.browserConfig.extensionPathsText"
-                @input="$store.browserConfig.setExtensionPathsText($event.target.value)"
-                rows="6"
-                placeholder="/a0/usr/plugins/_browser/extensions/my-extension"
-              ></textarea>
-            </div>
-          </div>
-
-          <div class="browser-config-note">
-            <span class="material-symbols-outlined">info</span>
-            <span>
-              Chrome Web Store URL installs are converted into unpacked folders under
-              /a0/usr/plugins/_browser/extensions/chrome-web-store, then loaded from the directory list above.
-            </span>
-          </div>
-
-          <div class="browser-config-note">
-            <span class="material-symbols-outlined">deployed_code</span>
-            <span>
-              Browser caches Playwright Chromium under /a0/usr/plugins/_browser/playwright. The first Browser
-              run can take a few minutes while Chromium is installed; later starts reuse that cache.
-            </span>
           </div>
 
           <div class="browser-config-pill-row">
             <span class="browser-config-pill" x-text="$store.browserConfig.pathCountLabel()"></span>
             <span class="browser-config-pill tone-active" x-show="$store.browserConfig.extensionModeReady()">
-              Extension mode ready
+              Ready
             </span>
           </div>
         </div>
@@ -154,16 +86,108 @@
       border-radius: 8px;
     }
 
-    .browser-config-card textarea {
-      min-height: 132px;
-      resize: vertical;
-      font-family: var(--font-family-monospace, monospace);
+    .browser-config-extension-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--color-panel) 78%, transparent);
     }
 
-    .browser-config-actions {
+    .browser-config-subtitle {
       display: flex;
-      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
       gap: 8px;
+      color: var(--color-text-secondary);
+      font-size: 0.82rem;
+      font-weight: 650;
+    }
+
+    .browser-config-subtitle .material-symbols-outlined {
+      font-size: 18px;
+    }
+
+    .browser-config-empty,
+    .browser-config-extension-meta {
+      color: var(--color-text-secondary);
+      font-size: 0.78rem;
+    }
+
+    .browser-config-extension-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      min-height: 42px;
+      padding: 8px 0;
+    }
+
+    .browser-config-extension-row + .browser-config-extension-row {
+      border-top: 1px solid color-mix(in srgb, var(--color-border) 52%, transparent);
+    }
+
+    .browser-config-extension-text {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .browser-config-extension-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--color-text);
+      font-weight: 650;
+    }
+
+    .browser-config-toggle {
+      position: relative;
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      width: 42px;
+      height: 24px;
+    }
+
+    .browser-config-toggle input {
+      position: absolute;
+      inset: 0;
+      margin: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .browser-config-switch {
+      width: 100%;
+      height: 100%;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-border) 78%, transparent);
+      transition: background-color 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .browser-config-switch::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--color-background);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
+      transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .browser-config-toggle input:checked + .browser-config-switch {
+      background: color-mix(in srgb, var(--color-primary) 76%, #16a34a);
+    }
+
+    .browser-config-toggle input:checked + .browser-config-switch::after {
+      transform: translateX(18px);
     }
 
     .browser-config-note {
