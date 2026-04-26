@@ -1,0 +1,464 @@
+<html>
+<head>
+  <script type="module">
+    import { store } from "/plugins/_office/webui/office-store.js";
+  </script>
+</head>
+<body>
+  <div class="office-panel" x-data x-create="$store.office.onMount($el, xAttrs($el) || {})" x-destroy="$store.office.cleanup()">
+    <template x-if="$store.office">
+      <div class="office-shell">
+        <div class="office-toolbar">
+          <button type="button" class="office-button" title="Open" @click="$store.office.openPrompt()">
+            <span class="material-symbols-outlined">folder_open</span>
+            <span>Open</span>
+          </button>
+          <button type="button" class="office-button" title="New document" @click="$store.office.create('document')">
+            <span class="material-symbols-outlined">note_add</span>
+            <span>Doc</span>
+          </button>
+          <button type="button" class="office-button" title="New spreadsheet" @click="$store.office.create('spreadsheet')">
+            <span class="material-symbols-outlined">table</span>
+            <span>Sheet</span>
+          </button>
+          <button type="button" class="office-button" title="New presentation" @click="$store.office.create('presentation')">
+            <span class="material-symbols-outlined">slideshow</span>
+            <span>Presentation</span>
+          </button>
+          <span class="office-toolbar-spacer"></span>
+          <span
+            class="office-health-pill"
+            :class="`is-${$store.office.status?.state || 'unknown'}`"
+            :title="$store.office.status?.message || 'Office status'"
+          >
+            <span class="office-health-dot"></span>
+            <span x-text="$store.office.status?.state || 'status'"></span>
+          </span>
+          <button type="button" class="office-icon-button" title="Save" @click="$store.office.save()" :disabled="!$store.office.session">
+            <span class="material-symbols-outlined">save</span>
+          </button>
+          <button type="button" class="office-icon-button" title="Versions" @click="$store.office.showVersions()" :disabled="!$store.office.session">
+            <span class="material-symbols-outlined">history</span>
+          </button>
+          <button type="button" class="office-icon-button" title="Refresh status" @click="$store.office.refresh()">
+            <span class="material-symbols-outlined">refresh</span>
+          </button>
+        </div>
+
+        <div class="office-status-line" x-show="$store.office.message || $store.office.error || $store.office.loading" style="display: none;">
+          <span class="material-symbols-outlined" :class="{ spinning: $store.office.loading }" x-text="$store.office.loading ? 'progress_activity' : ($store.office.error ? 'error' : 'check_circle')"></span>
+          <span x-text="$store.office.error || $store.office.message || 'Working...'"></span>
+        </div>
+
+        <div class="office-body">
+          <div class="office-bootstrap" x-show="!$store.office.session && (!$store.office.status || !$store.office.status.healthy)">
+            <div class="office-bootstrap-header">
+              <span class="material-symbols-outlined">description</span>
+              <div>
+                <strong x-text="$store.office.status?.state || 'Preparing Office'"></strong>
+                <span x-text="$store.office.status?.message || 'Collabora Online is being prepared in the background.'"></span>
+              </div>
+            </div>
+            <div class="office-bootstrap-actions">
+              <button type="button" class="office-button" @click="$store.office.retry()">
+                <span class="material-symbols-outlined">restart_alt</span>
+                <span>Retry</span>
+              </button>
+              <button type="button" class="office-button" @click="$store.office.refresh()">
+                <span class="material-symbols-outlined">sync</span>
+                <span>Status</span>
+              </button>
+            </div>
+            <pre class="office-log" x-text="$store.office.logs?.bootstrap || $store.office.logs?.wrapper || ''"></pre>
+          </div>
+
+          <div class="office-start" x-show="!$store.office.session && $store.office.status?.healthy" style="display: none;">
+            <div class="office-start-actions">
+              <button type="button" class="office-create-tile" @click="$store.office.create('document')">
+                <span class="material-symbols-outlined">article</span>
+                <span>Document</span>
+              </button>
+              <button type="button" class="office-create-tile" @click="$store.office.create('spreadsheet')">
+                <span class="material-symbols-outlined">table_chart</span>
+                <span>Spreadsheet</span>
+              </button>
+              <button type="button" class="office-create-tile" @click="$store.office.create('presentation')">
+                <span class="material-symbols-outlined">co_present</span>
+                <span>Presentation</span>
+              </button>
+            </div>
+            <div class="office-recent" x-show="$store.office.recent.length">
+              <template x-for="doc in $store.office.recent" :key="doc.file_id">
+                <button type="button" class="office-recent-row" :title="doc.path" @click="$store.office.openPath(doc.path)">
+                  <span class="material-symbols-outlined">description</span>
+                  <span x-text="doc.basename"></span>
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <div class="office-frame-wrap" x-show="$store.office.session" style="display: none;">
+            <iframe
+              data-office-frame
+              allow="clipboard-read *; clipboard-write *; fullscreen *"
+              allowfullscreen
+            ></iframe>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <style>
+    .office-panel,
+    .office-shell {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      background: var(--color-background);
+    }
+
+    .office-panel {
+      container-type: inline-size;
+    }
+
+    .modal-inner.office-modal {
+      box-sizing: border-box;
+      container-type: inline-size;
+      width: min(82vw, 1180px);
+      height: min(88vh, 900px);
+      min-width: min(340px, calc(100vw - 16px));
+      min-height: min(500px, calc(100vh - 16px));
+      max-width: calc(100vw - 16px);
+      max-height: calc(100vh - 16px);
+      resize: both;
+      border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+      border-radius: 7px;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+      background: color-mix(in srgb, var(--color-background) 94%, #000 6%);
+    }
+
+    .modal-inner.office-modal .modal-header {
+      min-height: 34px;
+      padding: 0.35rem 0.75rem 0.35rem 1rem;
+      cursor: move;
+      user-select: none;
+      background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+    }
+
+    .modal-inner.office-modal .modal-title {
+      font-size: 0.95rem;
+      letter-spacing: 0;
+    }
+
+    .modal-inner.office-modal .modal-close {
+      font-size: 1.35rem;
+      line-height: 1;
+    }
+
+    .modal-inner.office-modal .modal-scroll {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+      padding: 0;
+    }
+
+    .modal-inner.office-modal .modal-bd.office-modal-body {
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      padding: 0;
+    }
+
+    .modal-inner.office-modal .modal-bd.office-modal-body > x-component,
+    .modal-inner.office-modal .modal-bd.office-modal-body > div[x-data] {
+      display: flex;
+      flex: 1 1 auto;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+    }
+
+    .modal-inner.office-modal .modal-bd.office-modal-body > x-component > .office-panel {
+      flex: 1 1 auto;
+      height: 100%;
+      min-height: 0;
+    }
+
+    .office-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 44px;
+      padding: 7px 9px;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 66%, transparent);
+      background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
+      overflow-x: auto;
+    }
+
+    .office-toolbar-spacer {
+      flex: 1 1 auto;
+      min-width: 8px;
+    }
+
+    .office-button,
+    .office-icon-button,
+    .office-health-pill,
+    .office-create-tile,
+    .office-recent-row {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border: 1px solid color-mix(in srgb, var(--color-border) 64%, transparent);
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--color-panel) 80%, transparent);
+      color: var(--color-text);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .office-button {
+      min-height: 32px;
+      padding: 5px 9px;
+      font-size: 0.8rem;
+      white-space: nowrap;
+    }
+
+    .office-icon-button {
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      padding: 0;
+    }
+
+    .office-health-pill {
+      min-height: 28px;
+      padding: 4px 8px;
+      cursor: default;
+      font-size: 0.75rem;
+      text-transform: capitalize;
+      white-space: nowrap;
+      color: var(--color-text-muted);
+      background: color-mix(in srgb, var(--color-panel) 64%, transparent);
+    }
+
+    .office-health-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-text-muted) 70%, transparent);
+    }
+
+    .office-health-pill.is-healthy .office-health-dot {
+      background: #31c48d;
+    }
+
+    .office-health-pill.is-installing .office-health-dot {
+      background: #f6ad55;
+    }
+
+    .office-health-pill.is-degraded .office-health-dot,
+    .office-health-pill.is-failed .office-health-dot {
+      background: #f05252;
+    }
+
+    .office-button:hover:not(:disabled),
+    .office-icon-button:hover:not(:disabled),
+    .office-create-tile:hover,
+    .office-recent-row:hover {
+      background: color-mix(in srgb, var(--color-background-hover) 70%, transparent);
+      border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+    }
+
+    .office-button:disabled,
+    .office-icon-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.42;
+    }
+
+    .office-button .material-symbols-outlined,
+    .office-icon-button .material-symbols-outlined {
+      font-size: 18px;
+    }
+
+    .office-status-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 32px;
+      padding: 5px 10px;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 44%, transparent);
+      font-size: 0.82rem;
+      color: var(--color-text);
+    }
+
+    .office-body {
+      position: relative;
+      display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .office-bootstrap,
+    .office-start {
+      display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      flex-direction: column;
+      gap: 14px;
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .office-bootstrap-header {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      max-width: 720px;
+    }
+
+    .office-bootstrap-header > .material-symbols-outlined {
+      font-size: 24px;
+      color: color-mix(in srgb, var(--color-primary) 70%, var(--color-text));
+    }
+
+    .office-bootstrap-header div {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      gap: 3px;
+      font-size: 0.9rem;
+      line-height: 1.35;
+    }
+
+    .office-bootstrap-header span {
+      color: var(--color-text-muted);
+    }
+
+    .office-bootstrap-actions,
+    .office-start-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .office-log {
+      min-height: 140px;
+      max-height: 260px;
+      overflow: auto;
+      margin: 0;
+      padding: 10px;
+      border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--color-panel) 78%, transparent);
+      color: var(--color-text-muted);
+      font-family: var(--font-family-code);
+      font-size: 0.72rem;
+      white-space: pre-wrap;
+    }
+
+    .office-create-tile {
+      min-width: 132px;
+      min-height: 88px;
+      flex-direction: column;
+      padding: 12px;
+      font-weight: 650;
+    }
+
+    .office-create-tile .material-symbols-outlined {
+      font-size: 28px;
+    }
+
+    .office-recent {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-width: 720px;
+    }
+
+    .office-recent-row {
+      justify-content: flex-start;
+      min-height: 36px;
+      padding: 7px 9px;
+      text-align: left;
+    }
+
+    .office-recent-row span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .office-frame-wrap {
+      display: flex;
+      position: absolute;
+      inset: 0;
+      flex: 1 1 auto;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      background: #fff;
+    }
+
+    .office-frame-wrap iframe {
+      flex: 1 1 auto;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      border: 0;
+      background: #fff;
+    }
+
+    .office-panel .spinning {
+      display: inline-block;
+      animation: office-spin 0.8s linear infinite;
+    }
+
+    @keyframes office-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 520px) {
+      .office-button span:last-child {
+        display: none;
+      }
+      .office-health-pill span:last-child {
+        display: none;
+      }
+      .office-create-tile {
+        min-width: 104px;
+      }
+    }
+
+    @container (max-width: 560px) {
+      .office-button span:last-child {
+        display: none;
+      }
+      .office-health-pill span:last-child {
+        display: none;
+      }
+      .office-create-tile {
+        min-width: 104px;
+      }
+    }
+  </style>
+</body>
+</html>

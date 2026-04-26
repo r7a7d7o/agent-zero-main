@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+from flask import Flask
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from plugins._office.helpers import wopi_routes, wopi_store
+
+
+@pytest.fixture()
+def office_state(tmp_path, monkeypatch):
+    workdir = tmp_path / "workdir"
+    state = tmp_path / "state"
+    documents = workdir / "documents"
+    monkeypatch.setattr(wopi_store, "STATE_DIR", state)
+    monkeypatch.setattr(wopi_store, "DB_PATH", state / "documents.sqlite3")
+    monkeypatch.setattr(wopi_store, "BACKUP_DIR", state / "backups")
+    monkeypatch.setattr(wopi_store, "DOCUMENTS_DIR", documents)
+    monkeypatch.setattr(wopi_store, "WORKDIR", workdir)
+    wopi_store.ensure_dirs()
+    return {"workdir": workdir, "state": state, "documents": documents}
+
+
+def test_check_file_info_has_no_nulls_and_token_is_scoped(office_state):
+    doc = wopi_store.create_document("document", "Scope Test", "docx", "hello")
+    session = wopi_store.create_session(doc["file_id"], "user-a", "write", "http://localhost:32080")
+
+    token_info = wopi_store.validate_token(session["access_token"], doc["file_id"], require_write=True)
+    info = wopi_store.check_file_info(doc["file_id"], token_info)
+
+    assert all(value is not None for value in info.values())
+    assert info["UserCanWrite"] is True
+    assert info["ReadOnly"] is False
+    assert info["SupportsLocks"] is True
+
+    other = wopi_store.create_document("document", "Other", "docx", "")
+    with pytest.raises(PermissionError):
+        wopi_store.validate_token(session["access_token"], other["file_id"])
+
+
+def test_path_traversal_and_symlink_escape_are_rejected(office_state, tmp_path):
+    outside = tmp_path / "outside.docx"
+    outside.write_bytes(wopi_store.template_bytes("document", "docx", "Outside", ""))
+
+    with pytest.raises(PermissionError):
+        wopi_store.register_document(outside)
+
+    link = office_state["workdir"] / "escape.docx"
+    link.symlink_to(outside)
+    with pytest.raises(PermissionError):
+        wopi_store.register_document(link)
+
+
+def test_lock_conflicts_refresh_unlock_and_relock(office_state):
+    doc = wopi_store.create_document("document", "Lock Test", "docx", "")
+    session = wopi_store.create_session(doc["file_id"], "user-a", "write", "http://localhost:32080")
+
+    ok, current = wopi_store.lock(doc["file_id"], "lock-a", session["session_id"], 120)
+    assert ok is True
+    assert current == "lock-a"
+
+    ok, current = wopi_store.lock(doc["file_id"], "lock-b", session["session_id"], 120)
+    assert ok is False
+    assert current == "lock-a"
+
+    ok, current = wopi_store.refresh_lock(doc["file_id"], "lock-a", 120)
+    assert ok is True
+    assert current == "lock-a"
+
+    ok, current = wopi_store.unlock_and_relock(doc["file_id"], "lock-a", "lock-c", session["session_id"], 120)
+    assert ok is True
+    assert current == "lock-c"
+
+    ok, current = wopi_store.unlock(doc["file_id"], "lock-b")
+    assert ok is False
+    assert current == "lock-c"
+
+    ok, current = wopi_store.unlock(doc["file_id"], "lock-c")
+    assert ok is True
+    assert current == ""
+
+
+def test_put_file_requires_lock_and_updates_version_history(office_state):
+    doc = wopi_store.create_document("document", "Save Test", "docx", "before")
+    session = wopi_store.create_session(doc["file_id"], "user-a", "write", "http://localhost:32080")
+
+    with pytest.raises(wopi_store.LockMismatch):
+        wopi_store.put_file(doc["file_id"], b"after", "")
+
+    ok, _ = wopi_store.lock(doc["file_id"], "save-lock", session["session_id"], 120)
+    assert ok is True
+    next_version = wopi_store.put_file(doc["file_id"], b"after", "save-lock")
+    saved = wopi_store.get_document(doc["file_id"])
+
+    assert next_version == wopi_store.item_version(saved)
+    assert saved["size"] == len(b"after")
+    assert (office_state["documents"] / "Save Test.docx").read_bytes() == b"after"
+    assert wopi_store.version_history(doc["file_id"])
+
+
+def test_wopi_routes_return_conflict_lock_header(office_state):
+    app = Flask(__name__)
+    wopi_routes.register_wopi_routes(app)
+    doc = wopi_store.create_document("document", "Route Test", "docx", "")
+    session = wopi_store.create_session(doc["file_id"], "user-a", "write", "http://localhost:32080")
+
+    with app.test_client() as client:
+        first = client.post(
+            f"/wopi/files/{doc['file_id']}?access_token={session['access_token']}",
+            headers={"X-WOPI-Override": "LOCK", "X-WOPI-Lock": "route-lock"},
+        )
+        assert first.status_code == 200
+
+        conflict = client.post(
+            f"/wopi/files/{doc['file_id']}?access_token={session['access_token']}",
+            headers={"X-WOPI-Override": "LOCK", "X-WOPI-Lock": "other-lock"},
+        )
+        assert conflict.status_code == 409
+        assert conflict.headers["X-WOPI-Lock"] == "route-lock"
+
+
+def test_office_proxy_accepts_encoded_wopi_socket_token_without_session_cookie(office_state):
+    pytest.importorskip("starlette")
+    from plugins._office.helpers import office_proxy
+
+    doc = wopi_store.create_document("document", "Socket Token", "docx", "")
+    session = wopi_store.create_session(doc["file_id"], "user-a", "write", "http://127.0.0.1:32080")
+    encoded_wopi = (
+        f"http%3A%2F%2F127.0.0.1%3A80%2Fwopi%2Ffiles%2F{doc['file_id']}"
+        f"%3Faccess_token%3D{session['access_token']}"
+        f"%26access_token_ttl%3D{session['access_token_ttl']}"
+    )
+    scope = {
+        "type": "websocket",
+        "path": f"/office/cool/{encoded_wopi}/ws",
+        "raw_path": f"/office/cool/{encoded_wopi}/ws".encode("latin-1"),
+        "query_string": b"",
+        "headers": [],
+    }
+
+    proxy = office_proxy.OfficeProxy()
+
+    assert proxy._has_valid_wopi_token(scope) is True
+
+    headers = proxy.websocket_headers({
+        "headers": [
+            (b"host", b"127.0.0.1:32080"),
+            (b"origin", b"http://127.0.0.1:32080"),
+            (b"user-agent", b"qa"),
+            (b"sec-websocket-key", b"ignored"),
+        ],
+    })
+    assert proxy.upstream_websocket_url(scope).startswith("ws://127.0.0.1:32080/office/cool/")
+    assert all(key.lower() not in {"host", "origin", "sec-websocket-key"} for key, _ in headers)
+    assert ("user-agent", "qa") in headers
