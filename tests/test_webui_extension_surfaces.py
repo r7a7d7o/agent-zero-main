@@ -52,6 +52,14 @@ SURFACE_SCENARIOS: list[tuple[str, str]] = [
     ("plugins-list-dropdown-end", "webui/components/plugins/list/plugin-list.html"),
     ("modal-shell-start", "webui/js/modals.js"),
     ("modal-shell-end", "webui/js/modals.js"),
+    ("right-canvas-shell-start", "webui/components/canvas/right-canvas.html"),
+    ("right-canvas-tabs-start", "webui/components/canvas/right-canvas.html"),
+    ("right-canvas-tabs-end", "webui/components/canvas/right-canvas.html"),
+    ("right-canvas-toolbar-start", "webui/components/canvas/right-canvas.html"),
+    ("right-canvas-toolbar-end", "webui/components/canvas/right-canvas.html"),
+    ("right-canvas-panels", "webui/components/canvas/right-canvas.html"),
+    ("right-canvas-empty-state", "webui/components/canvas/right-canvas.html"),
+    ("right-canvas-shell-end", "webui/components/canvas/right-canvas.html"),
 ]
 
 

@@ -56,6 +56,8 @@ function modalSuppressesBackdrop(modal) {
   const path = String(modal?.path || "");
   return path === "/plugins/_browser/webui/main.html"
     || path === "plugins/_browser/webui/main.html"
+    || path === "/plugins/_office/webui/main.html"
+    || path === "plugins/_office/webui/main.html"
     || modal?.element?.classList?.contains("modal-floating")
     || modal?.element?.classList?.contains("modal-no-backdrop")
     || modal?.inner?.classList?.contains("modal-no-backdrop");
@@ -151,6 +153,7 @@ function createModalElement(path) {
     path: path,
     element: newModal,
     title: newModal.querySelector(".modal-title"),
+    header: newModal.querySelector(".modal-header"),
     body: newModal.querySelector(".modal-bd"),
     close: close_button,
     footerSlot: newModal.querySelector(".modal-footer-slot"),
@@ -160,6 +163,43 @@ function createModalElement(path) {
     beforeClose: null,
     savedScrollSnapshot: null,
   };
+}
+
+function getDockMetadata(doc, modalPath) {
+  const htmlDataset = doc?.documentElement?.dataset || {};
+  const bodyDataset = doc?.body?.dataset || {};
+  const surfaceId = htmlDataset.canvasSurface || bodyDataset.canvasSurface || "";
+  if (!surfaceId) return null;
+  return {
+    surfaceId,
+    modalPath: htmlDataset.canvasModalPath || bodyDataset.canvasModalPath || modalPath,
+    title: htmlDataset.canvasDockTitle || bodyDataset.canvasDockTitle || "Open in canvas",
+    icon: htmlDataset.canvasDockIcon || bodyDataset.canvasDockIcon || "dock_to_right",
+  };
+}
+
+function configureModalDockButton(modal, doc) {
+  const metadata = getDockMetadata(doc, modal.path);
+  if (!metadata || !modal.header || modal.header.querySelector(".modal-dock-button")) {
+    return;
+  }
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "modal-dock-button";
+  button.title = metadata.title;
+  button.setAttribute("aria-label", metadata.title);
+  button.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">${metadata.icon}</span>`;
+  button.addEventListener("click", async () => {
+    const canvas = globalThis.Alpine?.store?.("rightCanvas")
+      || (await import("/components/canvas/right-canvas-store.js")).store;
+    await canvas?.dockSurface?.(metadata.surfaceId, {
+      modalPath: metadata.modalPath,
+      source: "modal",
+    });
+  });
+
+  modal.close?.insertAdjacentElement("beforebegin", button);
 }
 
 // Function to open modal with content from URL
@@ -208,6 +248,8 @@ export async function openModal(modalPath, beforeClose = null) {
           if (doc.body && doc.body.classList) {
             modal.body.classList.add(...doc.body.classList);
           }
+          configureModalDockButton(modal, doc);
+          updateModalZIndexes();
           
           // Some modals have a footer. Check if it exists and move it to footer slot
           // Use requestAnimationFrame to let Alpine mount the component first
