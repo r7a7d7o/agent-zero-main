@@ -38,6 +38,11 @@ function drawBrowserTool({
     "visibility",
     "Browser",
     () => {
+      const canvas = globalThis.Alpine?.store?.("rightCanvas");
+      if (canvas) {
+        void canvas.open("browser");
+        return;
+      }
       if (window.ensureModalOpen) {
         void window.ensureModalOpen(BROWSER_MODAL);
         return;

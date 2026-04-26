@@ -158,6 +158,15 @@ class _BrowserScreencast:
             raise RuntimeError("Browser screencast stopped.")
         return frame
 
+    async def pop_frame(self) -> dict[str, Any] | None:
+        try:
+            frame = self.queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+        if frame is None:
+            raise RuntimeError("Browser screencast stopped.")
+        return frame
+
     async def stop(self) -> None:
         if self.stopped:
             return
@@ -656,6 +665,12 @@ class _BrowserRuntimeCore:
             raise KeyError("Browser screencast is not active.")
         return await screencast.next_frame(timeout=timeout)
 
+    async def pop_screencast_frame(self, stream_id: str) -> dict[str, Any] | None:
+        screencast = self.screencasts.get(str(stream_id or ""))
+        if not screencast:
+            raise KeyError("Browser screencast is not active.")
+        return await screencast.pop_frame()
+
     async def stop_screencast(self, stream_id: str) -> None:
         screencast = self.screencasts.pop(str(stream_id or ""), None)
         if screencast:
@@ -682,6 +697,7 @@ class _BrowserRuntimeCore:
         if changed:
             await page.set_viewport_size(viewport)
             await self._stop_screencasts_for_browser(resolved_id)
+            await self._settle(page, short=True)
         self.last_interacted_browser_id = resolved_id
         return {"state": await self._state(resolved_id), "viewport": viewport}
 
@@ -722,7 +738,6 @@ class _BrowserRuntimeCore:
         page = self._page(resolved_id)
         await page.mouse.move(float(x), float(y))
         await page.mouse.wheel(float(delta_x), float(delta_y))
-        await self._settle(page, short=True)
         self.last_interacted_browser_id = resolved_id
         return await self._state(resolved_id)
 

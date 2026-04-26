@@ -11,6 +11,11 @@ const EXTENSIONS_ROOT = "/a0/usr/plugins/_browser/extensions";
 const BROWSER_SUBSCRIBE_TIMEOUT_MS = 60000;
 const BROWSER_FIRST_INSTALL_TIMEOUT_MS = 300000;
 
+function makeViewerToken() {
+  return globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 function firstOk(response) {
   const result = response?.results?.find((item) => item?.ok);
   if (result) {
@@ -36,6 +41,8 @@ const model = {
   frameSrc: "",
   frameState: null,
   connected: false,
+  switchingBrowserId: null,
+  commandInFlight: false,
   addressFocused: false,
   _frameOff: null,
   _stateOff: null,
@@ -48,6 +55,9 @@ const model = {
   _stageResizeObserver: null,
   _viewportSyncTimer: null,
   _lastViewportKey: "",
+  _mode: "canvas",
+  _connectSequence: 0,
+  _viewerToken: "",
   extensionMenuOpen: false,
   extensionInstallUrl: "",
   extensionActionLoading: false,
@@ -286,10 +296,15 @@ const model = {
     this.closeExtensionsMenu();
   },
 
-  async onOpen(element = null) {
+  async onOpen(element = null, options = {}) {
     this.loading = true;
     this.error = "";
-    this.setupFloatingModal(element);
+    this._mode = options?.mode === "modal" ? "modal" : "canvas";
+    if (this._mode === "modal") {
+      this.setupFloatingModal(element);
+    } else {
+      this.setupCanvasSurface(element);
+    }
     this.contextId = this.resolveContextId();
     try {
       await this.refreshStatus();
@@ -301,115 +316,172 @@ const model = {
     }
   },
 
-    async connectViewer() {
-      if (!this.contextId) {
-        this.connected = false;
-        this.error = "No active chat context is selected.";
-        return;
-      }
-      this.error = "";
-      await this._bindSocketEvents();
-      const initialViewport = this.currentViewportSize();
-      const response = await websocket.request(
+  async connectViewer(options = {}) {
+    if (!this.contextId) {
+      this.connected = false;
+      this.error = "No active chat context is selected.";
+      this.switchingBrowserId = null;
+      return;
+    }
+    const requestedBrowserId = this.normalizeBrowserId(options.browserId ?? this.activeBrowserId);
+    const sequence = this._connectSequence + 1;
+    const viewerToken = makeViewerToken();
+    this._connectSequence = sequence;
+    this._viewerToken = viewerToken;
+    this.error = "";
+    await this._bindSocketEvents();
+    if (sequence !== this._connectSequence || viewerToken !== this._viewerToken) {
+      return;
+    }
+    const initialViewport = this.currentViewportSize();
+    let response;
+    try {
+      response = await websocket.request(
         "browser_viewer_subscribe",
         {
           context_id: this.contextId,
-          browser_id: this.activeBrowserId,
+          browser_id: requestedBrowserId,
+          viewer_id: viewerToken,
           viewport_width: initialViewport?.width,
           viewport_height: initialViewport?.height,
         },
         {
-        timeoutMs: this.browserInstallExpected
-          ? BROWSER_FIRST_INSTALL_TIMEOUT_MS
-          : BROWSER_SUBSCRIBE_TIMEOUT_MS,
-      },
-    );
-      const data = firstOk(response);
-      this.browsers = data.browsers || [];
-      this.setActiveBrowserId(data.active_browser_id || this.activeBrowserId || null);
-      this.connected = true;
-      this.browserInstallExpected = false;
-      this.queueViewportSync(true);
-  },
+          timeoutMs: this.browserInstallExpected
+            ? BROWSER_FIRST_INSTALL_TIMEOUT_MS
+            : BROWSER_SUBSCRIBE_TIMEOUT_MS,
+        },
+      );
+    } catch (error) {
+      if (sequence === this._connectSequence && viewerToken === this._viewerToken) {
+        this.switchingBrowserId = null;
+        throw error;
+      }
+      return;
+    }
+    if (sequence !== this._connectSequence || viewerToken !== this._viewerToken) {
+      return;
+    }
+    const data = firstOk(response);
+    this.browsers = data.browsers || [];
+    this.setActiveBrowserId(data.active_browser_id || requestedBrowserId || this.activeBrowserId || null);
+	    this.connected = true;
+	    this.browserInstallExpected = false;
+	  },
 
   async _bindSocketEvents() {
     if (!this._frameOff) {
       const frameHandler = ({ data }) => {
-          if (data?.context_id !== this.contextId) return;
-          this.browsers = data.browsers || this.browsers;
-          this.setActiveBrowserId(data.browser_id || data.state?.id || this.activeBrowserId);
-          if (data.state) {
-            this.frameState = data.state;
+        if (data?.context_id !== this.contextId) return;
+        if (data?.viewer_id && data.viewer_id !== this._viewerToken) return;
+        const incomingBrowserId = this.normalizeBrowserId(data.browser_id || data.state?.id);
+        this.browsers = data.browsers || this.browsers;
+        if (incomingBrowserId && !this.activeBrowserId) {
+          this.setActiveBrowserId(incomingBrowserId);
+        }
+        if (incomingBrowserId && this.activeBrowserId && !this.sameBrowserId(incomingBrowserId, this.activeBrowserId)) {
+          return;
+        }
+        if (data.state) {
+          this.frameState = data.state;
+        }
+        if (!this.addressFocused && data.state?.currentUrl) {
+          this.address = data.state.currentUrl;
+        }
+        if (data.image) {
+          this.queueFrameRender(`data:${data.mime || "image/jpeg"};base64,${data.image}`);
+          if (this.sameBrowserId(this.switchingBrowserId, incomingBrowserId || this.activeBrowserId)) {
+            this.switchingBrowserId = null;
           }
-          if (!this.addressFocused && data.state?.currentUrl) {
-            this.address = data.state.currentUrl;
-          }
-          if (data.image) {
-            this.queueFrameRender(`data:${data.mime || "image/jpeg"};base64,${data.image}`);
-          } else {
-            this.cancelFrameRender();
+        } else {
+          this.cancelFrameRender();
+          if (!data.state) {
             this.frameSrc = "";
           }
-          if (!data.image && !data.state) {
+        }
+        if (!data.image && !data.state) {
+          if (!this.activeBrowserId) {
             this.setActiveBrowserId(null);
             this.frameState = null;
             this.frameSrc = "";
+          }
         }
         this._lastFrameAt = Date.now();
       };
       await websocket.on("browser_viewer_frame", frameHandler);
       this._frameOff = () => websocket.off("browser_viewer_frame", frameHandler);
     }
-    if (!this._stateOff) {
-      const stateHandler = ({ data }) => {
-        if (data?.context_id !== this.contextId) return;
-        this.browsers = data.browsers || [];
-        this.setActiveBrowserId(data.last_interacted_browser_id || this.firstBrowserId());
-        this.queueViewportSync(true);
-      };
+	    if (!this._stateOff) {
+	      const stateHandler = ({ data }) => {
+	        if (data?.context_id !== this.contextId) return;
+	        if (data?.viewer_id && data.viewer_id !== this._viewerToken) return;
+	        this.browsers = data.browsers || [];
+        const command = String(data.command || "").toLowerCase();
+        const commandBrowserId = this.normalizeBrowserId(data.browser_id);
+        const result = data.result || {};
+        const resultState = this.stateFromCommandResult(result);
+        const preferredBrowserId = this.normalizeBrowserId(
+          result.id
+          || result.state?.id
+          || data.last_interacted_browser_id
+          || this.activeBrowserId
+          || this.firstBrowserId()
+        );
+	        if (
+	          !this.activeBrowserId
+	          || command === "open"
+	          || command === "close"
+	          || this.sameBrowserId(commandBrowserId, this.activeBrowserId)
+	        ) {
+	          this.setActiveBrowserId(preferredBrowserId);
+	        }
+	        this.applyActiveFrameState(resultState || this.browserById(this.activeBrowserId));
+	        this.applySnapshot(data.snapshot);
+	      };
       await websocket.on("browser_viewer_state", stateHandler);
       this._stateOff = () => websocket.off("browser_viewer_state", stateHandler);
-      }
-    },
+    }
+  },
 
-    queueFrameRender(frameSrc) {
-      this._pendingFrameSrc = frameSrc;
-      if (this._frameRenderHandle) return;
-      const schedule = globalThis.requestAnimationFrame?.bind(globalThis);
-      if (schedule) {
-        this._frameRenderCancel = globalThis.cancelAnimationFrame?.bind(globalThis) || null;
-        this._frameRenderHandle = schedule(() => this.flushFrameRender());
-        return;
-      }
-      this._frameRenderCancel = globalThis.clearTimeout?.bind(globalThis) || null;
-      this._frameRenderHandle = globalThis.setTimeout(() => this.flushFrameRender(), 16);
-    },
+  queueFrameRender(frameSrc) {
+    this._pendingFrameSrc = frameSrc;
+    if (this._frameRenderHandle) return;
+    const schedule = globalThis.requestAnimationFrame?.bind(globalThis);
+    if (schedule) {
+      this._frameRenderCancel = globalThis.cancelAnimationFrame?.bind(globalThis) || null;
+      this._frameRenderHandle = schedule(() => this.flushFrameRender());
+      return;
+    }
+    this._frameRenderCancel = globalThis.clearTimeout?.bind(globalThis) || null;
+    this._frameRenderHandle = globalThis.setTimeout(() => this.flushFrameRender(), 16);
+  },
 
-    flushFrameRender() {
-      this._frameRenderHandle = null;
-      this._frameRenderCancel = null;
-      this.frameSrc = this._pendingFrameSrc || "";
-      this._pendingFrameSrc = "";
-    },
+  flushFrameRender() {
+    this._frameRenderHandle = null;
+    this._frameRenderCancel = null;
+    this.frameSrc = this._pendingFrameSrc || "";
+    this._pendingFrameSrc = "";
+  },
 
-    cancelFrameRender() {
-      if (this._frameRenderHandle && this._frameRenderCancel) {
-        this._frameRenderCancel(this._frameRenderHandle);
-      }
-      this._frameRenderHandle = null;
-      this._frameRenderCancel = null;
-      this._pendingFrameSrc = "";
-    },
+  cancelFrameRender() {
+    if (this._frameRenderHandle && this._frameRenderCancel) {
+      this._frameRenderCancel(this._frameRenderHandle);
+    }
+    this._frameRenderHandle = null;
+    this._frameRenderCancel = null;
+    this._pendingFrameSrc = "";
+  },
 
-    async command(command, extra = {}) {
-      this.error = "";
-      const previousActiveBrowserId = this.activeBrowserId;
+  async command(command, extra = {}) {
+    this.error = "";
+    this.commandInFlight = true;
+    const previousActiveBrowserId = this.activeBrowserId;
     try {
       const response = await websocket.request(
         "browser_viewer_command",
         {
           context_id: this.contextId,
           browser_id: this.activeBrowserId,
+          viewer_id: this._viewerToken,
           command,
           ...extra,
         },
@@ -425,20 +497,23 @@ const model = {
         || data.last_interacted_browser_id
         || this.firstBrowserId()
       );
+      this.applyActiveFrameState(this.stateFromCommandResult(result) || this.browserById(this.activeBrowserId));
       if (!this.activeBrowserId) {
         this.frameState = null;
         this.frameSrc = "";
       }
-      if (result.state?.currentUrl || result.currentUrl) {
-        this.address = result.state?.currentUrl || result.currentUrl;
-      }
-      const activeChanged = this.activeBrowserId && this.activeBrowserId !== previousActiveBrowserId;
-      if ((command === "open" || command === "close" || activeChanged) && this.contextId && this.activeBrowserId) {
-        await this.connectViewer();
-      }
-      this.queueViewportSync(true);
-    } catch (error) {
+	      if (result.state?.currentUrl || result.currentUrl) {
+	        this.address = result.state?.currentUrl || result.currentUrl;
+	      }
+	      this.applySnapshot(data.snapshot);
+	      const activeChanged = this.activeBrowserId && this.activeBrowserId !== previousActiveBrowserId;
+	      if ((command === "open" || command === "close" || activeChanged) && this.contextId && this.activeBrowserId) {
+	        await this.connectViewer({ browserId: this.activeBrowserId });
+	      }
+	    } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.commandInFlight = false;
     }
   },
 
@@ -466,13 +541,33 @@ const model = {
   },
 
   async selectBrowser(id) {
-    if (String(id || "").trim() === "") {
+    const targetId = this.normalizeBrowserId(id);
+    if (!targetId) {
       await this.openNewBrowser();
       return;
     }
-    this.setActiveBrowserId(id);
+    if (this.sameBrowserId(targetId, this.activeBrowserId) && this.connected && !this.isSwitchingBrowser()) {
+      return;
+    }
+    const browser = this.browserById(targetId);
+    this.error = "";
+    this.switchingBrowserId = targetId;
+    this.cancelFrameRender();
+    this.frameSrc = "";
+    this.frameState = browser || null;
+    if (!this.addressFocused && browser?.currentUrl) {
+      this.address = browser.currentUrl;
+    }
+    this.setActiveBrowserId(targetId);
     if (this.contextId) {
-      await this.connectViewer();
+      try {
+        await this.connectViewer({ browserId: targetId });
+      } catch (error) {
+        if (this.sameBrowserId(this.switchingBrowserId, targetId)) {
+          this.switchingBrowserId = null;
+        }
+        this.error = error instanceof Error ? error.message : String(error);
+      }
     }
   },
 
@@ -500,9 +595,70 @@ const model = {
     return first?.id || null;
   },
 
+  normalizeBrowserId(id) {
+    return Number(id) || null;
+  },
+
+  sameBrowserId(left, right) {
+    const leftId = this.normalizeBrowserId(left);
+    const rightId = this.normalizeBrowserId(right);
+    return Boolean(leftId && rightId && leftId === rightId);
+  },
+
+  browserById(id) {
+    const numeric = this.normalizeBrowserId(id);
+    if (!numeric || !Array.isArray(this.browsers)) return null;
+    return this.browsers.find((browser) => Number(browser?.id) === numeric) || null;
+  },
+
+  stateFromCommandResult(result = {}) {
+    if (result?.state?.id || result?.state?.currentUrl || result?.state?.title) {
+      return result.state;
+    }
+    if (result?.id || result?.currentUrl || result?.title) {
+      return result;
+    }
+    return null;
+  },
+
+	  applyActiveFrameState(nextState = null) {
+	    if (!nextState) return;
+	    const stateId = this.normalizeBrowserId(nextState.id);
+	    if (stateId && this.activeBrowserId && !this.sameBrowserId(stateId, this.activeBrowserId)) {
+	      return;
+    }
+    this.frameState = nextState;
+    if (!this.addressFocused && nextState.currentUrl) {
+      this.address = nextState.currentUrl;
+	    }
+	  },
+
+	  applySnapshot(snapshot = null) {
+	    if (!snapshot?.image) return;
+	    const snapshotId = this.normalizeBrowserId(snapshot.browser_id || snapshot.state?.id);
+	    if (snapshotId && this.activeBrowserId && !this.sameBrowserId(snapshotId, this.activeBrowserId)) {
+	      return;
+	    }
+	    if (snapshot.state) {
+	      this.applyActiveFrameState(snapshot.state);
+	    }
+	    this.queueFrameRender(`data:${snapshot.mime || "image/jpeg"};base64,${snapshot.image}`);
+	    if (this.sameBrowserId(this.switchingBrowserId, snapshotId || this.activeBrowserId)) {
+	      this.switchingBrowserId = null;
+	    }
+	  },
+
+  isSwitchingBrowser() {
+    return Boolean(this.switchingBrowserId && this.sameBrowserId(this.switchingBrowserId, this.activeBrowserId));
+  },
+
+  isBusy() {
+    return Boolean(this.loading || this.commandInFlight || this.isSwitchingBrowser());
+  },
+
   setActiveBrowserId(id) {
     const previous = this.activeBrowserId;
-    const numeric = Number(id) || null;
+    const numeric = this.normalizeBrowserId(id);
     const exists = !numeric || !Array.isArray(this.browsers) || this.browsers.some((browser) => Number(browser.id) === numeric);
     this.activeBrowserId = exists ? numeric : null;
     if (this.activeBrowserId !== previous) {
@@ -544,22 +700,23 @@ const model = {
     }, force ? 0 : 80);
   },
 
-  async syncViewport(force = false) {
-    if (!this.contextId || !this.activeBrowserId) return;
-    const viewport = this.currentViewportSize();
-    if (!viewport) return;
-    const key = `${this.activeBrowserId}:${viewport.width}x${viewport.height}`;
-    if (!force && this._lastViewportKey === key) return;
-    try {
-      await websocket.emit("browser_viewer_input", {
-        context_id: this.contextId,
-        browser_id: this.activeBrowserId,
-        input_type: "viewport",
-        width: viewport.width,
-        height: viewport.height,
-      });
-      this._lastViewportKey = key;
-    } catch (error) {
+	  async syncViewport(force = false) {
+	    if (!this.contextId || !this.activeBrowserId) return;
+	    const viewport = this.currentViewportSize();
+	    if (!viewport) return;
+	    const key = `${this.activeBrowserId}:${viewport.width}x${viewport.height}`;
+	    if (this._lastViewportKey === key) return;
+	    try {
+	      await websocket.emit("browser_viewer_input", {
+	        context_id: this.contextId,
+	        browser_id: this.activeBrowserId,
+	        viewer_id: this._viewerToken,
+	        input_type: "viewport",
+	        width: viewport.width,
+	        height: viewport.height,
+	      });
+	      this._lastViewportKey = key;
+	    } catch (error) {
       this._lastViewportKey = "";
       console.warn("Browser viewport sync failed", error);
     }
@@ -569,32 +726,51 @@ const model = {
     if (!this.activeBrowserId || !event?.currentTarget) return;
     const pointer = this.pointerCoordinatesFor(event);
     if (!pointer) return;
-    await websocket.emit("browser_viewer_input", {
+    const payload = {
       context_id: this.contextId,
       browser_id: this.activeBrowserId,
+      viewer_id: this._viewerToken,
       input_type: "mouse",
       event_type: eventType,
       x: pointer.x,
       y: pointer.y,
       button: "left",
-    });
+    };
+    if (eventType === "click") {
+      try {
+	        const response = await websocket.request("browser_viewer_input", payload, { timeoutMs: 10000 });
+	        const data = firstOk(response);
+	        this.applyActiveFrameState(data.state);
+	        this.applySnapshot(data.snapshot);
+	      } catch (error) {
+        this.error = error instanceof Error ? error.message : String(error);
+      }
+      return;
+    }
+    await websocket.emit("browser_viewer_input", payload);
   },
 
-  async sendWheel(event) {
+	  async sendWheel(event) {
     if (!this.activeBrowserId || !event) return;
     const image = event.currentTarget?.querySelector?.(".browser-frame") || event.target?.closest?.(".browser-frame");
     const pointer = this.pointerCoordinatesFor(event, image);
     if (!pointer) return;
-    await websocket.emit("browser_viewer_input", {
+    const payload = {
       context_id: this.contextId,
       browser_id: this.activeBrowserId,
+      viewer_id: this._viewerToken,
       input_type: "wheel",
       x: pointer.x,
       y: pointer.y,
       delta_x: Number(event.deltaX || 0),
       delta_y: Number(event.deltaY || 0),
-    });
-  },
+    };
+	    try {
+	      await websocket.emit("browser_viewer_input", payload);
+	    } catch (error) {
+	      this.error = error instanceof Error ? error.message : String(error);
+	    }
+	  },
 
   async sendKey(event) {
     if (!this.activeBrowserId) return;
@@ -613,17 +789,21 @@ const model = {
   },
 
   async cleanup() {
+    this._connectSequence += 1;
+    this._viewerToken = "";
+    this.switchingBrowserId = null;
+    this.commandInFlight = false;
     if (this.contextId) {
       try {
         await websocket.emit("browser_viewer_unsubscribe", { context_id: this.contextId });
       } catch {}
     }
     this._frameOff?.();
-      this._stateOff?.();
-      this._frameOff = null;
-      this._stateOff = null;
-      this.cancelFrameRender();
-      this._floatingCleanup?.();
+    this._stateOff?.();
+    this._frameOff = null;
+    this._stateOff = null;
+    this.cancelFrameRender();
+    this._floatingCleanup?.();
     this._floatingCleanup = null;
     this._stageResizeObserver?.disconnect?.();
     this._stageResizeObserver = null;
@@ -751,6 +931,20 @@ const model = {
     };
   },
 
+  setupCanvasSurface(element = null) {
+    this._floatingCleanup?.();
+    this._floatingCleanup = null;
+    this._stageResizeObserver?.disconnect?.();
+    const root = element || globalThis.document?.querySelector(".browser-panel");
+    const stage = root?.querySelector?.(".browser-stage");
+    this._stageElement = stage || null;
+    if (stage && globalThis.ResizeObserver) {
+      this._stageResizeObserver = new ResizeObserver(() => this.queueViewportSync());
+      this._stageResizeObserver.observe(stage);
+    }
+    globalThis.requestAnimationFrame?.(() => this.queueViewportSync(true));
+  },
+
   get activeTitle() {
     return this.frameState?.title || "Browser";
   },
@@ -764,7 +958,7 @@ const model = {
       const cacheDir = this.status?.playwright?.cache_dir || "/a0/usr/plugins/_browser/playwright";
       return `Installing Chromium for the first Browser run. This can take a few minutes; future starts reuse ${cacheDir}.`;
     }
-    return "Connecting browser...";
+    return "Loading";
   },
 };
 
