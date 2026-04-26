@@ -1,7 +1,7 @@
 (() => {
   const GLOBAL_KEY = "__spaceBrowserPageContent__";
   const DOM_HELPER_KEY = "__spaceBrowserDomHelper__";
-  const VERSION = "6";
+  const VERSION = "7";
   const BLOCK_TAGS = new Set([
     "ADDRESS",
     "ARTICLE",
@@ -2842,10 +2842,377 @@
     });
   }
 
+  function cssEscape(value) {
+    const rawValue = String(value || "");
+    if (!rawValue) {
+      return "";
+    }
+
+    if (typeof globalThis.CSS?.escape === "function") {
+      return globalThis.CSS.escape(rawValue);
+    }
+
+    return rawValue.replace(/[^a-zA-Z0-9_-]/gu, (character) => `\\${character}`);
+  }
+
+  function getClassSummary(element) {
+    try {
+      return [...(element?.classList || [])]
+        .map((className) => normalizeAttributeText(className))
+        .filter(Boolean)
+        .slice(0, 4)
+        .join(" ");
+    } catch {
+      return "";
+    }
+  }
+
+  function buildCssSelector(element) {
+    if (!isElementNode(element)) {
+      return "";
+    }
+
+    const id = normalizeAttributeText(element.getAttribute?.("id"));
+    if (id) {
+      return `#${cssEscape(id)}`;
+    }
+
+    const parts = [];
+    let current = element;
+    while (isElementNode(current) && current !== globalThis.document?.documentElement && parts.length < 6) {
+      const tagName = getTagName(current).toLowerCase();
+      if (!tagName) {
+        break;
+      }
+
+      let part = tagName;
+      const classes = getClassSummary(current)
+        .split(/\s+/u)
+        .filter(Boolean)
+        .slice(0, 2);
+      if (classes.length && !["body", "html"].includes(tagName)) {
+        part += classes.map((className) => `.${cssEscape(className)}`).join("");
+      }
+
+      const parent = current.parentElement;
+      if (parent) {
+        const siblings = [...parent.children].filter((sibling) => getTagName(sibling) === getTagName(current));
+        if (siblings.length > 1) {
+          part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+        }
+      }
+
+      parts.unshift(part);
+      if (tagName === "body") {
+        break;
+      }
+      current = parent;
+    }
+
+    return parts.join(" > ");
+  }
+
+  function sanitizeAnnotationDom(value) {
+    return truncateText(
+      String(value || "")
+        .replace(/(<input\b(?=[^>]*\btype\s*=\s*(["'])?password\2?)[^>]*?)\s+value\s*=\s*(["'])[\s\S]*?\3/giu, "$1 value=\"[redacted]\"")
+        .replace(/\svalue\s*=\s*(["'])[\s\S]{0,600}?\1/giu, " value=\"[redacted]\"")
+        .replace(/\sdata-space-browser-live-value\s*=\s*(["'])[\s\S]{0,600}?\1/giu, "")
+        .replace(/\sdata-space-browser-selected-text\s*=\s*(["'])[\s\S]{0,600}?\1/giu, ""),
+      1200
+    );
+  }
+
+  function summarizeAnnotationElement(element) {
+    if (!isElementNode(element)) {
+      return null;
+    }
+
+    const summaryData = collectReferenceSummaryData(element, {
+      includeLabelQuotes: false,
+      includeLinkUrls: true,
+      includeSemanticTags: true,
+      includeStateTags: true
+    });
+    const rawDom = serializeElementSnapshot(element);
+    return {
+      classes: getClassSummary(element),
+      dom: sanitizeAnnotationDom(rawDom),
+      id: normalizeAttributeText(element.getAttribute?.("id")),
+      kind: summaryData.kind,
+      name: normalizeAttributeText(element.getAttribute?.("name")),
+      rect: getElementRectSafe(element),
+      role: normalizeAttributeText(element.getAttribute?.("role")).toLowerCase(),
+      selector: buildCssSelector(element),
+      semanticTags: Array.isArray(summaryData.semanticTags) ? summaryData.semanticTags.slice(0, 4) : [],
+      stateTags: Array.isArray(summaryData.state?.stateTags) ? summaryData.state.stateTags.slice(0, 8) : [],
+      summary: truncateText(summaryData.summary || getLabelText(element, {
+        includeAlt: true,
+        includeDescendantImageAlt: true,
+        includePlaceholder: true,
+        includeText: true
+      }), 240),
+      tagName: getTagName(element)
+    };
+  }
+
+  function annotationViewport() {
+    return {
+      height: Math.max(0, Number(globalThis.innerHeight || globalThis.document?.documentElement?.clientHeight || 0)),
+      scrollX: Number(globalThis.scrollX || globalThis.pageXOffset || 0),
+      scrollY: Number(globalThis.scrollY || globalThis.pageYOffset || 0),
+      width: Math.max(0, Number(globalThis.innerWidth || globalThis.document?.documentElement?.clientWidth || 0))
+    };
+  }
+
+  function normalizeAnnotationPoint(payload = {}, viewport = annotationViewport()) {
+    const source = payload?.point && typeof payload.point === "object" ? payload.point : payload;
+    const width = Math.max(1, Number(viewport.width || 1));
+    const height = Math.max(1, Number(viewport.height || 1));
+    return {
+      x: Math.max(0, Math.min(width, Number(source?.x || 0))),
+      y: Math.max(0, Math.min(height, Number(source?.y || 0)))
+    };
+  }
+
+  function normalizeAnnotationRectPayload(payload = {}, viewport = annotationViewport()) {
+    const source = payload?.rect && typeof payload.rect === "object" ? payload.rect : payload;
+    const width = Math.max(1, Number(viewport.width || 1));
+    const height = Math.max(1, Number(viewport.height || 1));
+    const x = Math.max(0, Math.min(width, Number(source?.x || 0)));
+    const y = Math.max(0, Math.min(height, Number(source?.y || 0)));
+    return {
+      height: Math.max(1, Math.min(height - y, Number(source?.height || source?.h || 1))),
+      width: Math.max(1, Math.min(width - x, Number(source?.width || source?.w || 1))),
+      x,
+      y
+    };
+  }
+
+  function intersectRects(leftRect, rightRect) {
+    if (!leftRect || !rightRect) {
+      return null;
+    }
+
+    const x = Math.max(Number(leftRect.x || 0), Number(rightRect.x || 0));
+    const y = Math.max(Number(leftRect.y || 0), Number(rightRect.y || 0));
+    const right = Math.min(
+      Number(leftRect.x || 0) + Number(leftRect.width || 0),
+      Number(rightRect.x || 0) + Number(rightRect.width || 0)
+    );
+    const bottom = Math.min(
+      Number(leftRect.y || 0) + Number(leftRect.height || 0),
+      Number(rightRect.y || 0) + Number(rightRect.height || 0)
+    );
+    const width = right - x;
+    const height = bottom - y;
+    if (width <= 0 || height <= 0) {
+      return null;
+    }
+    return {
+      area: width * height,
+      height,
+      width,
+      x,
+      y
+    };
+  }
+
+  function deepElementFromPoint(x, y) {
+    let element = null;
+    try {
+      element = globalThis.document?.elementFromPoint?.(x, y) || null;
+    } catch {
+      return null;
+    }
+
+    let guard = 0;
+    while (isElementNode(element) && element.shadowRoot && guard < 8) {
+      guard += 1;
+      try {
+        const nestedElement = element.shadowRoot.elementFromPoint?.(x, y);
+        if (!nestedElement || nestedElement === element) {
+          break;
+        }
+        element = nestedElement;
+      } catch {
+        break;
+      }
+    }
+
+    return element;
+  }
+
+  function findAnnotationTarget(element) {
+    if (!isElementNode(element)) {
+      return null;
+    }
+
+    const selector = [
+      "a[href]",
+      "button",
+      "input",
+      "textarea",
+      "select",
+      "summary",
+      "[role]",
+      "img",
+      "label",
+      "form",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "p",
+      "li",
+      "td",
+      "th",
+      "article",
+      "section",
+      "nav",
+      "header",
+      "main",
+      "footer"
+    ].join(",");
+    const target = element.closest?.(selector) || element;
+    return isElementNode(target) && !isHiddenElement(target) ? target : element;
+  }
+
+  function isMeaningfulAnnotationElement(element) {
+    if (!isElementNode(element) || isHiddenElement(element)) {
+      return false;
+    }
+
+    if (isInteractiveElement(element) || getTagName(element) === "IMG") {
+      return true;
+    }
+
+    const tagName = getTagName(element);
+    const role = normalizeAttributeText(element.getAttribute?.("role")).toLowerCase();
+    return Boolean(
+      role
+      || /^H[1-6]$/u.test(tagName)
+      || ["ARTICLE", "SECTION", "MAIN", "NAV", "HEADER", "FOOTER", "FORM", "LABEL", "P", "LI", "TD", "TH"].includes(tagName)
+    );
+  }
+
+  function collectIntersectingAnnotationElements(rect) {
+    const selector = [
+      "a[href]",
+      "button",
+      "input",
+      "textarea",
+      "select",
+      "summary",
+      "[role]",
+      "img",
+      "label",
+      "form",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "p",
+      "li",
+      "td",
+      "th",
+      "article",
+      "section",
+      "main",
+      "nav",
+      "header",
+      "footer"
+    ].join(",");
+    let candidates = [];
+    try {
+      candidates = [...(globalThis.document?.querySelectorAll?.(selector) || [])];
+    } catch {
+      candidates = [];
+    }
+
+    const seen = new Set();
+    return candidates
+      .map((element) => {
+        if (!isMeaningfulAnnotationElement(element) || seen.has(element)) {
+          return null;
+        }
+        seen.add(element);
+        const elementRect = getElementRectSafe(element);
+        const intersection = intersectRects(rect, elementRect);
+        if (!intersection || intersection.area < 48) {
+          return null;
+        }
+        return {
+          element,
+          elementArea: Math.max(1, Number(elementRect.width || 0) * Number(elementRect.height || 0)),
+          intersection
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => {
+        if (right.intersection.area !== left.intersection.area) {
+          return right.intersection.area - left.intersection.area;
+        }
+        return left.elementArea - right.elementArea;
+      })
+      .slice(0, 12)
+      .map((entry) => summarizeAnnotationElement(entry.element))
+      .filter(Boolean);
+  }
+
+  function annotate(payload = null) {
+    const request = payload && typeof payload === "object" ? payload : {};
+    const viewport = annotationViewport();
+    const kind = request.kind === "area" || request.rect ? "area" : "element";
+
+    if (kind === "area") {
+      const rect = normalizeAnnotationRectPayload(request, viewport);
+      const point = {
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2
+      };
+      const elements = collectIntersectingAnnotationElements(rect);
+      const fallbackElement = findAnnotationTarget(deepElementFromPoint(point.x, point.y));
+      const fallbackTarget = fallbackElement ? summarizeAnnotationElement(fallbackElement) : null;
+      return {
+        elements,
+        kind,
+        point,
+        rect,
+        status: elements.length || fallbackTarget ? "ok" : "empty",
+        target: elements[0] || fallbackTarget,
+        viewport
+      };
+    }
+
+    const point = normalizeAnnotationPoint(request, viewport);
+    const rawElement = deepElementFromPoint(point.x, point.y);
+    const targetElement = findAnnotationTarget(rawElement);
+    const target = targetElement ? summarizeAnnotationElement(targetElement) : null;
+    return {
+      kind,
+      point,
+      rect: target?.rect || {
+        height: 1,
+        width: 1,
+        x: point.x,
+        y: point.y
+      },
+      status: target ? "ok" : "empty",
+      target,
+      viewport
+    };
+  }
+
   globalThis[GLOBAL_KEY] = {
     click(referenceId) {
       return activateElement(referenceId);
     },
+    annotate,
     capture,
     clear() {
       state.captureId = 0;

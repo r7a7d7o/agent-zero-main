@@ -5,6 +5,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterator
 
 import pytest
@@ -13,6 +14,15 @@ from flask import Flask
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+class _TestAgentContext:
+    @staticmethod
+    def get(context_id):
+        return None
+
+
+sys.modules.setdefault("agent", SimpleNamespace(AgentContext=_TestAgentContext))
 
 from api.load_webui_extensions import LoadWebuiExtensions
 
@@ -69,6 +79,11 @@ def _new_handler() -> LoadWebuiExtensions:
     return LoadWebuiExtensions(app, threading.RLock())
 
 
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
 def _assert_surface_anchor_in_template(surface: str, template_rel_path: str) -> None:
     template_path = PROJECT_ROOT / template_rel_path
     template_html = template_path.read_text(encoding="utf-8")
@@ -118,7 +133,7 @@ def _temporary_probe_plugin(surface: str) -> Iterator[tuple[str, str]]:
             cache.clear("*(plugins)*")
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("surface", "template_rel_path"),
     SURFACE_SCENARIOS,

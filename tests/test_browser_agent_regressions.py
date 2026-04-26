@@ -2,7 +2,7 @@ import asyncio
 import sys
 import threading
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -10,6 +10,73 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+class _TestAgentContext:
+    @staticmethod
+    def get(context_id):
+        return None
+
+
+class _TestResponse(SimpleNamespace):
+    def __init__(self, message="", break_loop=False, **kwargs):
+        super().__init__(message=message, break_loop=break_loop, **kwargs)
+
+
+class _TestTool:
+    def __init__(
+        self,
+        agent=None,
+        name="",
+        method=None,
+        args=None,
+        message="",
+        loop_data=None,
+        **kwargs,
+    ):
+        self.agent = agent
+        self.name = name
+        self.method = method
+        self.args = args or {}
+        self.message = message
+        self.loop_data = loop_data
+
+
+class _TestWsHandler:
+    def __init__(self, *args, **kwargs):
+        self.emitted = []
+
+    async def emit_to(self, sid, event, data, correlation_id=None):
+        self.emitted.append((sid, event, data, correlation_id))
+
+
+class _TestWsResult(dict):
+    @staticmethod
+    def error(code="", message="", correlation_id=None):
+        return _TestWsResult(
+            {
+                "ok": False,
+                "code": code,
+                "error": message,
+                "correlation_id": correlation_id,
+            }
+        )
+
+
+sys.modules.setdefault("agent", SimpleNamespace(AgentContext=_TestAgentContext))
+sys.modules.setdefault("helpers.tool", SimpleNamespace(Response=_TestResponse, Tool=_TestTool))
+sys.modules.setdefault("helpers.ws", SimpleNamespace(WsHandler=_TestWsHandler))
+sys.modules.setdefault("helpers.ws_manager", SimpleNamespace(WsResult=_TestWsResult))
+_model_config_stub = ModuleType("plugins._model_config.helpers.model_config")
+_model_config_stub.get_presets = lambda: []
+_model_config_stub.get_preset_by_name = lambda name: None
+_model_config_stub.get_chat_model_config = lambda agent=None: {}
+sys.modules.setdefault("plugins._model_config.helpers.model_config", _model_config_stub)
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
 
 from plugins._browser.helpers.config import (
     build_browser_launch_config,
@@ -63,6 +130,8 @@ def test_browser_config_normalizes_extension_paths(tmp_path):
 
     assert config == {
         "extension_paths": [str(extension_dir)],
+        "default_homepage": "about:blank",
+        "autofocus_active_page": True,
         "model_preset": "",
     }
 
@@ -246,7 +315,7 @@ def test_browser_extension_manager_uses_modern_chrome_prodversion(monkeypatch):
 
 
 def test_browser_extension_menu_exposes_agent_and_url_paths():
-    html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "main.html").read_text(
+    html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-panel.html").read_text(
         encoding="utf-8"
     )
     skill = PROJECT_ROOT / "skills" / "a0-browser-ext" / "SKILL.md"
@@ -279,7 +348,7 @@ def test_browser_viewer_allows_slow_extension_startup():
 
 
 def test_browser_ui_spinners_have_browser_local_animation():
-    main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "main.html").read_text(
+    main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-panel.html").read_text(
         encoding="utf-8"
     )
     config_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "config.html").read_text(
@@ -305,7 +374,7 @@ def test_browser_extension_settings_stay_user_facing():
 
 
 def test_browser_viewer_uses_tabs_for_session_switching():
-    main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "main.html").read_text(
+    main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-panel.html").read_text(
         encoding="utf-8"
     )
     browser_store = (
@@ -329,7 +398,7 @@ def test_browser_viewer_uses_cdp_screencast_transport():
     ws_browser = (PROJECT_ROOT / "plugins" / "_browser" / "api" / "ws_browser.py").read_text(
         encoding="utf-8"
     )
-    main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "main.html").read_text(
+    main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-panel.html").read_text(
         encoding="utf-8"
     )
     runtime = (
@@ -339,12 +408,12 @@ def test_browser_viewer_uses_cdp_screencast_transport():
         PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js"
     ).read_text(encoding="utf-8")
 
-    assert 'runtime.call("screenshot"' not in ws_browser
+    assert 'runtime.call("screenshot"' in ws_browser
     assert "SCREENCAST_QUALITY = 92" in ws_browser
     assert "initial_viewport = self._viewport_from_data(data)" in ws_browser
     assert '"set_viewport"' in ws_browser
     assert "start_screencast" in ws_browser
-    assert "read_screencast_frame" in ws_browser
+    assert "pop_screencast_frame" in ws_browser
     assert "stop_screencast" in ws_browser
     assert '"Page.startScreencast"' in runtime
     assert '"Page.screencastFrame"' in runtime
@@ -360,12 +429,54 @@ def test_browser_viewer_uses_cdp_screencast_transport():
     assert "viewport_height: initialViewport?.height" in browser_store
     assert "this.frameState = data.state || null" not in browser_store
     assert "overflow: hidden;" in main_html
-    assert "object-fit: fill;" not in main_html
-    assert "height: auto;" in main_html
+    assert "object-fit: fill;" in main_html
     assert "image-rendering: auto;" in main_html
 
 
-@pytest.mark.asyncio
+def test_browser_annotate_mode_ui_and_prompt_hooks():
+    panel_html = (
+        PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-panel.html"
+    ).read_text(encoding="utf-8")
+    browser_store = (
+        PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js"
+    ).read_text(encoding="utf-8")
+
+    assert "Annotate" in panel_html
+    assert "Annotating" in panel_html
+    assert "browser-annotation-layer" in panel_html
+    assert "browser-annotation-tray" in panel_html
+    assert "Draft to chat" in panel_html
+    assert "Send now" in panel_html
+    assert "@pointerdown.stop.prevent=\"$store.browserPage.startAnnotationSelection($event)\"" in panel_html
+    assert "@keydown.window=\"$store.browserPage.handleKeydown($event)\"" in panel_html
+    assert "annotationComments: []" in browser_store
+    assert '"browser_viewer_annotation"' in browser_store
+    assert 'event?.key === "." && (event.metaKey || event.ctrlKey)' in browser_store
+    assert "Browser annotations" in browser_store
+    assert "Comment:" in browser_store
+    assert "Coordinates:" in browser_store
+    assert "Selector:" in browser_store
+    assert "DOM:" in browser_store
+    assert "value=\\\"[redacted]\\\"" in browser_store
+
+
+def test_browser_runtime_and_content_helper_expose_annotation_target():
+    runtime = (
+        PROJECT_ROOT / "plugins" / "_browser" / "helpers" / "runtime.py"
+    ).read_text(encoding="utf-8")
+    helper = (
+        PROJECT_ROOT / "plugins" / "_browser" / "assets" / "browser-page-content.js"
+    ).read_text(encoding="utf-8")
+
+    assert "async def annotation_target" in runtime
+    assert "globalThis.__spaceBrowserPageContent__.annotate(payload || null)" in runtime
+    assert "function annotate(payload = null)" in helper
+    assert "annotate," in helper
+    assert "sanitizeAnnotationDom" in helper
+    assert "password" in helper
+
+
+@pytest.mark.anyio
 async def test_browser_screencast_acknowledges_and_drops_stale_frames():
     first_image = (
         "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsL"
@@ -526,7 +637,7 @@ def test_browser_save_plugin_config_does_not_restart_runtimes_for_preset_only(mo
     assert restarted == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_browser_tool_dispatches_direct_actions(monkeypatch):
     calls = []
 
@@ -558,7 +669,7 @@ async def test_browser_tool_dispatches_direct_actions(monkeypatch):
     assert calls == [("content", (1, None))]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_browser_viewer_subscribe_unregisters_stream(monkeypatch):
     class FakeRuntime:
         def __init__(self) -> None:
@@ -608,7 +719,7 @@ async def test_browser_viewer_subscribe_unregisters_stream(monkeypatch):
     assert ("sid-1", "ctx") not in ws_browser_module.WsBrowser._streams
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_browser_viewer_viewport_input_dispatches_resize(monkeypatch):
     calls = []
 
@@ -642,11 +753,14 @@ async def test_browser_viewer_viewport_input_dispatches_resize(monkeypatch):
         "sid-1",
     )
 
-    assert result == {"state": {"ok": True, "method": "set_viewport", "args": (7, 1280, 720)}}
+    assert result == {
+        "state": {"ok": True, "method": "set_viewport", "args": (7, 1280, 720)},
+        "snapshot": None,
+    }
     assert calls == [("set_viewport", (7, 1280, 720), {})]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_browser_viewer_wheel_input_dispatches_scroll(monkeypatch):
     calls = []
 
@@ -682,8 +796,66 @@ async def test_browser_viewer_wheel_input_dispatches_scroll(monkeypatch):
         "sid-1",
     )
 
-    assert result == {"state": {"ok": True, "method": "wheel", "args": (3, 320.0, 480.0, 0.0, 640.0)}}
+    assert result == {
+        "state": {"ok": True, "method": "wheel", "args": (3, 320.0, 480.0, 0.0, 640.0)},
+        "snapshot": None,
+    }
     assert calls == [("wheel", (3, 320.0, 480.0, 0.0, 640.0), {})]
+
+
+@pytest.mark.anyio
+async def test_browser_viewer_annotation_dispatches_runtime(monkeypatch):
+    calls = []
+
+    class FakeRuntime:
+        async def call(self, method, *args, **kwargs):
+            calls.append((method, args, kwargs))
+            return {
+                "kind": "element",
+                "point": {"x": 320, "y": 180},
+                "target": {"tagName": "BUTTON", "selector": "#save"},
+            }
+
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx"
+        assert create is False
+        return FakeRuntime()
+
+    monkeypatch.setattr(ws_browser_module, "get_runtime", fake_get_runtime)
+
+    handler = ws_browser_module.WsBrowser(
+        SimpleNamespace(),
+        threading.RLock(),
+        manager=None,
+    )
+
+    payload = {
+        "kind": "element",
+        "point": {"x": 320, "y": 180},
+        "viewport": {"width": 1280, "height": 720},
+    }
+    result = await handler.process(
+        "browser_viewer_annotation",
+        {
+            "context_id": "ctx",
+            "browser_id": 4,
+            "viewer_id": "viewer-1",
+            "payload": payload,
+        },
+        "sid-1",
+    )
+
+    assert result == {
+        "annotation": {
+            "kind": "element",
+            "point": {"x": 320, "y": 180},
+            "target": {"tagName": "BUTTON", "selector": "#save"},
+        },
+        "context_id": "ctx",
+        "browser_id": 4,
+        "viewer_id": "viewer-1",
+    }
+    assert calls == [("annotation_target", (4, payload), {})]
 
 
 def test_browser_cleanup_extensions_follow_extensible_path_layout():

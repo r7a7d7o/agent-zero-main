@@ -13,6 +13,9 @@ const BROWSER_FIRST_INSTALL_TIMEOUT_MS = 300000;
 const BROWSER_CONFIG_REFRESH_MS = 15000;
 const VIEWPORT_SYNC_DEBOUNCE_MS = 220;
 const VIEWPORT_SYNC_SIZE_TOLERANCE = 4;
+const ANNOTATION_DRAG_THRESHOLD = 6;
+const ANNOTATION_MAX_COMMENTS = 24;
+const ANNOTATION_DOM_LIMIT = 1200;
 
 function makeViewerToken() {
   return globalThis.crypto?.randomUUID?.()
@@ -60,6 +63,13 @@ const model = {
   address: "",
   frameSrc: "",
   frameState: null,
+  annotating: false,
+  annotationComments: [],
+  annotationDraft: null,
+  annotationDraftText: "",
+  annotationDragRect: null,
+  annotationBusy: false,
+  annotationError: "",
   connected: false,
   switchingBrowserId: null,
   commandInFlight: false,
@@ -76,6 +86,8 @@ const model = {
   _viewportSyncTimer: null,
   _lastViewportKey: "",
   _lastViewport: null,
+  _annotationPointer: null,
+  _annotationSequence: 0,
   _mode: "",
   _surfaceMounted: false,
   _surfaceSwitching: false,
@@ -613,6 +625,7 @@ const model = {
 
   async command(command, extra = {}) {
     this.error = "";
+    this.annotationError = "";
     this.commandInFlight = true;
     const previousActiveBrowserId = this.activeBrowserId;
     try {
@@ -642,13 +655,17 @@ const model = {
         this.frameState = null;
         this.frameSrc = "";
       }
-	      if (result.state?.currentUrl || result.currentUrl) {
-	        this.address = result.state?.currentUrl || result.currentUrl;
-	      }
-	      this.applySnapshot(data.snapshot);
-	      const activeChanged = this.activeBrowserId && this.activeBrowserId !== previousActiveBrowserId;
-	      if ((command === "open" || command === "close" || activeChanged) && this.contextId && this.activeBrowserId) {
-	        await this.connectViewer({ browserId: this.activeBrowserId });
+      if (result.state?.currentUrl || result.currentUrl) {
+        this.address = result.state?.currentUrl || result.currentUrl;
+      }
+      this.applySnapshot(data.snapshot);
+      if (["navigate", "back", "forward", "reload", "close"].includes(String(command || "").toLowerCase())) {
+        this.clearAnnotationsForBrowser(previousActiveBrowserId);
+        this.cancelAnnotationDraft();
+      }
+      const activeChanged = this.activeBrowserId && this.activeBrowserId !== previousActiveBrowserId;
+      if ((command === "open" || command === "close" || activeChanged) && this.contextId && this.activeBrowserId) {
+        await this.connectViewer({ browserId: this.activeBrowserId });
 	      }
 	    } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
@@ -761,17 +778,22 @@ const model = {
     return null;
   },
 
-	  applyActiveFrameState(nextState = null) {
-	    if (!nextState) return;
-	    const stateId = this.normalizeBrowserId(nextState.id);
-	    if (stateId && this.activeBrowserId && !this.sameBrowserId(stateId, this.activeBrowserId)) {
-	      return;
+  applyActiveFrameState(nextState = null) {
+    if (!nextState) return;
+    const stateId = this.normalizeBrowserId(nextState.id);
+    if (stateId && this.activeBrowserId && !this.sameBrowserId(stateId, this.activeBrowserId)) {
+      return;
     }
+    const previousUrl = String(this.frameState?.currentUrl || "");
+    const nextUrl = String(nextState.currentUrl || "");
     this.frameState = nextState;
+    if (previousUrl && nextUrl && previousUrl !== nextUrl) {
+      this.cancelAnnotationDraft();
+    }
     if (!this.addressFocused && nextState.currentUrl) {
       this.address = nextState.currentUrl;
-	    }
-	  },
+    }
+  },
 
 	  applySnapshot(snapshot = null) {
 	    if (!snapshot?.image) return;
@@ -805,6 +827,7 @@ const model = {
     if (this.activeBrowserId !== previous) {
       this._lastViewportKey = "";
       this._lastViewport = null;
+      this.cancelAnnotationDraft();
     }
   },
 
@@ -847,6 +870,419 @@ const model = {
       x: Math.max(0, Math.min(naturalWidth, relativeX * naturalWidth)),
       y: Math.max(0, Math.min(naturalHeight, relativeY * naturalHeight)),
     };
+  },
+
+  handleKeydown(event) {
+    const annotateShortcut = event?.key === "." && (event.metaKey || event.ctrlKey) && !event.altKey;
+    if (annotateShortcut && this._surfaceMounted) {
+      event.preventDefault();
+      event.stopPropagation?.();
+      this.toggleAnnotationMode();
+      return;
+    }
+
+    if (this.annotating) {
+      if (event?.key === "Escape") {
+        event.preventDefault();
+        if (this.annotationDraft || this.annotationDragRect) {
+          this.cancelAnnotationDraft();
+        } else {
+          this.toggleAnnotationMode(false);
+        }
+      }
+      return;
+    }
+
+    void this.sendKey(event);
+  },
+
+  handleStageWheel(event) {
+    if (this.annotating) return;
+    void this.sendWheel(event);
+  },
+
+  toggleAnnotationMode(force = null) {
+    const nextValue = force === null ? !this.annotating : Boolean(force);
+    if (nextValue && !this.canAnnotate()) return;
+
+    this.annotating = nextValue;
+    this.annotationError = "";
+    this.closeExtensionsMenu();
+    if (!nextValue) {
+      this.cancelAnnotationDraft();
+      this.annotationDragRect = null;
+      this._annotationPointer = null;
+    } else {
+      this._stageElement?.focus?.({ preventScroll: true });
+    }
+  },
+
+  canAnnotate() {
+    return Boolean(this.activeBrowserId && this.frameSrc && !this.isBusy());
+  },
+
+  activeAnnotationUrl() {
+    return String(this.frameState?.currentUrl || this.address || "about:blank");
+  },
+
+  visibleAnnotations() {
+    const browserId = this.normalizeBrowserId(this.activeBrowserId);
+    const url = this.activeAnnotationUrl();
+    return this.annotationComments.filter((annotation) => (
+      this.sameBrowserId(annotation.browserId, browserId)
+      && String(annotation.url || "") === url
+    ));
+  },
+
+  nextAnnotationIndex() {
+    return this.visibleAnnotations().length + 1;
+  },
+
+  clearVisibleAnnotations() {
+    this.clearAnnotationsForBrowser(this.activeBrowserId, this.activeAnnotationUrl());
+  },
+
+  clearAnnotationsForBrowser(browserId, url = null) {
+    const numericBrowserId = this.normalizeBrowserId(browserId);
+    if (!numericBrowserId) return;
+    this.annotationComments = this.annotationComments.filter((annotation) => {
+      if (!this.sameBrowserId(annotation.browserId, numericBrowserId)) return true;
+      return url ? String(annotation.url || "") !== String(url) : false;
+    });
+  },
+
+  annotationBoxStyle(rect = {}) {
+    const viewport = this.currentViewportSize() || this._lastViewport || {};
+    const width = Math.max(1, Number(viewport.width || rect.width || 1));
+    const height = Math.max(1, Number(viewport.height || rect.height || 1));
+    const normalized = this.clampAnnotationRect(rect);
+    return [
+      `left: ${(normalized.x / width) * 100}%`,
+      `top: ${(normalized.y / height) * 100}%`,
+      `width: ${(Math.max(1, normalized.width) / width) * 100}%`,
+      `height: ${(Math.max(1, normalized.height) / height) * 100}%`,
+    ].join("; ");
+  },
+
+  annotationPopoverStyle() {
+    const rect = this.annotationDraft?.rect || this.annotationDragRect || {};
+    const viewport = this.currentViewportSize() || this._lastViewport || {};
+    const width = Math.max(1, Number(viewport.width || 1));
+    const height = Math.max(1, Number(viewport.height || 1));
+    const popoverWidth = Math.min(320, Math.max(240, width - 20));
+    const popoverHeight = 190;
+    const nextLeft = Math.min(
+      Math.max(10, Number(rect.x || 0) + Number(rect.width || 0) + 10),
+      Math.max(10, width - popoverWidth - 10),
+    );
+    const nextTop = Math.min(
+      Math.max(10, Number(rect.y || 0) + Number(rect.height || 0) + 10),
+      Math.max(10, height - popoverHeight - 10),
+    );
+    return [
+      `left: ${(nextLeft / width) * 100}%`,
+      `top: ${(nextTop / height) * 100}%`,
+      `width: min(${popoverWidth}px, calc(100% - 20px))`,
+    ].join("; ");
+  },
+
+  annotationDraftTitle() {
+    if (!this.annotationDraft) return "Annotation";
+    return this.annotationDraft.kind === "area" ? "Area annotation" : "Element annotation";
+  },
+
+  stagePointForEvent(event) {
+    const image = this._stageElement?.querySelector?.(".browser-frame") || null;
+    return this.pointerCoordinatesFor(event, image);
+  },
+
+  normalizeAnnotationRect(start = {}, end = {}) {
+    const x1 = Number(start.x || 0);
+    const y1 = Number(start.y || 0);
+    const x2 = Number(end.x || x1);
+    const y2 = Number(end.y || y1);
+    return this.clampAnnotationRect({
+      x: Math.min(x1, x2),
+      y: Math.min(y1, y2),
+      width: Math.abs(x2 - x1),
+      height: Math.abs(y2 - y1),
+    });
+  },
+
+  clampAnnotationRect(rect = {}) {
+    const viewport = this.currentViewportSize() || this._lastViewport || {};
+    const viewportWidth = Math.max(1, Number(viewport.width || rect.x + rect.width || 1));
+    const viewportHeight = Math.max(1, Number(viewport.height || rect.y + rect.height || 1));
+    const x = Math.max(0, Math.min(viewportWidth, Number(rect.x || 0)));
+    const y = Math.max(0, Math.min(viewportHeight, Number(rect.y || 0)));
+    const width = Math.max(1, Math.min(viewportWidth - x, Number(rect.width || 1)));
+    const height = Math.max(1, Math.min(viewportHeight - y, Number(rect.height || 1)));
+    return {
+      x: Math.round(x),
+      y: Math.round(y),
+      width: Math.round(width),
+      height: Math.round(height),
+    };
+  },
+
+  startAnnotationSelection(event) {
+    if (!this.annotating || this.annotationBusy || !this.canAnnotate()) return;
+    const point = this.stagePointForEvent(event);
+    if (!point) return;
+    this.cancelAnnotationDraft();
+    this.annotationError = "";
+    this._annotationPointer = {
+      id: event.pointerId,
+      start: point,
+      last: point,
+    };
+    this.annotationDragRect = this.clampAnnotationRect({
+      x: point.x,
+      y: point.y,
+      width: 1,
+      height: 1,
+    });
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+  },
+
+  moveAnnotationSelection(event) {
+    if (!this.annotating || !this._annotationPointer) return;
+    if (event.pointerId !== this._annotationPointer.id) return;
+    const point = this.stagePointForEvent(event);
+    if (!point) return;
+    this._annotationPointer.last = point;
+    this.annotationDragRect = this.normalizeAnnotationRect(this._annotationPointer.start, point);
+  },
+
+  async finishAnnotationSelection(event) {
+    if (!this.annotating || !this._annotationPointer) return;
+    if (event.pointerId !== this._annotationPointer.id) return;
+    const pointer = this._annotationPointer;
+    this._annotationPointer = null;
+    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+    const endPoint = this.stagePointForEvent(event) || pointer.last || pointer.start;
+    const rect = this.normalizeAnnotationRect(pointer.start, endPoint);
+    this.annotationDragRect = null;
+    const isDrag = rect.width >= ANNOTATION_DRAG_THRESHOLD || rect.height >= ANNOTATION_DRAG_THRESHOLD;
+    const point = {
+      x: Math.round(endPoint.x),
+      y: Math.round(endPoint.y),
+    };
+    const payload = {
+      kind: isDrag ? "area" : "element",
+      point,
+      rect: isDrag ? rect : null,
+      viewport: this.currentViewportSize(),
+      url: this.activeAnnotationUrl(),
+      title: this.activeTitle,
+    };
+    await this.createAnnotationDraft(payload, isDrag ? rect : {
+      x: point.x - 10,
+      y: point.y - 10,
+      width: 20,
+      height: 20,
+    });
+  },
+
+  cancelAnnotationSelection(event = null) {
+    if (event && this._annotationPointer?.id === event.pointerId) {
+      event.currentTarget?.releasePointerCapture?.(event.pointerId);
+    }
+    this._annotationPointer = null;
+    this.annotationDragRect = null;
+  },
+
+  cancelAnnotationDraft() {
+    this.annotationDraft = null;
+    this.annotationDraftText = "";
+    this.annotationDragRect = null;
+  },
+
+  async createAnnotationDraft(payload, fallbackRect) {
+    if (!this.activeBrowserId || !this.contextId) return;
+    const sequence = this._annotationSequence + 1;
+    const browserId = this.activeBrowserId;
+    const url = this.activeAnnotationUrl();
+    const title = this.activeTitle;
+    this._annotationSequence = sequence;
+    this.annotationBusy = true;
+    this.annotationError = "";
+    try {
+      const response = await websocket.request(
+        "browser_viewer_annotation",
+        {
+          context_id: this.contextId,
+          browser_id: browserId,
+          viewer_id: this._viewerToken,
+          payload,
+        },
+        { timeoutMs: 10000 },
+      );
+      if (sequence !== this._annotationSequence) return;
+      const data = firstOk(response);
+      const metadata = data.annotation || {};
+      this.annotationDraft = {
+        id: makeViewerToken(),
+        browserId,
+        url,
+        title,
+        kind: metadata.kind || payload.kind,
+        rect: this.annotationRectFromMetadata(metadata, fallbackRect),
+        metadata,
+        createdAt: Date.now(),
+      };
+      this.annotationDraftText = "";
+    } catch (error) {
+      this.annotationError = error instanceof Error ? error.message : String(error);
+      this.error = this.annotationError;
+    } finally {
+      if (sequence === this._annotationSequence) {
+        this.annotationBusy = false;
+      }
+    }
+  },
+
+  annotationRectFromMetadata(metadata = {}, fallbackRect = {}) {
+    const targetRect = metadata?.target?.rect || metadata?.rect || null;
+    return this.clampAnnotationRect(targetRect || fallbackRect);
+  },
+
+  addAnnotationComment() {
+    const comment = String(this.annotationDraftText || "").trim();
+    if (!this.annotationDraft || !comment) return;
+    if (this.visibleAnnotations().length >= ANNOTATION_MAX_COMMENTS) {
+      this.annotationError = `Keep each batch to ${ANNOTATION_MAX_COMMENTS} annotations or fewer.`;
+      this.error = this.annotationError;
+      return;
+    }
+    this.annotationComments = [
+      ...this.annotationComments,
+      {
+        ...this.annotationDraft,
+        comment,
+        index: this.nextAnnotationIndex(),
+      },
+    ];
+    this.cancelAnnotationDraft();
+  },
+
+  removeAnnotationComment(annotationId) {
+    this.annotationComments = this.annotationComments.filter((annotation) => annotation.id !== annotationId);
+  },
+
+  annotationChipLabel(annotation) {
+    const prefix = annotation?.kind === "area" ? "Area" : "Element";
+    return `${prefix} ${annotation?.index || ""}`.trim();
+  },
+
+  formatAnnotationRect(rect = {}) {
+    const normalized = this.clampAnnotationRect(rect);
+    return `x=${normalized.x}, y=${normalized.y}, width=${normalized.width}, height=${normalized.height}`;
+  },
+
+  redactAnnotationText(value) {
+    return String(value || "")
+      .replace(/(<input\b(?=[^>]*\btype=(["'])?password\2?)[^>]*?)\svalue=(["'])[\s\S]*?\3/giu, "$1 value=\"[redacted]\"")
+      .replace(/\b(password|passcode|token|secret|value)=((["'])[\s\S]{1,240}?\3)/giu, "$1=\"[redacted]\"");
+  },
+
+  formatAnnotationMetadata(metadata = {}) {
+    const lines = [];
+    const target = metadata.target || {};
+    const selector = target.selector || metadata.selector || "";
+    const summary = target.summary || metadata.summary || "";
+    const dom = this.redactAnnotationText(target.dom || metadata.dom || "").slice(0, ANNOTATION_DOM_LIMIT);
+
+    if (selector) {
+      lines.push(`Selector: ${selector}`);
+    }
+    if (target.tagName || target.role || target.id || target.name || target.classes) {
+      lines.push([
+        "Element:",
+        target.tagName ? `<${String(target.tagName).toLowerCase()}>` : "",
+        target.role ? `role=${target.role}` : "",
+        target.id ? `id=${target.id}` : "",
+        target.name ? `name=${target.name}` : "",
+        target.classes ? `class=${target.classes}` : "",
+      ].filter(Boolean).join(" "));
+    }
+    if (summary) {
+      lines.push(`Summary: ${summary}`);
+    }
+    if (Array.isArray(metadata.elements) && metadata.elements.length) {
+      lines.push("Intersecting elements:");
+      metadata.elements.slice(0, 8).forEach((element, index) => {
+        const elementLabel = [
+          `${index + 1}.`,
+          element.tagName ? `<${String(element.tagName).toLowerCase()}>` : "",
+          element.selector || "",
+          element.summary || "",
+        ].filter(Boolean).join(" ");
+        lines.push(elementLabel);
+      });
+    }
+    if (dom) {
+      lines.push(`DOM: ${dom}`);
+    }
+    return lines.join("\n");
+  },
+
+  buildAnnotationsPrompt() {
+    const annotations = this.visibleAnnotations();
+    if (!annotations.length) return "";
+    const lines = [
+      "Browser annotations",
+      `Page title: ${this.activeTitle}`,
+      `Page URL: ${this.activeAnnotationUrl()}`,
+      `Browser id: ${this.activeBrowserId}`,
+      "",
+    ];
+    annotations.forEach((annotation, index) => {
+      lines.push(
+        `Annotation ${index + 1}`,
+        `Comment: ${annotation.comment}`,
+        `Selection kind: ${annotation.kind}`,
+        `Coordinates: ${this.formatAnnotationRect(annotation.rect)}`,
+      );
+      const metadata = this.formatAnnotationMetadata(annotation.metadata);
+      if (metadata) {
+        lines.push(metadata);
+      }
+      lines.push("");
+    });
+    return lines.join("\n").trim();
+  },
+
+  draftAnnotationsToChat() {
+    const prompt = this.buildAnnotationsPrompt();
+    if (!prompt) return;
+    const existingMessage = String(chatInputStore.message || "").trim();
+    chatInputStore.message = existingMessage ? `${existingMessage}\n\n${prompt}` : prompt;
+    chatInputStore.adjustTextareaHeight?.();
+    chatInputStore.focus?.();
+    this.clearVisibleAnnotations();
+    this.toggleAnnotationMode(false);
+  },
+
+  async sendAnnotationsToChat() {
+    const prompt = this.buildAnnotationsPrompt();
+    if (!prompt) return;
+    chatInputStore.message = prompt;
+    chatInputStore.adjustTextareaHeight?.();
+    try {
+      if (typeof chatInputStore.sendMessage === "function") {
+        await chatInputStore.sendMessage();
+      } else if (typeof globalThis.sendMessage === "function") {
+        await globalThis.sendMessage();
+      } else {
+        chatInputStore.focus?.();
+        return;
+      }
+      this.clearVisibleAnnotations();
+      this.toggleAnnotationMode(false);
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    }
   },
 
   currentViewportSize() {
@@ -910,6 +1346,7 @@ const model = {
   },
 
   async sendMouse(eventType, event) {
+    if (this.annotating) return;
     if (!this.activeBrowserId || !event?.currentTarget) return;
     const pointer = this.pointerCoordinatesFor(event);
     if (!pointer) return;
@@ -960,6 +1397,7 @@ const model = {
 	  },
 
   async sendKey(event) {
+    if (this.annotating) return;
     if (!this.activeBrowserId) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const editable = ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName);
@@ -982,6 +1420,11 @@ const model = {
     this._surfaceMounted = false;
     this._surfaceSwitching = false;
     this.commandInFlight = false;
+    this.annotating = false;
+    this.annotationBusy = false;
+    this.annotationError = "";
+    this.cancelAnnotationDraft();
+    this.cancelAnnotationSelection();
     if (this.contextId) {
       try {
         await websocket.emit("browser_viewer_unsubscribe", { context_id: this.contextId });

@@ -43,6 +43,8 @@ class WsBrowser(WsHandler):
             return await self._command(data, sid)
         if event == "browser_viewer_input":
             return await self._input(data, sid)
+        if event == "browser_viewer_annotation":
+            return await self._annotation(data, sid)
 
         return WsResult.error(
             code="UNKNOWN_BROWSER_EVENT",
@@ -213,6 +215,29 @@ class WsBrowser(WsHandler):
             "snapshot": await self._snapshot_for_result(runtime, result)
             if input_type == "mouse"
             else None,
+        }
+
+    async def _annotation(self, data: dict[str, Any], sid: str) -> dict[str, Any] | WsResult:
+        context_id = self._context_id(data)
+        if not context_id:
+            return self._error("MISSING_CONTEXT", "context_id is required", data)
+        runtime = await get_runtime(context_id, create=False)
+        if not runtime:
+            return self._error("NO_BROWSER_RUNTIME", "No browser runtime exists for this context", data)
+
+        browser_id = data.get("browser_id")
+        viewer_id = str(data.get("viewer_id") or "")
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        try:
+            annotation = await runtime.call("annotation_target", browser_id, payload)
+        except Exception as exc:
+            return self._error("ANNOTATION_FAILED", str(exc), data)
+
+        return {
+            "annotation": annotation,
+            "context_id": context_id,
+            "browser_id": browser_id,
+            "viewer_id": viewer_id,
         }
 
     async def _snapshot_for_result(

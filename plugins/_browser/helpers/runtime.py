@@ -557,6 +557,22 @@ class _BrowserRuntimeCore:
         self.last_interacted_browser_id = resolved_id
         return result or {}
 
+    async def annotation_target(
+        self,
+        browser_id: int | str | None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        await self._ensure_content_helper(page)
+        result = await page.evaluate(
+            "(payload) => globalThis.__spaceBrowserPageContent__.annotate(payload || null)",
+            payload or None,
+        )
+        self.last_interacted_browser_id = resolved_id
+        return result or {}
+
     async def evaluate(self, browser_id: int | str | None, script: str) -> dict[str, Any]:
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
@@ -918,7 +934,7 @@ class _BrowserRuntimeCore:
 
     async def _ensure_content_helper(self, page: Any) -> None:
         has_helper = await page.evaluate(
-            "() => Boolean(globalThis.__spaceBrowserPageContent__?.capture)"
+            "() => Boolean(globalThis.__spaceBrowserPageContent__?.capture && globalThis.__spaceBrowserPageContent__?.annotate)"
         )
         if has_helper:
             return
