@@ -30,15 +30,13 @@
             class="office-health-pill"
             :class="`is-${$store.office.status?.state || 'unknown'}`"
             :title="$store.office.status?.message || 'Office status'"
+            :aria-label="$store.office.status?.message || 'Office status'"
           >
             <span class="office-health-dot"></span>
-            <span x-text="$store.office.status?.state || 'status'"></span>
+            <span x-show="$store.office.status?.state !== 'healthy'" x-text="$store.office.status?.state || 'status'"></span>
           </span>
           <button type="button" class="office-icon-button" title="Save" @click="$store.office.save()" :disabled="!$store.office.session">
             <span class="material-symbols-outlined">save</span>
-          </button>
-          <button type="button" class="office-icon-button" title="Versions" @click="$store.office.showVersions()" :disabled="!$store.office.session">
-            <span class="material-symbols-outlined">history</span>
           </button>
           <button type="button" class="office-icon-button" title="Refresh status" @click="$store.office.refresh()">
             <span class="material-symbols-outlined">refresh</span>
@@ -252,6 +250,13 @@
       white-space: nowrap;
       color: var(--color-text-muted);
       background: color-mix(in srgb, var(--color-panel) 64%, transparent);
+    }
+
+    .office-health-pill.is-healthy {
+      width: 28px;
+      min-width: 28px;
+      padding: 0;
+      gap: 0;
     }
 
     .office-health-dot {

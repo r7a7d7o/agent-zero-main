@@ -24,11 +24,14 @@ export default async function registerBrowserSurface(canvas) {
     icon: "language",
     order: 10,
     modalPath: "/plugins/_browser/webui/main.html",
-    async open() {
+    async open(payload = {}) {
       const panel = await waitForElement('[data-surface-id="browser"] .browser-panel');
       const browser = globalThis.Alpine?.store?.("browserPage");
       if (panel && browser?.onOpen) {
-        await browser.onOpen(panel, { mode: "canvas" });
+        await browser.onOpen(panel, {
+          mode: "canvas",
+          browserId: payload.browserId || payload.browser_id || null,
+        });
       }
     },
     async close() {

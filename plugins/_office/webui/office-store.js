@@ -2,6 +2,9 @@ import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
 
 const FRAME_NAME_PREFIX = "a0-office-frame";
+const COLLABORA_STATE_VERSION = "2026-04-26.1";
+const COLLABORA_STATE_MARKER = "a0.office.collaboraStateVersion";
+const SERVICE_WORKER_CLEANUP_MARKER = "a0.office.serviceWorkerCleanupReloaded";
 
 function makeFrameName() {
   const id = globalThis.crypto?.randomUUID?.()
@@ -131,6 +134,7 @@ const model = {
     this.error = "";
     this.message = "";
     try {
+      await this.prepareBrowserHostForEditor();
       const response = await callJsonApi("/plugins/_office/office_session", payload);
       if (!response?.ok) {
         this.error = response?.error || "Office session could not be opened.";
@@ -210,6 +214,7 @@ const model = {
     if (!this.session || this.frameReady || this._frameRecoveryTried) return;
     this._frameRecoveryTried = true;
     this._frameAttempt += 1;
+    this.resetCollaboraBrowserState({ force: true });
     this.message = "Still opening the editor... trying a fresh editor load.";
     await this.submitFrame();
     this._frameTimer = setTimeout(() => {
@@ -267,11 +272,6 @@ const model = {
     this._frameAttempt = 0;
     this._frameRecoveryTried = false;
     this.clearFrameTimers();
-  },
-
-  async showVersions() {
-    if (!this.session?.file_id) return;
-    this.message = "Version history is available through the document_artifact tool.";
   },
 
   onPostMessage(event) {
@@ -443,6 +443,65 @@ const model = {
     this._floatingCleanup?.();
     this._floatingCleanup = null;
     if (element) this._root = element;
+  },
+
+  async prepareBrowserHostForEditor() {
+    await this.cleanupLegacyOfficeServiceWorkers();
+    this.resetCollaboraBrowserState();
+  },
+
+  async cleanupLegacyOfficeServiceWorkers() {
+    const serviceWorker = globalThis.navigator?.serviceWorker;
+    if (!serviceWorker?.getRegistrations) return;
+    let removedController = false;
+    try {
+      const registrations = await serviceWorker.getRegistrations();
+      const currentOrigin = globalThis.location.origin;
+      const officePath = "/office/";
+      for (const registration of registrations) {
+        const scope = new URL(registration.scope);
+        if (scope.origin !== currentOrigin) continue;
+        const scopePath = scope.pathname.endsWith("/") ? scope.pathname : `${scope.pathname}/`;
+        const affectsOffice = scopePath === "/" || scopePath.startsWith(officePath) || officePath.startsWith(scopePath);
+        if (!affectsOffice) continue;
+        const scriptUrl = registration.active?.scriptURL || "";
+        if (scriptUrl.endsWith("/js/sw.js") && scopePath === "/js/") continue;
+        removedController = await registration.unregister() || removedController;
+      }
+      const controllerUrl = serviceWorker.controller?.scriptURL || "";
+      if (removedController && controllerUrl.startsWith(currentOrigin)) {
+        const alreadyReloaded = sessionStorage.getItem(SERVICE_WORKER_CLEANUP_MARKER) === "1";
+        if (!alreadyReloaded) {
+          sessionStorage.setItem(SERVICE_WORKER_CLEANUP_MARKER, "1");
+          globalThis.location.reload();
+        }
+      }
+    } catch (error) {
+      console.warn("Office service worker cleanup skipped", error);
+    }
+  },
+
+  resetCollaboraBrowserState(options = {}) {
+    const force = Boolean(options.force);
+    try {
+      if (!force && localStorage.getItem(COLLABORA_STATE_MARKER) === COLLABORA_STATE_VERSION) {
+        return;
+      }
+      const exactKeys = new Set([
+        "UIDefaults",
+        "WSDFeedbackCount",
+        "WSDFeedbackTimestamp",
+      ]);
+      const collaboraKeyPattern = /^(text|spreadsheet|presentation|drawing)\.[A-Za-z0-9_.-]+$/;
+      for (const key of Object.keys(localStorage)) {
+        if (exactKeys.has(key) || collaboraKeyPattern.test(key)) {
+          localStorage.removeItem(key);
+        }
+      }
+      localStorage.setItem(COLLABORA_STATE_MARKER, COLLABORA_STATE_VERSION);
+    } catch (error) {
+      console.warn("Office browser state cleanup skipped", error);
+    }
   },
 };
 

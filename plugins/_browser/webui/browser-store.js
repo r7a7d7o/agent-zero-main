@@ -299,6 +299,7 @@ const model = {
   async onOpen(element = null, options = {}) {
     this.loading = true;
     this.error = "";
+    const requestedBrowserId = this.normalizeBrowserId(options.browserId ?? options.browser_id);
     this._mode = options?.mode === "modal" ? "modal" : "canvas";
     if (this._mode === "modal") {
       this.setupFloatingModal(element);
@@ -308,7 +309,7 @@ const model = {
     this.contextId = this.resolveContextId();
     try {
       await this.refreshStatus();
-      await this.connectViewer();
+      await this.connectViewer({ browserId: requestedBrowserId });
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
     } finally {
