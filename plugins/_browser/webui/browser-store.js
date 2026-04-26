@@ -10,6 +10,9 @@ websocket.addHandlers(["ws_webui"]);
 const EXTENSIONS_ROOT = "/a0/usr/plugins/_browser/extensions";
 const BROWSER_SUBSCRIBE_TIMEOUT_MS = 60000;
 const BROWSER_FIRST_INSTALL_TIMEOUT_MS = 300000;
+const BROWSER_CONFIG_REFRESH_MS = 15000;
+const VIEWPORT_SYNC_DEBOUNCE_MS = 220;
+const VIEWPORT_SYNC_SIZE_TOLERANCE = 4;
 
 function makeViewerToken() {
   return globalThis.crypto?.randomUUID?.()
@@ -28,6 +31,23 @@ function firstOk(response) {
   const error = response?.results?.find((item) => !item?.ok)?.error;
   if (error) throw new Error(error.error || error.code || "Browser request failed");
   return {};
+}
+
+function normalizeBool(value, fallback = true) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Boolean(value);
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  return fallback;
+}
+
+function nextAnimationFrame() {
+  return new Promise((resolve) => {
+    const schedule = globalThis.requestAnimationFrame || ((callback) => globalThis.setTimeout(callback, 16));
+    schedule(() => resolve());
+  });
 }
 
 const model = {
@@ -55,7 +75,10 @@ const model = {
   _stageResizeObserver: null,
   _viewportSyncTimer: null,
   _lastViewportKey: "",
-  _mode: "canvas",
+  _lastViewport: null,
+  _mode: "",
+  _surfaceMounted: false,
+  _surfaceSwitching: false,
   _connectSequence: 0,
   _viewerToken: "",
   extensionMenuOpen: false,
@@ -72,6 +95,10 @@ const model = {
   mainModelSummary: "",
   modelPresetSaving: false,
   browserInstallExpected: false,
+  defaultHomepage: "about:blank",
+  autofocusActivePage: true,
+  _configLoadedAt: 0,
+  _configRefreshPromise: null,
 
   async refreshStatus() {
     this.status = await callJsonApi("/plugins/_browser/status", {});
@@ -99,11 +126,48 @@ const model = {
   applyExtensionPayload(response = {}) {
     this.extensionsRoot = response.root || EXTENSIONS_ROOT;
     this.extensionsList = Array.isArray(response.extensions) ? response.extensions : [];
+    this.defaultHomepage = String(response.default_homepage || "about:blank").trim() || "about:blank";
+    this.autofocusActivePage = normalizeBool(response.autofocus_active_page, true);
     this.modelPreset = String(response.model_preset || "");
     this.mainModelSummary = String(response.main_model_summary || "");
     this.modelPresetOptions = Array.isArray(response.model_preset_options)
       ? response.model_preset_options
       : [];
+    this._configLoadedAt = Date.now();
+  },
+
+  async ensureBrowserConfigLoaded(force = false) {
+    if (!force && this._configLoadedAt && Date.now() - this._configLoadedAt < BROWSER_CONFIG_REFRESH_MS) {
+      return;
+    }
+    if (this._configRefreshPromise) {
+      await this._configRefreshPromise;
+      return;
+    }
+    this._configRefreshPromise = (async () => {
+      const response = await callJsonApi("/plugins/_browser/extensions", {
+        action: "list",
+        context_id: this.contextId || this.resolveContextId(),
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || "Could not load browser settings.");
+      }
+      this.applyExtensionPayload(response);
+    })();
+    try {
+      await this._configRefreshPromise;
+    } finally {
+      this._configRefreshPromise = null;
+    }
+  },
+
+  async allowsToolAutofocus() {
+    try {
+      await this.ensureBrowserConfigLoaded();
+    } catch (error) {
+      console.warn("Browser autofocus setting could not be loaded", error);
+    }
+    return this.autofocusActivePage !== false;
   },
 
   toggleExtensionsMenu() {
@@ -300,8 +364,9 @@ const model = {
     this.loading = true;
     this.error = "";
     const requestedBrowserId = this.normalizeBrowserId(options.browserId ?? options.browser_id);
-    this._mode = options?.mode === "modal" ? "modal" : "canvas";
-    if (this._mode === "modal") {
+    const nextMode = options?.mode === "modal" ? "modal" : "canvas";
+    this.prepareSurfaceOpen(nextMode, requestedBrowserId);
+    if (nextMode === "modal") {
       this.setupFloatingModal(element);
     } else {
       this.setupCanvasSurface(element);
@@ -309,7 +374,10 @@ const model = {
     this.contextId = this.resolveContextId();
     try {
       await this.refreshStatus();
-      await this.connectViewer({ browserId: requestedBrowserId });
+      const viewport = await this.waitForSurfaceViewport();
+      this.resetRenderedFrameIfViewportChanged(viewport, requestedBrowserId);
+      await this.connectViewer({ browserId: requestedBrowserId, initialViewport: viewport });
+      await this.syncViewportAfterSurfaceOpen();
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
     } finally {
@@ -317,11 +385,80 @@ const model = {
     }
   },
 
+  prepareSurfaceOpen(nextMode, requestedBrowserId = null) {
+    const previousMode = this._mode;
+    const modeChanged = this._surfaceMounted && previousMode && previousMode !== nextMode;
+    const targetBrowserId = requestedBrowserId || this.activeBrowserId || this.firstBrowserId();
+    this._mode = nextMode;
+    this._surfaceMounted = true;
+    this._lastViewportKey = "";
+    if (!modeChanged && (this.frameSrc || !targetBrowserId)) return;
+
+    this.resetRenderedFrame();
+    this.resetViewportTracking();
+    this._surfaceSwitching = Boolean(targetBrowserId);
+    this.switchingBrowserId = targetBrowserId;
+  },
+
+  resetViewportTracking() {
+    this._lastViewportKey = "";
+    this._lastViewport = null;
+  },
+
+  resetRenderedFrame() {
+    this.cancelFrameRender();
+    this.frameSrc = "";
+    this._lastFrameAt = 0;
+  },
+
+  resetRenderedFrameIfViewportChanged(viewport = null, requestedBrowserId = null) {
+    if (!viewport || !this.frameSrc || !this._lastViewport) return;
+    const targetBrowserId = requestedBrowserId || this.activeBrowserId || this.firstBrowserId();
+    if (!this.sameBrowserId(this._lastViewport.browserId, targetBrowserId)) return;
+    const changed = Math.abs(this._lastViewport.width - viewport.width) > VIEWPORT_SYNC_SIZE_TOLERANCE
+      || Math.abs(this._lastViewport.height - viewport.height) > VIEWPORT_SYNC_SIZE_TOLERANCE;
+    if (!changed) return;
+
+    this.resetRenderedFrame();
+    this.resetViewportTracking();
+    this._surfaceSwitching = true;
+    this.switchingBrowserId = targetBrowserId;
+  },
+
+  async waitForSurfaceViewport() {
+    let lastKey = "";
+    let stableCount = 0;
+    for (let index = 0; index < 24; index += 1) {
+      await nextAnimationFrame();
+      const viewport = this.currentViewportSize();
+      if (!viewport) continue;
+      const key = `${viewport.width}x${viewport.height}`;
+      if (key === lastKey) {
+        stableCount += 1;
+        if (stableCount >= 2) return viewport;
+      } else {
+        stableCount = 0;
+        lastKey = key;
+      }
+    }
+    return this.currentViewportSize();
+  },
+
+  async syncViewportAfterSurfaceOpen() {
+    if (!this.connected || !this.activeBrowserId) return;
+    await this.waitForSurfaceViewport();
+    await this.syncViewport(true);
+    if (this._mode !== "canvas") return;
+    globalThis.setTimeout?.(() => this.queueViewportSync(true), 240);
+    globalThis.setTimeout?.(() => this.queueViewportSync(true), 420);
+  },
+
   async connectViewer(options = {}) {
     if (!this.contextId) {
       this.connected = false;
       this.error = "No active chat context is selected.";
       this.switchingBrowserId = null;
+      this._surfaceSwitching = false;
       return;
     }
     const requestedBrowserId = this.normalizeBrowserId(options.browserId ?? this.activeBrowserId);
@@ -334,7 +471,7 @@ const model = {
     if (sequence !== this._connectSequence || viewerToken !== this._viewerToken) {
       return;
     }
-    const initialViewport = this.currentViewportSize();
+    const initialViewport = options.initialViewport || this.currentViewportSize();
     let response;
     try {
       response = await websocket.request(
@@ -355,6 +492,7 @@ const model = {
     } catch (error) {
       if (sequence === this._connectSequence && viewerToken === this._viewerToken) {
         this.switchingBrowserId = null;
+        this._surfaceSwitching = false;
         throw error;
       }
       return;
@@ -393,6 +531,7 @@ const model = {
           if (this.sameBrowserId(this.switchingBrowserId, incomingBrowserId || this.activeBrowserId)) {
             this.switchingBrowserId = null;
           }
+          this._surfaceSwitching = false;
         } else {
           this.cancelFrameRender();
           if (!data.state) {
@@ -573,7 +712,7 @@ const model = {
   },
 
   async openNewBrowser() {
-    await this.command("open", { url: "about:blank" });
+    await this.command("open");
   },
 
   isActiveBrowser(browser) {
@@ -647,6 +786,7 @@ const model = {
 	    if (this.sameBrowserId(this.switchingBrowserId, snapshotId || this.activeBrowserId)) {
 	      this.switchingBrowserId = null;
 	    }
+	    this._surfaceSwitching = false;
 	  },
 
   isSwitchingBrowser() {
@@ -654,7 +794,7 @@ const model = {
   },
 
   isBusy() {
-    return Boolean(this.loading || this.commandInFlight || this.isSwitchingBrowser());
+    return Boolean(this.loading || this.commandInFlight || this._surfaceSwitching || this.isSwitchingBrowser());
   },
 
   setActiveBrowserId(id) {
@@ -664,6 +804,7 @@ const model = {
     this.activeBrowserId = exists ? numeric : null;
     if (this.activeBrowserId !== previous) {
       this._lastViewportKey = "";
+      this._lastViewport = null;
     }
   },
 
@@ -673,17 +814,47 @@ const model = {
     const rect = target.getBoundingClientRect();
     const naturalWidth = target.naturalWidth || rect.width;
     const naturalHeight = target.naturalHeight || rect.height;
+    let contentLeft = rect.left;
+    let contentTop = rect.top;
+    let contentWidth = rect.width;
+    let contentHeight = rect.height;
+
+    const objectFit = globalThis.getComputedStyle?.(target)?.objectFit || "";
+    if (
+      target.matches?.(".browser-frame")
+      && ["contain", "scale-down"].includes(objectFit)
+      && naturalWidth > 0
+      && naturalHeight > 0
+      && rect.width > 0
+      && rect.height > 0
+    ) {
+      const naturalRatio = naturalWidth / naturalHeight;
+      const rectRatio = rect.width / rect.height;
+      if (naturalRatio > rectRatio) {
+        contentWidth = rect.width;
+        contentHeight = rect.width / naturalRatio;
+        contentTop = rect.top + (rect.height - contentHeight) / 2;
+      } else {
+        contentHeight = rect.height;
+        contentWidth = rect.height * naturalRatio;
+        contentLeft = rect.left + (rect.width - contentWidth) / 2;
+      }
+    }
+
+    const relativeX = (event.clientX - contentLeft) / Math.max(1, contentWidth);
+    const relativeY = (event.clientY - contentTop) / Math.max(1, contentHeight);
     return {
-      x: ((event.clientX - rect.left) / Math.max(1, rect.width)) * naturalWidth,
-      y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * naturalHeight,
+      x: Math.max(0, Math.min(naturalWidth, relativeX * naturalWidth)),
+      y: Math.max(0, Math.min(naturalHeight, relativeY * naturalHeight)),
     };
   },
 
   currentViewportSize() {
     const stage = this._stageElement;
     if (!stage) return null;
-    const width = Math.floor(stage.clientWidth || 0);
-    const height = Math.floor(stage.clientHeight || 0);
+    const rect = stage.getBoundingClientRect?.();
+    const width = Math.round(rect?.width || stage.clientWidth || 0);
+    const height = Math.round(rect?.height || stage.clientHeight || 0);
     if (width < 80 || height < 80) return null;
     return {
       width: Math.max(320, width),
@@ -698,7 +869,7 @@ const model = {
     this._viewportSyncTimer = globalThis.setTimeout(() => {
       this._viewportSyncTimer = null;
       void this.syncViewport(force);
-    }, force ? 0 : 80);
+    }, force ? 0 : VIEWPORT_SYNC_DEBOUNCE_MS);
   },
 
 	  async syncViewport(force = false) {
@@ -706,7 +877,16 @@ const model = {
 	    const viewport = this.currentViewportSize();
 	    if (!viewport) return;
 	    const key = `${this.activeBrowserId}:${viewport.width}x${viewport.height}`;
-	    if (this._lastViewportKey === key) return;
+	    if (
+	      this._lastViewportKey === key
+	      || (
+	        !force
+	        && this._lastViewport
+	        && this.sameBrowserId(this._lastViewport.browserId, this.activeBrowserId)
+	        && Math.abs(this._lastViewport.width - viewport.width) <= VIEWPORT_SYNC_SIZE_TOLERANCE
+	        && Math.abs(this._lastViewport.height - viewport.height) <= VIEWPORT_SYNC_SIZE_TOLERANCE
+	      )
+	    ) return;
 	    try {
 	      await websocket.emit("browser_viewer_input", {
 	        context_id: this.contextId,
@@ -717,8 +897,14 @@ const model = {
 	        height: viewport.height,
 	      });
 	      this._lastViewportKey = key;
+	      this._lastViewport = {
+	        browserId: this.activeBrowserId,
+	        width: viewport.width,
+	        height: viewport.height,
+	      };
 	    } catch (error) {
       this._lastViewportKey = "";
+      this._lastViewport = null;
       console.warn("Browser viewport sync failed", error);
     }
   },
@@ -793,6 +979,8 @@ const model = {
     this._connectSequence += 1;
     this._viewerToken = "";
     this.switchingBrowserId = null;
+    this._surfaceMounted = false;
+    this._surfaceSwitching = false;
     this.commandInFlight = false;
     if (this.contextId) {
       try {
@@ -803,7 +991,7 @@ const model = {
     this._stateOff?.();
     this._frameOff = null;
     this._stateOff = null;
-    this.cancelFrameRender();
+    this.resetRenderedFrame();
     this._floatingCleanup?.();
     this._floatingCleanup = null;
     this._stageResizeObserver?.disconnect?.();
@@ -813,7 +1001,7 @@ const model = {
       globalThis.clearTimeout(this._viewportSyncTimer);
       this._viewportSyncTimer = null;
     }
-    this._lastViewportKey = "";
+    this.resetViewportTracking();
     this.extensionMenuOpen = false;
     this.extensionActionLoading = false;
     this.extensionsListLoading = false;

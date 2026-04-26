@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from helpers import plugins
 from helpers.api import ApiHandler, Request
 from plugins._browser.helpers.config import (
+    AUTOFOCUS_ACTIVE_PAGE_KEY,
+    DEFAULT_HOMEPAGE_KEY,
     MODEL_PRESET_KEY,
     PLUGIN_NAME,
     get_browser_config,
@@ -81,6 +83,8 @@ class Extensions(ApiHandler):
             "ok": True,
             "root": str(get_extensions_root()),
             "extensions": list_browser_extensions(),
+            DEFAULT_HOMEPAGE_KEY: config[DEFAULT_HOMEPAGE_KEY],
+            AUTOFOCUS_ACTIVE_PAGE_KEY: config[AUTOFOCUS_ACTIVE_PAGE_KEY],
             MODEL_PRESET_KEY: config[MODEL_PRESET_KEY],
             "main_model_summary": get_browser_main_model_summary(agent=agent),
             "model_preset_options": get_browser_model_preset_options(agent=agent, settings=config),

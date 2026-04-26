@@ -21,9 +21,21 @@ function normalizePathList(value) {
 function ensureConfig(config) {
   if (!config || typeof config !== "object") return null;
   config.extension_paths = normalizePathList(config.extension_paths);
+  config.default_homepage = String(config.default_homepage || "about:blank").trim() || "about:blank";
+  config.autofocus_active_page = normalizeBoolean(config.autofocus_active_page, true);
   config.model_preset = String(config.model_preset || "").trim();
   delete config.model;
   return config;
+}
+
+function normalizeBoolean(value, fallback = true) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Boolean(value);
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
+  return fallback;
 }
 
 export const store = createStore("browserConfig", {
@@ -48,6 +60,16 @@ export const store = createStore("browserConfig", {
     if (!safeConfig) return;
     if (this.config === safeConfig) return;
     this.config = safeConfig;
+  },
+
+  setAutofocusActivePage(enabled) {
+    const safeConfig = ensureConfig(this.config);
+    if (!safeConfig) return;
+    safeConfig.autofocus_active_page = Boolean(enabled);
+  },
+
+  autofocusLabel() {
+    return this.config?.autofocus_active_page === false ? "Off" : "On";
   },
 
   hasPaths() {

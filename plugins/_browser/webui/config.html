@@ -16,6 +16,41 @@
         x-destroy="$store.browserConfig.cleanup()"
       >
         <div class="browser-config-card">
+          <div class="section-title">Browsing</div>
+          <div class="section-description">
+            Set how new Browser sessions start and whether agent activity should pull focus.
+          </div>
+
+          <label class="browser-config-field">
+            <span class="browser-config-field-label">Starting page</span>
+            <input
+              type="text"
+              x-model="$store.browserConfig.config.default_homepage"
+              placeholder="about:blank or https://example.com"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="browser-config-switch-row">
+            <span class="browser-config-switch-copy">
+              <span class="browser-config-field-label">Autofocus active page</span>
+              <span class="browser-config-field-help">Focus pages opened or changed by Browser tool results.</span>
+            </span>
+            <span class="browser-config-toggle-with-label">
+              <span class="browser-config-toggle-label" x-text="$store.browserConfig.autofocusLabel()"></span>
+              <span class="browser-config-toggle">
+                <input
+                  type="checkbox"
+                  :checked="$store.browserConfig.config.autofocus_active_page !== false"
+                  @change="$store.browserConfig.setAutofocusActivePage($event.target.checked)"
+                />
+                <span class="browser-config-switch"></span>
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div class="browser-config-card">
           <div class="section-title">Extensions</div>
           <div class="section-description">
             Choose which installed Chrome extensions Browser loads.
@@ -84,6 +119,65 @@
       padding: 16px;
       border: 1px solid var(--color-border);
       border-radius: 8px;
+    }
+
+    .browser-config-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .browser-config-field-label {
+      color: var(--color-text);
+      font-size: 0.84rem;
+      font-weight: 650;
+    }
+
+    .browser-config-field-help {
+      color: var(--color-text-secondary);
+      font-size: 0.78rem;
+      line-height: 1.35;
+    }
+
+    .browser-config-field input[type="text"] {
+      width: 100%;
+      min-height: 36px;
+      padding: 7px 10px;
+      border: 1px solid color-mix(in srgb, var(--color-border) 74%, transparent);
+      border-radius: 8px;
+      background: var(--color-input);
+      color: var(--color-text);
+      font: inherit;
+    }
+
+    .browser-config-switch-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 16px;
+      min-height: 46px;
+      padding-top: 2px;
+    }
+
+    .browser-config-switch-copy {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .browser-config-toggle-with-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .browser-config-toggle-label {
+      min-width: 24px;
+      color: var(--color-text-secondary);
+      font-size: 0.78rem;
+      font-weight: 650;
+      text-align: right;
     }
 
     .browser-config-extension-list {
@@ -166,6 +260,7 @@
       height: 100%;
       border-radius: 999px;
       background: color-mix(in srgb, var(--color-border) 78%, transparent);
+      pointer-events: none;
       transition: background-color 0.18s cubic-bezier(0.4, 0, 0.2, 1);
     }
 

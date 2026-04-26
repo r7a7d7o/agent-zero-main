@@ -25,7 +25,7 @@ class Browser(Tool):
 
         try:
             if action == "open":
-                result = await runtime.call("open", url or "about:blank")
+                result = await runtime.call("open", url or "")
             elif action == "list":
                 result = await runtime.call("list")
             elif action == "state":

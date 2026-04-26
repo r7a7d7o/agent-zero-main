@@ -43,11 +43,11 @@
             <div class="browser-session-controls">
               <div class="browser-extension-menu" @click.outside="$store.browserPage.closeExtensionsMenu()"
                 @keydown.escape.window="$store.browserPage.closeExtensionsMenu()">
-                <button type="button" class="btn btn-icon-action browser-extensions" title="Browser extensions"
-                  aria-label="Browser extensions" @click.stop="$store.browserPage.toggleExtensionsMenu()"
+                <button type="button" class="btn btn-icon-action browser-extensions" title="Browser settings"
+                  aria-label="Browser settings" @click.stop="$store.browserPage.toggleExtensionsMenu()"
                   :aria-expanded="$store.browserPage.extensionMenuOpen.toString()"
                   :class="{ 'is-active': $store.browserPage.status?.extensions?.active }">
-                  <span class="material-symbols-outlined">extension</span>
+                  <span class="material-symbols-outlined">tune</span>
                 </button>
                 <div class="browser-extension-dropdown" x-show="$store.browserPage.extensionMenuOpen" x-transition
                   style="display: none;">
@@ -160,14 +160,8 @@
           </form>
         </div>
 
-	        <div class="browser-error" x-show="$store.browserPage.error" x-text="$store.browserPage.error"></div>
-
 	        <div class="browser-stage" tabindex="0" @click="$el.focus()"
 	          @wheel.prevent="$store.browserPage.sendWheel($event)">
-	          <div class="browser-status" x-show="$store.browserPage.isBusy()">
-	            <span class="material-symbols-outlined spinning">progress_activity</span>
-	            <span x-text="$store.browserPage.loadingMessage()">Connecting browser...</span>
-	          </div>
 	          <template x-if="$store.browserPage.frameSrc">
             <img class="browser-frame" :src="$store.browserPage.frameSrc"
               @click="$store.browserPage.sendMouse('click', $event)"
@@ -176,9 +170,22 @@
 	          <template x-if="!$store.browserPage.frameSrc && !$store.browserPage.isBusy()">
             <div class="browser-empty">
               <span class="material-symbols-outlined">captive_portal</span>
-              <button class="btn btn-field" @click="$store.browserPage.command('open', { url: 'about:blank' })">Open
+              <button class="btn btn-field" @click="$store.browserPage.command('open')">Open
                 Browser</button>
             </div>
+          </template>
+        </div>
+
+        <div class="browser-bottom-status"
+          :class="{ 'is-active': $store.browserPage.isBusy() || $store.browserPage.error, 'has-error': $store.browserPage.error && !$store.browserPage.isBusy() }">
+          <template x-if="$store.browserPage.isBusy()">
+            <div class="browser-status" :title="$store.browserPage.loadingMessage()">
+              <span class="material-symbols-outlined spinning">progress_activity</span>
+              <span x-text="$store.browserPage.loadingMessage()">Loading</span>
+            </div>
+          </template>
+          <template x-if="!$store.browserPage.isBusy() && $store.browserPage.error">
+            <div class="browser-error" x-text="$store.browserPage.error" :title="$store.browserPage.error"></div>
           </template>
         </div>
       </div>
@@ -799,18 +806,17 @@
 
       .browser-stage {
         flex: 1 1 auto;
-        display: flex;
-	        flex-direction: column;
 	        min-height: 0;
 	        overflow: hidden;
 	        position: relative;
-	        background: #fff;
+	        contain: size layout paint;
 	        outline: none;
 	      }
 
 	    .browser-frame {
-	      flex: 1 1 auto;
 	      display: block;
+	      position: absolute;
+	      inset: 0;
 	      width: 100%;
 	      height: 100%;
 	      min-width: 0;
@@ -821,8 +827,6 @@
 	      background: #fff;
       }
 
-    .browser-status,
-    .browser-error,
     .browser-empty {
       display: flex;
       align-items: center;
@@ -831,26 +835,48 @@
       font-size: 0.88rem;
     }
 
-	    .browser-status,
-	    .browser-error {
-	      padding: 0 12px;
-	    }
+    .browser-bottom-status {
+      display: flex;
+      align-items: center;
+      flex: 0 0 24px;
+      min-height: 24px;
+      max-height: 24px;
+      min-width: 0;
+      padding: 0 10px;
+      overflow: hidden;
+      border-top: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
+      background: color-mix(in srgb, var(--color-background) 95%, #000 5%);
+      color: color-mix(in srgb, var(--color-text) 74%, transparent);
+      font-size: 0.76rem;
+      line-height: 1;
+    }
 
-	    .browser-status {
-	      position: absolute;
-	      top: 10px;
-	      left: 10px;
-	      z-index: 5;
-	      width: max-content;
-	      max-width: calc(100% - 20px);
-	      min-height: 32px;
-	      padding: 7px 10px;
-	      border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
-	      border-radius: 7px;
-	      background: color-mix(in srgb, var(--color-background) 92%, transparent);
-	      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
-	      pointer-events: none;
-	    }
+    .browser-bottom-status.has-error {
+      color: #fca5a5;
+      background: color-mix(in srgb, #7f1d1d 22%, var(--color-background));
+    }
+
+    .browser-status,
+    .browser-error {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .browser-status span:not(.material-symbols-outlined),
+    .browser-error {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .browser-status .material-symbols-outlined {
+      font-size: 15px;
+    }
 
 	    .browser-modal .spinning,
     .browser-panel .spinning {
@@ -865,10 +891,6 @@
       }
     }
 
-    .browser-error {
-      color: #9f1239;
-    }
-
     .browser-empty {
       display: grid;
       flex: 1 1 auto;
@@ -879,7 +901,6 @@
       text-align: center;
       padding: 24px;
       color: var(--color-text);
-      background: var(--color-background);
     }
 
     @container (max-width: 460px) {

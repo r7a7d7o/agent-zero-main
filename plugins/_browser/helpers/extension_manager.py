@@ -20,6 +20,7 @@ EXTENSIONS_ROOT_DIR = ("usr", "plugins", PLUGIN_NAME, "extensions")
 EXTENSION_ID_RE = re.compile(r"^[a-p]{32}$")
 WEB_STORE_ID_RE = re.compile(r"(?<![a-p])([a-p]{32})(?![a-p])")
 CHROME_VERSION_RE = re.compile(r"(\d+(?:\.\d+){0,3})")
+CHROME_I18N_MESSAGE_RE = re.compile(r"__MSG_([A-Za-z0-9_@.-]+)__")
 DEFAULT_CHROME_PRODVERSION = "140.0.0.0"
 CHROME_VERSION_COMMANDS = (
     ("google-chrome", "--version"),
@@ -103,7 +104,7 @@ def install_chrome_web_store_extension(source: str) -> dict[str, Any]:
     return {
         "ok": True,
         "id": extension_id,
-        "name": manifest.get("name") or extension_id,
+        "name": _manifest_label(target, manifest, "name") or extension_id,
         "version": manifest.get("version") or "",
         "path": str(target),
         "extension_paths": config["extension_paths"],
@@ -260,8 +261,15 @@ def _enable_extension_path(extension_path: Path) -> dict[str, Any]:
 def _extension_entry(extension_dir: Path, enabled_paths: set[str]) -> dict[str, Any]:
     manifest = _read_manifest(extension_dir)
     extension_path = str(extension_dir)
+    name = (
+        _manifest_label(extension_dir, manifest, "name")
+        or _manifest_label(extension_dir, manifest, "short_name")
+        or extension_dir.name
+    )
     return {
-        "name": manifest.get("name") or extension_dir.name,
+        "name": name,
+        "raw_name": manifest.get("name") or "",
+        "description": _manifest_label(extension_dir, manifest, "description"),
         "version": manifest.get("version") or "",
         "path": extension_path,
         "enabled": extension_path in enabled_paths,
@@ -274,3 +282,81 @@ def _read_manifest(extension_path: Path) -> dict[str, Any]:
         return json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _manifest_label(extension_dir: Path, manifest: dict[str, Any], key: str) -> str:
+    value = str(manifest.get(key) or "").strip()
+    if not value:
+        return ""
+
+    messages = _load_locale_messages(extension_dir, str(manifest.get("default_locale") or ""))
+    if not messages:
+        return "" if CHROME_I18N_MESSAGE_RE.fullmatch(value) else value
+
+    def replace_message(match: re.Match[str]) -> str:
+        message_key = match.group(1)
+        message = _resolve_locale_message(messages, message_key)
+        return message if message is not None else match.group(0)
+
+    resolved = CHROME_I18N_MESSAGE_RE.sub(replace_message, value).strip()
+    if CHROME_I18N_MESSAGE_RE.fullmatch(resolved):
+        return ""
+    return resolved
+
+
+def _load_locale_messages(extension_dir: Path, default_locale: str) -> dict[str, Any]:
+    locale_root = extension_dir / "_locales"
+    if not locale_root.is_dir():
+        return {}
+
+    preferred_locales = [
+        default_locale,
+        default_locale.split("_", 1)[0] if default_locale else "",
+        "en_US",
+        "en",
+    ]
+    for locale in [item for item in preferred_locales if item]:
+        messages = _read_locale_file(locale_root / locale / "messages.json")
+        if messages:
+            return messages
+
+    for messages_path in sorted(locale_root.glob("*/messages.json")):
+        messages = _read_locale_file(messages_path)
+        if messages:
+            return messages
+    return {}
+
+
+def _read_locale_file(messages_path: Path) -> dict[str, Any]:
+    if not messages_path.is_file():
+        return {}
+    try:
+        data = json.loads(messages_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _resolve_locale_message(messages: dict[str, Any], key: str) -> str | None:
+    entry = messages.get(key)
+    if not isinstance(entry, dict):
+        return None
+    message = str(entry.get("message") or "")
+    if not message:
+        return None
+
+    placeholders = entry.get("placeholders")
+    if isinstance(placeholders, dict):
+        for name, placeholder in placeholders.items():
+            if not isinstance(placeholder, dict):
+                continue
+            content = str(placeholder.get("content") or "")
+            if not content:
+                continue
+            message = re.sub(
+                rf"\${re.escape(str(name))}\$",
+                content,
+                message,
+                flags=re.IGNORECASE,
+            )
+    return message

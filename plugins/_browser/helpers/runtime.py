@@ -20,7 +20,11 @@ from helpers import files
 from helpers.defer import DeferredTask
 from helpers.print_style import PrintStyle
 
-from plugins._browser.helpers.config import build_browser_launch_config, get_browser_config
+from plugins._browser.helpers.config import (
+    DEFAULT_HOMEPAGE_KEY,
+    build_browser_launch_config,
+    get_browser_config,
+)
 from plugins._browser.helpers.playwright import configure_playwright_env, ensure_playwright_binary
 
 
@@ -31,6 +35,7 @@ DEFAULT_VIEWPORT = {"width": 1024, "height": 768}
 CHROME_SINGLETON_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
 SCREENCAST_MAX_WIDTH = 4096
 SCREENCAST_MAX_HEIGHT = 4096
+VIEWPORT_SIZE_TOLERANCE = 4
 
 _SPECIAL_SCHEME_RE = re.compile(r"^(?:about|blob|data|file|mailto|tel):", re.I)
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z\d+\-.]*://", re.I)
@@ -460,16 +465,23 @@ class _BrowserRuntimeCore:
         except OSError as exc:
             PrintStyle.warning(f"Could not force-stop orphaned Chromium process {pid}: {exc}")
 
-    async def open(self, url: str = "about:blank") -> dict[str, Any]:
+    async def open(self, url: str = "") -> dict[str, Any]:
         await self.ensure_started()
         page = await self.context.new_page()
         browser_page = self._register_page(page)
         self.last_interacted_browser_id = browser_page.id
-        if url and url != "about:blank":
-            await self._goto(page, normalize_url(url))
+        target_url = self._initial_url(url)
+        if target_url and target_url != "about:blank":
+            await self._goto(page, normalize_url(target_url))
         else:
             await self._settle(page)
         return {"id": browser_page.id, "state": await self._state(browser_page.id)}
+
+    def _initial_url(self, url: str = "") -> str:
+        raw_url = str(url or "").strip()
+        if raw_url:
+            return raw_url
+        return str(get_browser_config().get(DEFAULT_HOMEPAGE_KEY) or "about:blank").strip() or "about:blank"
 
     async def list(self) -> dict[str, Any]:
         await self.ensure_started()
@@ -691,8 +703,10 @@ class _BrowserRuntimeCore:
         }
         current_viewport = page.viewport_size or {}
         changed = (
-            int(current_viewport.get("width") or 0) != viewport["width"]
-            or int(current_viewport.get("height") or 0) != viewport["height"]
+            abs(int(current_viewport.get("width") or 0) - viewport["width"])
+            > VIEWPORT_SIZE_TOLERANCE
+            or abs(int(current_viewport.get("height") or 0) - viewport["height"])
+            > VIEWPORT_SIZE_TOLERANCE
         )
         if changed:
             await page.set_viewport_size(viewport)

@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 
 PLUGIN_NAME = "_browser"
 MODEL_PRESET_KEY = "model_preset"
+DEFAULT_HOMEPAGE_KEY = "default_homepage"
+AUTOFOCUS_ACTIVE_PAGE_KEY = "autofocus_active_page"
 BASE_BROWSER_ARGS = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -42,6 +44,26 @@ def _normalize_model_preset(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _normalize_default_homepage(value: Any) -> str:
+    homepage = str(value or "").strip()
+    return homepage or "about:blank"
+
+
+def _normalize_bool(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
 def _model_config_summary(config: dict[str, Any] | None) -> str:
     if not isinstance(config, dict):
         return ""
@@ -55,6 +77,13 @@ def normalize_browser_config(settings: dict[str, Any] | None) -> dict[str, Any]:
     extension_paths = _normalize_extension_paths(raw.get("extension_paths", []))
     return {
         "extension_paths": extension_paths,
+        DEFAULT_HOMEPAGE_KEY: _normalize_default_homepage(
+            raw.get(DEFAULT_HOMEPAGE_KEY, raw.get("starting_page", "about:blank"))
+        ),
+        AUTOFOCUS_ACTIVE_PAGE_KEY: _normalize_bool(
+            raw.get(AUTOFOCUS_ACTIVE_PAGE_KEY, True),
+            default=True,
+        ),
         MODEL_PRESET_KEY: _normalize_model_preset(raw.get(MODEL_PRESET_KEY, "")),
     }
 

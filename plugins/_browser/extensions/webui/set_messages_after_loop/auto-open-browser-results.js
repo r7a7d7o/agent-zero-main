@@ -21,7 +21,8 @@ export default async function autoOpenBrowserResults(context) {
     const persistedKey = `a0.browser.autoOpened.${key}`;
     if (hasOpened(key, persistedKey)) continue;
 
-    requestAnimationFrame(() => {
+    requestAnimationFrame(async () => {
+      if (!(await browserAllowsToolAutofocus())) return;
       void openBrowserCanvas({ browserId, source: "tool-result" });
     });
   }
@@ -146,4 +147,17 @@ async function openBrowserCanvas(payload = {}) {
     return;
   }
   await window.openModal?.(BROWSER_MODAL);
+}
+
+async function browserAllowsToolAutofocus() {
+  try {
+    const browser = globalThis.Alpine?.store?.("browserPage")
+      || (await import("/plugins/_browser/webui/browser-store.js")).store;
+    if (browser?.allowsToolAutofocus) {
+      return await browser.allowsToolAutofocus();
+    }
+  } catch (error) {
+    console.warn("Browser autofocus setting could not be checked", error);
+  }
+  return true;
 }

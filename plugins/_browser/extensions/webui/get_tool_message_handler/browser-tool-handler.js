@@ -34,6 +34,19 @@ async function openBrowserCanvas(payload = {}) {
   await window.openModal?.(BROWSER_MODAL);
 }
 
+async function browserAllowsToolAutofocus() {
+  try {
+    const browser = globalThis.Alpine?.store?.("browserPage")
+      || (await import("/plugins/_browser/webui/browser-store.js")).store;
+    if (browser?.allowsToolAutofocus) {
+      return await browser.allowsToolAutofocus();
+    }
+  } catch (error) {
+    console.warn("Browser autofocus setting could not be checked", error);
+  }
+  return true;
+}
+
 function parseBrowserResult(content) {
   if (!content || typeof content !== "string") return {};
   try {
@@ -78,7 +91,8 @@ function autoOpenBrowserCanvas(args, result) {
   if (autoOpenedBrowsers.has(key) || sessionStorage.getItem(persistedKey)) return;
   autoOpenedBrowsers.add(key);
   sessionStorage.setItem(persistedKey, "1");
-  requestAnimationFrame(() => {
+  requestAnimationFrame(async () => {
+    if (!(await browserAllowsToolAutofocus())) return;
     void openBrowserCanvas({ browserId, source: "tool" });
   });
 }
