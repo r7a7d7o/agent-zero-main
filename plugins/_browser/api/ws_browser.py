@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time
 from typing import Any, ClassVar
 
 from agent import AgentContext
 from helpers.ws import WsHandler
 from helpers.ws_manager import WsResult
 from plugins._browser.helpers.runtime import get_runtime
+
+
+FRAME_IDLE_TIMEOUT_SECONDS = 0.35
+FRAME_RETRY_DELAY_SECONDS = 0.5
+FRAME_STATE_REFRESH_SECONDS = 0.75
+SCREENCAST_QUALITY = 92
 
 
 class WsBrowser(WsHandler):
@@ -57,9 +65,17 @@ class WsBrowser(WsHandler):
             browsers = listing.get("browsers") or []
             if opened.get("id"):
                 listing["last_interacted_browser_id"] = opened.get("id")
-        active_id = data.get("browser_id") or listing.get("last_interacted_browser_id")
-        if not active_id and browsers:
-            active_id = browsers[0].get("id")
+        active_id = self._active_browser_id(listing, data.get("browser_id"))
+        initial_viewport = self._viewport_from_data(data)
+        if active_id and initial_viewport:
+            await runtime.call(
+                "set_viewport",
+                active_id,
+                initial_viewport["width"],
+                initial_viewport["height"],
+            )
+            listing = await runtime.call("list")
+            browsers = listing.get("browsers") or []
 
         stream_key = (sid, context_id)
         existing = self._streams.pop(stream_key, None)
@@ -187,46 +203,145 @@ class WsBrowser(WsHandler):
         context_id: str,
         browser_id: int | str | None,
     ) -> None:
+        runtime = None
+        stream_id = None
         while True:
             try:
                 runtime = await get_runtime(context_id, create=False)
-                if runtime:
-                    listing = await runtime.call("list")
-                    browsers = listing.get("browsers") or []
-                    browser_ids = {str(browser.get("id")) for browser in browsers}
-                    requested_id = str(browser_id or "") if browser_id else ""
-                    active_id = (
-                        browser_id
-                        if requested_id and requested_id in browser_ids
-                        else listing.get("last_interacted_browser_id")
-                    )
-                    if active_id and str(active_id) not in browser_ids:
-                        active_id = None
-                    if not active_id and browsers:
-                        active_id = browsers[0].get("id")
-                    if active_id:
-                        frame = await runtime.call("screenshot", active_id)
-                        frame["context_id"] = context_id
-                        frame["browsers"] = browsers
-                        await self.emit_to(sid, "browser_viewer_frame", frame)
-                    else:
-                        await self.emit_to(
-                            sid,
-                            "browser_viewer_frame",
-                            {
-                                "context_id": context_id,
-                                "browser_id": None,
-                                "browsers": browsers,
-                                "image": "",
-                                "mime": "",
-                                "state": None,
-                            },
+                if not runtime:
+                    await self._emit_empty_frame(sid, context_id)
+                    await asyncio.sleep(FRAME_RETRY_DELAY_SECONDS)
+                    continue
+
+                listing = await runtime.call("list")
+                browsers = listing.get("browsers") or []
+                active_id = self._active_browser_id(listing, browser_id)
+                if not active_id:
+                    await self._emit_empty_frame(sid, context_id, browsers=browsers)
+                    await asyncio.sleep(FRAME_RETRY_DELAY_SECONDS)
+                    continue
+
+                screencast = await runtime.call(
+                    "start_screencast",
+                    active_id,
+                    quality=SCREENCAST_QUALITY,
+                    every_nth_frame=1,
+                )
+                stream_id = screencast["stream_id"]
+                active_id = screencast["browser_id"]
+                state = screencast.get("state")
+                await self.emit_to(
+                    sid,
+                    "browser_viewer_frame",
+                    {
+                        "context_id": context_id,
+                        "browser_id": active_id,
+                        "browsers": browsers,
+                        "image": "",
+                        "mime": "",
+                        "state": state,
+                    },
+                )
+
+                last_state_refresh = 0.0
+                while True:
+                    now = time.monotonic()
+                    if now - last_state_refresh >= FRAME_STATE_REFRESH_SECONDS:
+                        listing = await runtime.call("list")
+                        browsers = listing.get("browsers") or []
+                        browser_ids = {str(browser.get("id")) for browser in browsers}
+                        if str(active_id) not in browser_ids:
+                            break
+                        state = self._state_for_browser(browsers, active_id, state)
+                        last_state_refresh = now
+
+                    try:
+                        frame = await runtime.call(
+                            "read_screencast_frame",
+                            stream_id,
+                            timeout=FRAME_IDLE_TIMEOUT_SECONDS,
                         )
-                await asyncio.sleep(0.75)
+                    except TimeoutError:
+                        continue
+
+                    frame["context_id"] = context_id
+                    frame["browser_id"] = active_id
+                    frame["browsers"] = browsers
+                    frame["state"] = state
+                    await self.emit_to(sid, "browser_viewer_frame", frame)
             except asyncio.CancelledError:
                 raise
             except Exception:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(FRAME_RETRY_DELAY_SECONDS)
+            finally:
+                if runtime and stream_id:
+                    with contextlib.suppress(Exception):
+                        await runtime.call("stop_screencast", stream_id)
+                    stream_id = None
+
+    @staticmethod
+    def _active_browser_id(
+        listing: dict[str, Any],
+        requested_browser_id: int | str | None,
+    ) -> int | str | None:
+        browsers = listing.get("browsers") or []
+        browser_ids = {str(browser.get("id")) for browser in browsers}
+        requested_id = str(requested_browser_id or "") if requested_browser_id else ""
+        active_id = (
+            requested_browser_id
+            if requested_id and requested_id in browser_ids
+            else listing.get("last_interacted_browser_id")
+        )
+        if active_id and str(active_id) not in browser_ids:
+            active_id = None
+        if not active_id and browsers:
+            active_id = browsers[0].get("id")
+        return active_id
+
+    @staticmethod
+    def _state_for_browser(
+        browsers: list[dict[str, Any]],
+        browser_id: int | str,
+        current_state: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        for browser in browsers:
+            if str(browser.get("id")) == str(browser_id):
+                return browser
+        return current_state
+
+    async def _emit_empty_frame(
+        self,
+        sid: str,
+        context_id: str,
+        *,
+        browsers: list[dict[str, Any]] | None = None,
+    ) -> None:
+        await self.emit_to(
+            sid,
+            "browser_viewer_frame",
+            {
+                "context_id": context_id,
+                "browser_id": None,
+                "browsers": browsers or [],
+                "image": "",
+                "mime": "",
+                "state": None,
+            },
+        )
+
+    @staticmethod
+    def _viewport_from_data(data: dict[str, Any]) -> dict[str, int] | None:
+        try:
+            width = int(data.get("viewport_width") or data.get("width") or 0)
+            height = int(data.get("viewport_height") or data.get("height") or 0)
+        except (TypeError, ValueError):
+            return None
+        if width < 80 or height < 80:
+            return None
+        return {
+            "width": max(320, min(4096, width)),
+            "height": max(200, min(4096, height)),
+        }
 
     @staticmethod
     def _context_id(data: dict[str, Any]) -> str:

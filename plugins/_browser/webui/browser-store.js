@@ -40,6 +40,9 @@ const model = {
   _frameOff: null,
   _stateOff: null,
   _lastFrameAt: 0,
+  _pendingFrameSrc: "",
+  _frameRenderHandle: null,
+  _frameRenderCancel: null,
   _floatingCleanup: null,
   _stageElement: null,
   _stageResizeObserver: null,
@@ -298,21 +301,24 @@ const model = {
     }
   },
 
-  async connectViewer() {
-    if (!this.contextId) {
-      this.connected = false;
-      this.error = "No active chat context is selected.";
-      return;
-    }
-    this.error = "";
-    await this._bindSocketEvents();
-    const response = await websocket.request(
-      "browser_viewer_subscribe",
-      {
-        context_id: this.contextId,
-        browser_id: this.activeBrowserId,
-      },
-      {
+    async connectViewer() {
+      if (!this.contextId) {
+        this.connected = false;
+        this.error = "No active chat context is selected.";
+        return;
+      }
+      this.error = "";
+      await this._bindSocketEvents();
+      const initialViewport = this.currentViewportSize();
+      const response = await websocket.request(
+        "browser_viewer_subscribe",
+        {
+          context_id: this.contextId,
+          browser_id: this.activeBrowserId,
+          viewport_width: initialViewport?.width,
+          viewport_height: initialViewport?.height,
+        },
+        {
         timeoutMs: this.browserInstallExpected
           ? BROWSER_FIRST_INSTALL_TIMEOUT_MS
           : BROWSER_SUBSCRIBE_TIMEOUT_MS,
@@ -329,18 +335,25 @@ const model = {
   async _bindSocketEvents() {
     if (!this._frameOff) {
       const frameHandler = ({ data }) => {
-        if (data?.context_id !== this.contextId) return;
-        this.browsers = data.browsers || this.browsers;
-        this.setActiveBrowserId(data.browser_id || data.state?.id || this.activeBrowserId);
-        this.frameState = data.state || null;
-        if (!this.addressFocused && data.state?.currentUrl) {
-          this.address = data.state.currentUrl;
-        }
-        this.frameSrc = data.image ? `data:${data.mime || "image/jpeg"};base64,${data.image}` : "";
-        if (!data.image && !data.state) {
-          this.setActiveBrowserId(null);
-          this.frameState = null;
-          this.frameSrc = "";
+          if (data?.context_id !== this.contextId) return;
+          this.browsers = data.browsers || this.browsers;
+          this.setActiveBrowserId(data.browser_id || data.state?.id || this.activeBrowserId);
+          if (data.state) {
+            this.frameState = data.state;
+          }
+          if (!this.addressFocused && data.state?.currentUrl) {
+            this.address = data.state.currentUrl;
+          }
+          if (data.image) {
+            this.queueFrameRender(`data:${data.mime || "image/jpeg"};base64,${data.image}`);
+          } else {
+            this.cancelFrameRender();
+            this.frameSrc = "";
+          }
+          if (!data.image && !data.state) {
+            this.setActiveBrowserId(null);
+            this.frameState = null;
+            this.frameSrc = "";
         }
         this._lastFrameAt = Date.now();
       };
@@ -356,12 +369,41 @@ const model = {
       };
       await websocket.on("browser_viewer_state", stateHandler);
       this._stateOff = () => websocket.off("browser_viewer_state", stateHandler);
-    }
-  },
+      }
+    },
 
-  async command(command, extra = {}) {
-    this.error = "";
-    const previousActiveBrowserId = this.activeBrowserId;
+    queueFrameRender(frameSrc) {
+      this._pendingFrameSrc = frameSrc;
+      if (this._frameRenderHandle) return;
+      const schedule = globalThis.requestAnimationFrame?.bind(globalThis);
+      if (schedule) {
+        this._frameRenderCancel = globalThis.cancelAnimationFrame?.bind(globalThis) || null;
+        this._frameRenderHandle = schedule(() => this.flushFrameRender());
+        return;
+      }
+      this._frameRenderCancel = globalThis.clearTimeout?.bind(globalThis) || null;
+      this._frameRenderHandle = globalThis.setTimeout(() => this.flushFrameRender(), 16);
+    },
+
+    flushFrameRender() {
+      this._frameRenderHandle = null;
+      this._frameRenderCancel = null;
+      this.frameSrc = this._pendingFrameSrc || "";
+      this._pendingFrameSrc = "";
+    },
+
+    cancelFrameRender() {
+      if (this._frameRenderHandle && this._frameRenderCancel) {
+        this._frameRenderCancel(this._frameRenderHandle);
+      }
+      this._frameRenderHandle = null;
+      this._frameRenderCancel = null;
+      this._pendingFrameSrc = "";
+    },
+
+    async command(command, extra = {}) {
+      this.error = "";
+      const previousActiveBrowserId = this.activeBrowserId;
     try {
       const response = await websocket.request(
         "browser_viewer_command",
@@ -577,10 +619,11 @@ const model = {
       } catch {}
     }
     this._frameOff?.();
-    this._stateOff?.();
-    this._frameOff = null;
-    this._stateOff = null;
-    this._floatingCleanup?.();
+      this._stateOff?.();
+      this._frameOff = null;
+      this._stateOff = null;
+      this.cancelFrameRender();
+      this._floatingCleanup?.();
     this._floatingCleanup = null;
     this._stageResizeObserver?.disconnect?.();
     this._stageResizeObserver = null;

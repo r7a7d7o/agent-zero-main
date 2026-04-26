@@ -782,24 +782,26 @@
       color: #9f1239;
     }
 
-    .browser-stage {
-      flex: 1 1 auto;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      overflow: auto;
-      background: #fff;
-      outline: none;
-    }
+      .browser-stage {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+        background: #fff;
+        outline: none;
+      }
 
-    .browser-frame {
-      flex: 0 0 auto;
-      display: block;
-      width: 100%;
-      height: auto;
-      user-select: none;
-      background: #fff;
-    }
+      .browser-frame {
+        flex: 0 0 auto;
+        display: block;
+        width: 100%;
+        height: auto;
+        min-width: 0;
+        image-rendering: auto;
+        user-select: none;
+        background: #fff;
+      }
 
     .browser-status,
     .browser-error,

@@ -3,12 +3,14 @@ from __future__ import annotations
 import atexit
 import asyncio
 import base64
+import contextlib
 import os
 import re
 import shutil
 import signal
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,8 @@ CONTENT_HELPER_PATH = PLUGIN_DIR / "assets" / "browser-page-content.js"
 RUNTIME_DATA_KEY = "_browser_runtime"
 DEFAULT_VIEWPORT = {"width": 1024, "height": 768}
 CHROME_SINGLETON_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+SCREENCAST_MAX_WIDTH = 4096
+SCREENCAST_MAX_HEIGHT = 4096
 
 _SPECIAL_SCHEME_RE = re.compile(r"^(?:about|blob|data|file|mailto|tel):", re.I)
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z\d+\-.]*://", re.I)
@@ -84,6 +88,195 @@ class BrowserPage:
     page: Any
 
 
+class _BrowserScreencast:
+    def __init__(
+        self,
+        *,
+        stream_id: str,
+        browser_id: int,
+        session: Any,
+        mime: str,
+    ):
+        self.id = stream_id
+        self.browser_id = browser_id
+        self.session = session
+        self.mime = mime
+        self.queue = asyncio.Queue(maxsize=1)
+        self.stopped = False
+        self._ack_tasks: set[asyncio.Task] = set()
+        self._expected_width = 0
+        self._expected_height = 0
+        self._dimension_mismatches = 0
+
+    async def start(
+        self,
+        *,
+        quality: int,
+        every_nth_frame: int,
+        viewport: dict[str, int],
+    ) -> None:
+        self.session.on("Page.screencastFrame", self._on_frame)
+        width = max(320, min(4096, int(viewport.get("width") or DEFAULT_VIEWPORT["width"])))
+        height = max(200, min(4096, int(viewport.get("height") or DEFAULT_VIEWPORT["height"])))
+        self._expected_width = width
+        self._expected_height = height
+        self._dimension_mismatches = 0
+        with contextlib.suppress(Exception):
+            await self.session.send("Page.enable")
+        await self.session.send(
+            "Emulation.setDeviceMetricsOverride",
+            {
+                "width": width,
+                "height": height,
+                "deviceScaleFactor": 1,
+                "mobile": False,
+                "dontSetVisibleSize": True,
+            },
+        )
+        with contextlib.suppress(Exception):
+            await self.session.send(
+                "Emulation.setVisibleSize",
+                {
+                    "width": width,
+                    "height": height,
+                },
+            )
+        await self.session.send(
+            "Page.startScreencast",
+            {
+                "format": "jpeg",
+                "quality": max(20, min(95, int(quality))),
+                "maxWidth": SCREENCAST_MAX_WIDTH,
+                "maxHeight": SCREENCAST_MAX_HEIGHT,
+                "everyNthFrame": max(1, int(every_nth_frame)),
+            },
+        )
+
+    async def next_frame(self, timeout: float = 1.0) -> dict[str, Any]:
+        frame = await asyncio.wait_for(self.queue.get(), timeout=max(0.1, float(timeout)))
+        if frame is None:
+            raise RuntimeError("Browser screencast stopped.")
+        return frame
+
+    async def stop(self) -> None:
+        if self.stopped:
+            return
+        self.stopped = True
+        self._drop_queued_frames()
+        with contextlib.suppress(asyncio.QueueFull):
+            self.queue.put_nowait(None)
+        with contextlib.suppress(Exception):
+            await self.session.send("Page.stopScreencast")
+        for task in list(self._ack_tasks):
+            task.cancel()
+        if self._ack_tasks:
+            await asyncio.gather(*self._ack_tasks, return_exceptions=True)
+            self._ack_tasks.clear()
+        with contextlib.suppress(Exception):
+            await self.session.detach()
+
+    def _on_frame(self, params: dict[str, Any]) -> None:
+        if self.stopped:
+            return
+        task = asyncio.create_task(self._handle_frame(params or {}))
+        self._ack_tasks.add(task)
+        task.add_done_callback(self._ack_tasks.discard)
+
+    async def _handle_frame(self, params: dict[str, Any]) -> None:
+        try:
+            data = params.get("data") or ""
+            if data and self._frame_matches_viewport(data):
+                self._queue_latest(
+                    {
+                        "browser_id": self.browser_id,
+                        "mime": self.mime,
+                        "image": data,
+                        "metadata": params.get("metadata") or {},
+                    }
+                )
+        finally:
+            session_id = params.get("sessionId")
+            if session_id is not None and not self.stopped:
+                with contextlib.suppress(Exception):
+                    await self.session.send(
+                        "Page.screencastFrameAck",
+                        {"sessionId": int(session_id)},
+                    )
+
+    def _queue_latest(self, frame: dict[str, Any]) -> None:
+        self._drop_queued_frames()
+        with contextlib.suppress(asyncio.QueueFull):
+            self.queue.put_nowait(frame)
+
+    def _frame_matches_viewport(self, data: str) -> bool:
+        if not self._expected_width or not self._expected_height:
+            return True
+        size = self._jpeg_size(data)
+        if not size:
+            return True
+        width, height = size
+        if abs(width - self._expected_width) <= 2 and abs(height - self._expected_height) <= 2:
+            return True
+        self._dimension_mismatches += 1
+        return self._dimension_mismatches > 10
+
+    @staticmethod
+    def _jpeg_size(data: str) -> tuple[int, int] | None:
+        try:
+            raw = base64.b64decode(data, validate=False)
+        except Exception:
+            return None
+        if len(raw) < 10 or raw[:2] != b"\xff\xd8":
+            return None
+        index = 2
+        standalone_markers = {0x01, *range(0xD0, 0xD8)}
+        size_markers = {
+            0xC0,
+            0xC1,
+            0xC2,
+            0xC3,
+            0xC5,
+            0xC6,
+            0xC7,
+            0xC9,
+            0xCA,
+            0xCB,
+            0xCD,
+            0xCE,
+            0xCF,
+        }
+        while index < len(raw) - 9:
+            if raw[index] != 0xFF:
+                index += 1
+                continue
+            while index < len(raw) and raw[index] == 0xFF:
+                index += 1
+            if index >= len(raw):
+                return None
+            marker = raw[index]
+            index += 1
+            if marker in standalone_markers:
+                continue
+            if index + 2 > len(raw):
+                return None
+            segment_length = int.from_bytes(raw[index : index + 2], "big")
+            if segment_length < 2 or index + segment_length > len(raw):
+                return None
+            if marker in size_markers and segment_length >= 7:
+                height = int.from_bytes(raw[index + 3 : index + 5], "big")
+                width = int.from_bytes(raw[index + 5 : index + 7], "big")
+                return width, height
+            index += segment_length
+        return None
+
+    def _drop_queued_frames(self) -> None:
+        while True:
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+
+
 class BrowserRuntime:
     def __init__(self, context_id: str):
         self.context_id = str(context_id)
@@ -118,6 +311,7 @@ class _BrowserRuntimeCore:
         self.playwright = None
         self.context = None
         self.pages: dict[int, BrowserPage] = {}
+        self.screencasts: dict[str, _BrowserScreencast] = {}
         self.next_browser_id = 1
         self.last_interacted_browser_id: int | None = None
         self._content_helper_source: str | None = None
@@ -378,6 +572,7 @@ class _BrowserRuntimeCore:
     async def close_browser(self, browser_id: int | str | None = None) -> dict[str, Any]:
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
+        await self._stop_screencasts_for_browser(resolved_id)
         page = self._page(resolved_id)
         await page.close()
         self.pages.pop(resolved_id, None)
@@ -387,6 +582,7 @@ class _BrowserRuntimeCore:
 
     async def close_all_browsers(self) -> dict[str, Any]:
         await self.ensure_started()
+        await self._stop_all_screencasts()
         for browser_id in list(self.pages):
             try:
                 await self.pages[browser_id].page.close()
@@ -413,6 +609,58 @@ class _BrowserRuntimeCore:
             "state": await self._state(resolved_id),
         }
 
+    async def start_screencast(
+        self,
+        browser_id: int | str | None = None,
+        *,
+        quality: int = 78,
+        every_nth_frame: int = 1,
+    ) -> dict[str, Any]:
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        stream_id = uuid.uuid4().hex
+        session = await self.context.new_cdp_session(page)
+        screencast = _BrowserScreencast(
+            stream_id=stream_id,
+            browser_id=resolved_id,
+            session=session,
+            mime="image/jpeg",
+        )
+        self.screencasts[stream_id] = screencast
+        try:
+            await screencast.start(
+                quality=quality,
+                every_nth_frame=every_nth_frame,
+                viewport=page.viewport_size or DEFAULT_VIEWPORT,
+            )
+        except Exception:
+            self.screencasts.pop(stream_id, None)
+            await screencast.stop()
+            raise
+        self.last_interacted_browser_id = resolved_id
+        return {
+            "stream_id": stream_id,
+            "browser_id": resolved_id,
+            "state": await self._state(resolved_id),
+        }
+
+    async def read_screencast_frame(
+        self,
+        stream_id: str,
+        *,
+        timeout: float = 1.0,
+    ) -> dict[str, Any]:
+        screencast = self.screencasts.get(str(stream_id or ""))
+        if not screencast:
+            raise KeyError("Browser screencast is not active.")
+        return await screencast.next_frame(timeout=timeout)
+
+    async def stop_screencast(self, stream_id: str) -> None:
+        screencast = self.screencasts.pop(str(stream_id or ""), None)
+        if screencast:
+            await screencast.stop()
+
     async def set_viewport(
         self,
         browser_id: int | str | None,
@@ -426,7 +674,14 @@ class _BrowserRuntimeCore:
             "width": max(320, min(4096, int(width or DEFAULT_VIEWPORT["width"]))),
             "height": max(200, min(4096, int(height or DEFAULT_VIEWPORT["height"]))),
         }
-        await page.set_viewport_size(viewport)
+        current_viewport = page.viewport_size or {}
+        changed = (
+            int(current_viewport.get("width") or 0) != viewport["width"]
+            or int(current_viewport.get("height") or 0) != viewport["height"]
+        )
+        if changed:
+            await page.set_viewport_size(viewport)
+            await self._stop_screencasts_for_browser(resolved_id)
         self.last_interacted_browser_id = resolved_id
         return {"state": await self._state(resolved_id), "viewport": viewport}
 
@@ -490,6 +745,7 @@ class _BrowserRuntimeCore:
         return await self._state(resolved_id)
 
     async def close(self, delete_profile: bool = False) -> None:
+        await self._stop_all_screencasts()
         for browser_id in list(self.pages):
             try:
                 await self.pages[browser_id].page.close()
@@ -617,6 +873,19 @@ class _BrowserRuntimeCore:
 
     def _page(self, browser_id: int) -> Any:
         return self.pages[int(browser_id)].page
+
+    async def _stop_screencasts_for_browser(self, browser_id: int) -> None:
+        stream_ids = [
+            stream_id
+            for stream_id, screencast in self.screencasts.items()
+            if screencast.browser_id == int(browser_id)
+        ]
+        for stream_id in stream_ids:
+            await self.stop_screencast(stream_id)
+
+    async def _stop_all_screencasts(self) -> None:
+        for stream_id in list(self.screencasts):
+            await self.stop_screencast(stream_id)
 
     async def _ensure_content_helper(self, page: Any) -> None:
         has_helper = await page.evaluate(

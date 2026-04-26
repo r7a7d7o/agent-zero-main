@@ -1,3 +1,4 @@
+import asyncio
 import sys
 import threading
 from pathlib import Path
@@ -26,7 +27,11 @@ from plugins._browser.helpers.extension_manager import (
     parse_chrome_web_store_extension_id,
 )
 import plugins._browser.helpers.extension_manager as browser_extension_manager_module
-from plugins._browser.helpers.runtime import _BrowserRuntimeCore, normalize_url
+from plugins._browser.helpers.runtime import (
+    _BrowserRuntimeCore,
+    _BrowserScreencast,
+    normalize_url,
+)
 import plugins._browser.helpers.runtime as browser_runtime_module
 from plugins._browser.helpers.playwright import (
     get_playwright_binary,
@@ -318,6 +323,116 @@ def test_browser_viewer_uses_tabs_for_session_switching():
     assert "Scan with A0" in browser_store
     assert "Review with A0" not in browser_store
     assert "Using ${this.mainModelSummary}" in browser_store
+
+
+def test_browser_viewer_uses_cdp_screencast_transport():
+    ws_browser = (PROJECT_ROOT / "plugins" / "_browser" / "api" / "ws_browser.py").read_text(
+        encoding="utf-8"
+    )
+    main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "main.html").read_text(
+        encoding="utf-8"
+    )
+    runtime = (
+        PROJECT_ROOT / "plugins" / "_browser" / "helpers" / "runtime.py"
+    ).read_text(encoding="utf-8")
+    browser_store = (
+        PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'runtime.call("screenshot"' not in ws_browser
+    assert "SCREENCAST_QUALITY = 92" in ws_browser
+    assert "initial_viewport = self._viewport_from_data(data)" in ws_browser
+    assert '"set_viewport"' in ws_browser
+    assert "start_screencast" in ws_browser
+    assert "read_screencast_frame" in ws_browser
+    assert "stop_screencast" in ws_browser
+    assert '"Page.startScreencast"' in runtime
+    assert '"Page.screencastFrame"' in runtime
+    assert '"Page.screencastFrameAck"' in runtime
+    assert '"Page.stopScreencast"' in runtime
+    assert '"Emulation.setDeviceMetricsOverride"' in runtime
+    assert '"Emulation.setVisibleSize"' in runtime
+    assert "asyncio.Queue(maxsize=1)" in runtime
+    assert "await self._stop_screencasts_for_browser(resolved_id)" in runtime
+    assert "queueFrameRender" in browser_store
+    assert "requestAnimationFrame" in browser_store
+    assert "viewport_width: initialViewport?.width" in browser_store
+    assert "viewport_height: initialViewport?.height" in browser_store
+    assert "this.frameState = data.state || null" not in browser_store
+    assert "overflow: hidden;" in main_html
+    assert "object-fit: fill;" not in main_html
+    assert "height: auto;" in main_html
+    assert "image-rendering: auto;" in main_html
+
+
+@pytest.mark.asyncio
+async def test_browser_screencast_acknowledges_and_drops_stale_frames():
+    first_image = (
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsL"
+        "DBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/"
+        "2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy"
+        "MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAKAAoDASIAAhEBAxEB/8QAFQAB"
+        "AAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhADE"
+        "AAAAKf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAA"
+        "AAAAAAAAAAAAA/9oACAEDAQE/ASP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECA"
+        "QE/ASP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAA"
+        "AAAAAAAAAAAAAA/9oACAEBAAE/ISf/2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAA"
+        "AAAAAAAAAAP/aAAgBAwEBPxAk/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEB"
+        "PxAk/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxAn/9k="
+    )
+
+    class FakeSession:
+        def __init__(self):
+            self.handlers = {}
+            self.sent = []
+            self.detached = False
+
+        def on(self, event, handler):
+            self.handlers[event] = handler
+
+        async def send(self, method, params=None):
+            self.sent.append((method, params or {}))
+
+        async def detach(self):
+            self.detached = True
+
+    session = FakeSession()
+    screencast = _BrowserScreencast(
+        stream_id="stream",
+        browser_id=7,
+        session=session,
+        mime="image/jpeg",
+    )
+
+    await screencast.start(quality=92, every_nth_frame=1, viewport={"width": 1118, "height": 662})
+    session.handlers["Page.screencastFrame"](
+        {"data": first_image, "metadata": {"deviceWidth": 10}, "sessionId": 1}
+    )
+    session.handlers["Page.screencastFrame"](
+        {"data": "second", "metadata": {"deviceWidth": 200}, "sessionId": 2}
+    )
+    await asyncio.sleep(0)
+
+    frame = await screencast.next_frame(timeout=0.1)
+
+    assert frame["browser_id"] == 7
+    assert frame["image"] == "second"
+    assert frame["metadata"]["deviceWidth"] == 200
+    assert ("Emulation.setDeviceMetricsOverride", {
+        "width": 1118,
+        "height": 662,
+        "deviceScaleFactor": 1,
+        "mobile": False,
+        "dontSetVisibleSize": True,
+    }) in session.sent
+    assert ("Emulation.setVisibleSize", {"width": 1118, "height": 662}) in session.sent
+    assert ("Page.screencastFrameAck", {"sessionId": 1}) in session.sent
+    assert ("Page.screencastFrameAck", {"sessionId": 2}) in session.sent
+
+    await screencast.stop()
+
+    assert ("Page.stopScreencast", {}) in session.sent
+    assert session.detached is True
 
 
 def test_browser_docker_installs_full_chromium_to_persistent_cache():
