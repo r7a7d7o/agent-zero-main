@@ -175,6 +175,14 @@ const model = {
     return await this.open(targetId, payload);
   },
 
+  async toggleCanvas() {
+    if (this.isOpen) {
+      await this.close();
+      return false;
+    }
+    return await this.open(this.activeSurfaceId || this.surfaces[0]?.id || "");
+  },
+
   setWidth(px, options = {}) {
     const { persist = true } = options;
     const max = this.maxWidth();
