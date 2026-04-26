@@ -95,6 +95,11 @@ some classes like modal-header are shared between the old and the new system */
   white-space: nowrap;
 }
 
+.modal-title {
+  font-size: 0.95rem;
+  letter-spacing: 0;
+}
+
 /* Modal Subheader */
 .modal-subheader {
   display: inline;

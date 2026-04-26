@@ -257,10 +257,11 @@ const model = {
 
   widthStyle() {
     if (this.isMobileMode) return "";
+    if (!this.isOpen) return "width: 0;";
     if (this.isOverlayMode) {
       return `width: min(${this.width}px, calc(100vw - 44px));`;
     }
-    return `width: ${this.isOpen ? this.width : 52}px;`;
+    return `width: ${this.width}px;`;
   },
 
   getSurface(id) {

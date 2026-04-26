@@ -38,10 +38,6 @@ body.right-canvas-resizing {
   transition: width 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
 }
 
-.right-canvas.is-closed .right-canvas-shell {
-  display: none;
-}
-
 .right-canvas-rail {
   display: flex;
   flex: 0 0 52px;
@@ -51,6 +47,33 @@ body.right-canvas-resizing {
   padding: 10px 7px;
   border-right: 1px solid var(--right-canvas-border);
   background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
+}
+
+.right-canvas.is-closed {
+  width: 0 !important;
+  min-width: 0;
+  overflow: visible;
+  border-left: 0;
+  background: transparent;
+}
+
+.right-canvas.is-closed .right-canvas-shell,
+.right-canvas.is-closed .right-canvas-resize-handle {
+  display: none;
+}
+
+.right-canvas.is-closed .right-canvas-rail {
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  z-index: 2;
+  height: auto;
+  max-height: min(70vh, calc(100vh - 32px));
+  transform: translateY(-50%);
+  border: 1px solid var(--right-canvas-border);
+  border-right: 0;
+  border-radius: 8px 0 0 8px;
+  box-shadow: -10px 0 30px rgba(0, 0, 0, 0.24);
 }
 
 .right-canvas-rail-button,
@@ -249,23 +272,6 @@ body.right-canvas-overlay-mode .right-canvas {
 
 body.right-canvas-overlay-mode .right-canvas.is-open {
   transform: translateX(0);
-}
-
-body.right-canvas-overlay-mode .right-canvas.is-closed {
-  overflow: visible;
-}
-
-body.right-canvas-overlay-mode .right-canvas.is-closed .right-canvas-rail {
-  position: absolute;
-  right: 100%;
-  top: 50%;
-  height: auto;
-  max-height: 70vh;
-  transform: translateY(-50%);
-  border: 1px solid var(--right-canvas-border);
-  border-right: 0;
-  border-radius: 8px 0 0 8px;
-  box-shadow: -10px 0 30px rgba(0, 0, 0, 0.24);
 }
 
 body.right-canvas-overlay-mode .right-canvas-resize-handle {
