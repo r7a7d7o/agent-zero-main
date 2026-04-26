@@ -17,21 +17,21 @@ function waitForElement(selector, timeoutMs = 3000) {
   });
 }
 
-export default async function registerDiffViewerSurface(canvas) {
+export default async function registerTimeTravelSurface(canvas) {
   canvas.registerSurface({
-    id: "diff",
-    title: "Diff",
-    icon: "difference",
+    id: "time-travel",
+    title: "Time Travel",
+    icon: "history",
     order: 30,
-    modalPath: "/plugins/_diff_viewer/webui/main.html",
+    modalPath: "/plugins/_time_travel/webui/main.html",
     async open(payload = {}) {
-      await waitForElement('[data-surface-id="diff"] .diff-viewer-panel');
-      const diffViewer = globalThis.Alpine?.store?.("diffViewer");
-      await diffViewer?.onOpen?.(payload);
+      await waitForElement('[data-surface-id="time-travel"] .time-travel-panel');
+      const store = globalThis.Alpine?.store?.("timeTravel");
+      await store?.onOpen?.(payload);
     },
     async close() {
-      const diffViewer = globalThis.Alpine?.store?.("diffViewer");
-      diffViewer?.cleanup?.();
+      const store = globalThis.Alpine?.store?.("timeTravel");
+      store?.cleanup?.();
     },
   });
 }

@@ -1,7 +1,8 @@
 from helpers.api import ApiHandler, Input, Output, Request
 from helpers.file_browser import FileBrowser
-from helpers import runtime
+from helpers import runtime, extension
 from api import get_work_dir_files
+import posixpath
 
 
 class RenameWorkDirFile(ApiHandler):
@@ -21,6 +22,7 @@ class RenameWorkDirFile(ApiHandler):
                 res = await runtime.call_development_function(
                     create_folder, parent_path, new_name
                 )
+                changed_paths = [posixpath.join(str(parent_path).rstrip("/"), new_name)]
             else:
                 file_path = input.get("path", "")
                 if not file_path:
@@ -30,8 +32,22 @@ class RenameWorkDirFile(ApiHandler):
                 res = await runtime.call_development_function(
                     rename_item, file_path, new_name
                 )
+                changed_paths = [
+                    file_path,
+                    posixpath.join(posixpath.dirname(file_path), new_name),
+                ]
 
             if res:
+                await extension.call_extensions_async(
+                    "workdir_file_mutation_after",
+                    agent=None,
+                    data={
+                        "action": action,
+                        "path": changed_paths[-1],
+                        "paths": changed_paths,
+                        "current_path": current_path,
+                    },
+                )
                 result = await runtime.call_development_function(
                     get_work_dir_files.get_files, current_path
                 )
