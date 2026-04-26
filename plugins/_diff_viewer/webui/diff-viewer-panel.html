@@ -1,0 +1,572 @@
+<html>
+<head>
+  <script type="module">
+    import { store } from "/plugins/_diff_viewer/webui/diff-viewer-store.js";
+  </script>
+</head>
+<body>
+  <div class="diff-viewer-panel" x-data x-create="$store.diffViewer.onMount($el, xAttrs($el) || {})" x-destroy="$store.diffViewer.cleanup()">
+    <template x-if="$store.diffViewer">
+      <div class="diff-viewer-shell">
+        <div class="diff-viewer-toolbar">
+          <div class="diff-viewer-title">
+            <span class="material-symbols-outlined">difference</span>
+            <span>Review</span>
+          </div>
+          <span class="diff-viewer-spacer"></span>
+          <button type="button" class="diff-viewer-icon-button" title="Expand all" aria-label="Expand all" @click="$store.diffViewer.expandAll()" :disabled="!$store.diffViewer.hasChanges()">
+            <span class="material-symbols-outlined">unfold_more</span>
+          </button>
+          <button type="button" class="diff-viewer-icon-button" title="Collapse all" aria-label="Collapse all" @click="$store.diffViewer.collapseAll()" :disabled="!$store.diffViewer.hasChanges()">
+            <span class="material-symbols-outlined">unfold_less</span>
+          </button>
+          <button type="button" class="diff-viewer-icon-button" title="Refresh" aria-label="Refresh" @click="$store.diffViewer.refresh()" :disabled="$store.diffViewer.loading">
+            <span class="material-symbols-outlined" :class="{ spinning: $store.diffViewer.loading }">refresh</span>
+          </button>
+        </div>
+
+        <div class="diff-viewer-summary">
+          <div class="diff-viewer-summary-main">
+            <strong x-text="$store.diffViewer.payload?.totals?.files || 0"></strong>
+            <span>files changed</span>
+            <span class="diff-add" x-text="$store.diffViewer.formatSigned($store.diffViewer.payload?.totals?.additions, '+')"></span>
+            <span class="diff-del" x-text="$store.diffViewer.formatSigned($store.diffViewer.payload?.totals?.deletions, '-')"></span>
+          </div>
+          <div class="diff-viewer-summary-meta">
+            <span x-text="$store.diffViewer.payload?.branch || 'no branch'"></span>
+            <span class="diff-viewer-dot"></span>
+            <span :title="$store.diffViewer.workspacePath" x-text="$store.diffViewer.workspacePath || 'workspace'"></span>
+          </div>
+        </div>
+
+        <div class="diff-viewer-status" x-show="$store.diffViewer.loading || $store.diffViewer.error" style="display: none;">
+          <span class="material-symbols-outlined" :class="{ spinning: $store.diffViewer.loading }" x-text="$store.diffViewer.loading ? 'progress_activity' : 'error'"></span>
+          <span x-text="$store.diffViewer.loading ? 'Loading changes...' : $store.diffViewer.error"></span>
+        </div>
+
+        <div class="diff-viewer-body">
+          <template x-if="$store.diffViewer.payload && !$store.diffViewer.payload.is_git_repo && !$store.diffViewer.loading && !$store.diffViewer.error">
+            <div class="diff-viewer-empty">
+              <span class="material-symbols-outlined">folder_off</span>
+              <strong>Not a Git workspace</strong>
+              <span x-text="$store.diffViewer.workspacePath"></span>
+            </div>
+          </template>
+
+          <template x-if="$store.diffViewer.payload?.is_git_repo && !$store.diffViewer.hasChanges() && !$store.diffViewer.loading && !$store.diffViewer.error">
+            <div class="diff-viewer-empty">
+              <span class="material-symbols-outlined">check_circle</span>
+              <strong>No changes</strong>
+              <span>The selected context workspace is clean.</span>
+            </div>
+          </template>
+
+          <div class="diff-viewer-groups" x-show="$store.diffViewer.hasChanges()" style="display: none;">
+            <template x-for="group in $store.diffViewer.visibleGroups()" :key="group.kind">
+              <section class="diff-viewer-group">
+                <header class="diff-viewer-group-header">
+                  <span x-text="$store.diffViewer.groupTitle(group.kind)"></span>
+                  <span class="diff-viewer-count" x-text="group.files.length"></span>
+                </header>
+                <template x-for="file in group.files" :key="$store.diffViewer.fileKey(group, file)">
+                  <article class="diff-file">
+                    <button type="button" class="diff-file-header" @click="$store.diffViewer.toggleFile(group, file)" :title="$store.diffViewer.fileTitle(file)">
+                      <span class="material-symbols-outlined diff-file-chevron" x-text="$store.diffViewer.isExpanded(group, file) ? 'expand_less' : 'expand_more'"></span>
+                      <span class="diff-file-name" x-text="$store.diffViewer.fileTitle(file)"></span>
+                      <span class="diff-file-status" x-text="$store.diffViewer.statusLabel(file)"></span>
+                      <span class="diff-file-counts">
+                        <span class="diff-add" x-text="$store.diffViewer.formatSigned(file.additions, '+')"></span>
+                        <span class="diff-del" x-text="$store.diffViewer.formatSigned(file.deletions, '-')"></span>
+                      </span>
+                    </button>
+
+                    <div class="diff-file-tools" x-show="$store.diffViewer.isExpanded(group, file)" style="display: none;">
+                      <button type="button" class="diff-viewer-tool-button" title="Open containing folder" @click="$store.diffViewer.openContainingFolder(file)">
+                        <span class="material-symbols-outlined">folder_open</span>
+                        <span>Folder</span>
+                      </button>
+                      <button type="button" class="diff-viewer-tool-button" title="Copy path" @click="$store.diffViewer.copyPath(file)">
+                        <span class="material-symbols-outlined">content_copy</span>
+                        <span>Path</span>
+                      </button>
+                    </div>
+
+                    <div class="diff-file-body" x-show="$store.diffViewer.isExpanded(group, file)" style="display: none;">
+                      <template x-if="file.binary">
+                        <div class="diff-file-note">
+                          <span class="material-symbols-outlined">data_object</span>
+                          <span>Binary file changed.</span>
+                        </div>
+                      </template>
+                      <template x-if="file.too_large && !file.binary">
+                        <div class="diff-file-note">
+                          <span class="material-symbols-outlined">text_snippet</span>
+                          <span>Diff is too large to render inline.</span>
+                        </div>
+                      </template>
+                      <template x-if="!file.binary && !file.too_large && file.patch">
+                        <div class="diff-code" role="table" aria-label="Unified diff">
+                          <template x-for="line in $store.diffViewer.patchLines(file)" :key="line.id">
+                            <div class="diff-line" :class="`is-${line.type}`" role="row">
+                              <span class="diff-line-marker" x-text="line.type === 'add' ? '+' : (line.type === 'del' ? '-' : '')"></span>
+                              <code x-text="line.text"></code>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </article>
+                </template>
+              </section>
+            </template>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <style>
+    .diff-viewer-panel,
+    .diff-viewer-shell {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      background: color-mix(in srgb, var(--color-background) 96%, #000 4%);
+      color: var(--color-text);
+    }
+
+    .diff-viewer-panel {
+      container-type: inline-size;
+    }
+
+    .modal-inner.diff-viewer-modal {
+      box-sizing: border-box;
+      container-type: inline-size;
+      width: min(82vw, 1180px);
+      height: min(88vh, 900px);
+      min-width: min(340px, calc(100vw - 16px));
+      min-height: min(500px, calc(100vh - 16px));
+      max-width: calc(100vw - 16px);
+      max-height: calc(100vh - 16px);
+      resize: both;
+      border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+      border-radius: 7px;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+      background: color-mix(in srgb, var(--color-background) 94%, #000 6%);
+    }
+
+    .modal.modal-floating {
+      pointer-events: none;
+    }
+
+    .modal.modal-floating .modal-inner {
+      pointer-events: auto;
+    }
+
+    .modal-inner.diff-viewer-modal .modal-header {
+      min-height: 34px;
+      padding: 0.35rem 0.75rem 0.35rem 1rem;
+      cursor: move;
+      user-select: none;
+      background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+    }
+
+    .modal-inner.diff-viewer-modal .modal-scroll {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+      padding: 0;
+    }
+
+    .modal-inner.diff-viewer-modal .modal-bd.diff-viewer-modal-body {
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      padding: 0;
+    }
+
+    .modal-inner.diff-viewer-modal .modal-bd.diff-viewer-modal-body > x-component,
+    .modal-inner.diff-viewer-modal .modal-bd.diff-viewer-modal-body > div[x-data] {
+      display: flex;
+      flex: 1 1 auto;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+    }
+
+    .diff-viewer-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 44px;
+      padding: 7px 9px;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 66%, transparent);
+      background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
+    }
+
+    .diff-viewer-title,
+    .diff-viewer-summary-main,
+    .diff-viewer-summary-meta,
+    .diff-viewer-status,
+    .diff-file-counts,
+    .diff-file-tools,
+    .diff-viewer-tool-button,
+    .diff-file-note {
+      display: flex;
+      align-items: center;
+    }
+
+    .diff-viewer-title {
+      gap: 7px;
+      min-width: 0;
+      font-weight: 700;
+      font-size: 0.9rem;
+    }
+
+    .diff-viewer-title .material-symbols-outlined {
+      font-size: 19px;
+    }
+
+    .diff-viewer-spacer {
+      flex: 1 1 auto;
+      min-width: 8px;
+    }
+
+    .diff-viewer-icon-button,
+    .diff-viewer-tool-button {
+      appearance: none;
+      border: 1px solid color-mix(in srgb, var(--color-border) 64%, transparent);
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--color-panel) 80%, transparent);
+      color: var(--color-text);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .diff-viewer-icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      min-width: 32px;
+      padding: 0;
+    }
+
+    .diff-viewer-tool-button {
+      gap: 5px;
+      min-height: 28px;
+      padding: 4px 8px;
+      font-size: 0.76rem;
+    }
+
+    .diff-viewer-icon-button:hover:not(:disabled),
+    .diff-viewer-tool-button:hover {
+      background: color-mix(in srgb, var(--color-background-hover) 70%, transparent);
+      border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+    }
+
+    .diff-viewer-icon-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    .diff-viewer-icon-button .material-symbols-outlined,
+    .diff-viewer-tool-button .material-symbols-outlined {
+      font-size: 17px;
+    }
+
+    .diff-viewer-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 3px;
+      padding: 9px 11px;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 54%, transparent);
+      background: color-mix(in srgb, var(--color-panel) 54%, transparent);
+    }
+
+    .diff-viewer-summary-main {
+      gap: 5px;
+      min-width: 0;
+      font-size: 0.86rem;
+    }
+
+    .diff-viewer-summary-meta {
+      gap: 7px;
+      min-width: 0;
+      color: var(--color-text-muted);
+      font-size: 0.74rem;
+    }
+
+    .diff-viewer-summary-meta span:last-child {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .diff-viewer-dot {
+      width: 4px;
+      height: 4px;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-text-muted) 50%, transparent);
+    }
+
+    .diff-add {
+      color: #31c48d;
+    }
+
+    .diff-del {
+      color: #f05252;
+    }
+
+    .diff-viewer-status {
+      gap: 8px;
+      min-height: 34px;
+      padding: 6px 11px;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 44%, transparent);
+      color: var(--color-text-muted);
+      font-size: 0.82rem;
+    }
+
+    .diff-viewer-body {
+      display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .diff-viewer-groups {
+      display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      flex-direction: column;
+      gap: 12px;
+      padding: 12px;
+    }
+
+    .diff-viewer-group {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .diff-viewer-group-header {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 26px;
+      color: var(--color-text);
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+
+    .diff-viewer-count {
+      min-width: 22px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-panel) 78%, transparent);
+      color: var(--color-text-muted);
+      text-align: center;
+      font-size: 0.72rem;
+    }
+
+    .diff-file {
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--color-panel) 72%, transparent);
+    }
+
+    .diff-file-header {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 7px;
+      width: 100%;
+      min-height: 38px;
+      padding: 0 9px;
+      border: 0;
+      background: transparent;
+      color: var(--color-text);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .diff-file-header:hover {
+      background: color-mix(in srgb, var(--color-background-hover) 56%, transparent);
+    }
+
+    .diff-file-chevron {
+      font-size: 18px;
+      color: var(--color-text-muted);
+    }
+
+    .diff-file-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--font-family-code);
+      font-size: 0.78rem;
+      font-weight: 650;
+    }
+
+    .diff-file-status {
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-background) 70%, transparent);
+      color: var(--color-text-muted);
+      font-size: 0.68rem;
+      text-transform: capitalize;
+      white-space: nowrap;
+    }
+
+    .diff-file-counts {
+      gap: 5px;
+      justify-content: end;
+      min-width: 72px;
+      font-family: var(--font-family-code);
+      font-size: 0.74rem;
+    }
+
+    .diff-file-tools {
+      justify-content: flex-end;
+      gap: 6px;
+      min-height: 34px;
+      padding: 4px 8px;
+      border-top: 1px solid color-mix(in srgb, var(--color-border) 34%, transparent);
+      background: color-mix(in srgb, var(--color-background) 55%, transparent);
+    }
+
+    .diff-file-body {
+      border-top: 1px solid color-mix(in srgb, var(--color-border) 44%, transparent);
+    }
+
+    .diff-file-note {
+      gap: 8px;
+      padding: 12px;
+      color: var(--color-text-muted);
+      font-size: 0.82rem;
+    }
+
+    .diff-code {
+      overflow: auto;
+      padding: 4px 0;
+      background: color-mix(in srgb, var(--color-background) 91%, #000 9%);
+      font-family: var(--font-family-code);
+      font-size: 0.74rem;
+      line-height: 1.45;
+    }
+
+    .diff-line {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      min-width: max-content;
+    }
+
+    .diff-line-marker {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      min-height: 1.45em;
+      padding-right: 5px;
+      background: inherit;
+      color: var(--color-text-muted);
+      text-align: right;
+      user-select: none;
+    }
+
+    .diff-line code {
+      display: block;
+      min-height: 1.45em;
+      padding: 0 10px 0 6px;
+      color: inherit;
+      font: inherit;
+      white-space: pre;
+    }
+
+    .diff-line.is-add {
+      background: rgba(39, 174, 96, 0.16);
+      color: color-mix(in srgb, #8df0b0 78%, var(--color-text));
+    }
+
+    .diff-line.is-del {
+      background: rgba(231, 76, 60, 0.17);
+      color: color-mix(in srgb, #ffaaa2 78%, var(--color-text));
+    }
+
+    .diff-line.is-hunk {
+      background: rgba(99, 102, 241, 0.16);
+      color: color-mix(in srgb, #b9c3ff 80%, var(--color-text));
+    }
+
+    .diff-line.is-meta,
+    .diff-line.is-note {
+      color: var(--color-text-muted);
+    }
+
+    .diff-viewer-empty {
+      display: grid;
+      flex: 1 1 auto;
+      place-items: center;
+      align-content: center;
+      gap: 7px;
+      min-width: 0;
+      padding: 24px;
+      color: var(--color-text-muted);
+      text-align: center;
+    }
+
+    .diff-viewer-empty .material-symbols-outlined {
+      font-size: 28px;
+    }
+
+    .diff-viewer-empty span:last-child {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.78rem;
+    }
+
+    .diff-viewer-panel .spinning {
+      display: inline-block;
+      animation: diff-viewer-spin 0.8s linear infinite;
+    }
+
+    @keyframes diff-viewer-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @container (max-width: 560px) {
+      .diff-file-header {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+      }
+
+      .diff-file-status {
+        display: none;
+      }
+
+      .diff-viewer-tool-button span:last-child {
+        display: none;
+      }
+    }
+  </style>
+</body>
+</html>

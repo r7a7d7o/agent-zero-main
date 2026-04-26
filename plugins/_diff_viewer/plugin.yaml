@@ -1,0 +1,8 @@
+name: _diff_viewer
+title: Diff Viewer
+description: Right canvas Git working tree diff viewer for the active chat or task workspace.
+version: 0.1.0
+always_enabled: false
+settings_sections: []
+per_project_config: false
+per_agent_config: false
