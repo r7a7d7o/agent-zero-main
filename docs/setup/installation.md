@@ -318,7 +318,7 @@ See the [Agent Profiles guide](../guides/agent-profiles.md) for profile file loc
 > Since v0.9.7, custom prompts belong in `/a0/agents/<agent_name>/prompts/` rather than a shared `/prompts` folder. See the [Extensions guide](../developer/extensions.md#prompts) for details.
 
 > [!NOTE]
-> The Hacker profile is included in the main image. After launch, choose the **hacker** agent profile in Settings if you want the security-focused prompts and tooling. The "hacker" branch is deprecated.
+> The Hacker profile is included in the main image. After launch, choose the **hacker** agent profile in Settings to make it the default for new chats, or switch the selected chat from the composer profile selector. The "hacker" branch is deprecated.
 
 ![settings](../res/setup/settings/1-agentConfig.png)
 

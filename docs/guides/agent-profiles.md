@@ -2,7 +2,7 @@
 
 Agent profiles let you give Agent Zero different identities, prompt overrides, tools, extensions, and optionally model settings. Use them when you want a specialized agent such as a researcher, developer, security auditor, copywriter, or domain-specific assistant.
 
-You can select the active profile from **Settings > Agent Config** or from the chat composer profile selector.
+Use **Settings > Agent Config** to choose the default profile for new chats. The chat composer profile selector shows and changes the profile for the currently selected chat only, so different chats can keep different active profiles.
 
 ## Where Profiles Live
 

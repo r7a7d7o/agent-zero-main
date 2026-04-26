@@ -116,6 +116,12 @@ def remove_msg_files(ctxid):
 
 
 def _serialize_context(context: AgentContext):
+    profile = str(
+        getattr(context.config, "profile", None)
+        or getattr(context.agent0.config, "profile", None)
+        or ""
+    )
+
     # serialize agents
     agents = []
     agent = context.agent0
@@ -145,6 +151,7 @@ def _serialize_context(context: AgentContext):
         "streaming_agent": (
             context.streaming_agent.number if context.streaming_agent else 0
         ),
+        "agent_profile": profile,
         "log": _serialize_log(context.log),
         "data": data,
         "output_data": output_data,
@@ -179,7 +186,9 @@ def _serialize_log(log: Log):
 
 
 def _deserialize_context(data):
-    config = initialize_agent()
+    profile = data.get("agent_profile")
+    override_settings = {"agent_profile": profile} if profile else None
+    config = initialize_agent(override_settings=override_settings)
     log = _deserialize_log(data.get("log", None))
 
     context = AgentContext(

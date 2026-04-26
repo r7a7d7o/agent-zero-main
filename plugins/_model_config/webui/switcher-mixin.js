@@ -144,35 +144,26 @@ export const switcherMethods = {
       return false;
     }
 
-    const activeProfile = selectedContext?.agent_profile || this.agentProfileSettings?.agent_profile || "";
+    const activeProfile = selectedContext?.agent_profile || "";
     if (activeProfile === agentProfile) return true;
 
     this.agentProfileSaving = true;
     try {
       await this.loadAgentProfiles();
-      const settings = { ...(this.agentProfileSettings || {}), agent_profile: agentProfile };
-      const res = await fetchApi("/settings_set", {
+      const res = await fetchApi("/agent_profile_set", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings }),
+        body: JSON.stringify({ context_id: contextId, agent_profile: agentProfile }),
       });
+      if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      if (!data.settings) return false;
+      if (!data.ok) return false;
 
-      this.agentProfileSettings = data.settings;
-      this.agentProfiles = (data.additional?.agent_subdirs || this.agentProfiles)
-        .map(profile => ({
-          key: profile.value || profile.key || "",
-          label: profile.label || profile.value || profile.key || "",
-        }))
-        .filter(profile => profile.key && profile.key !== "_example");
-
-      const label = this.agentProfiles.find(profile => profile.key === agentProfile)?.label || agentProfile;
+      const label = data.agent_profile_label || this.agentProfiles.find(profile => profile.key === agentProfile)?.label || agentProfile;
       if (selectedContext) {
-        selectedContext.agent_profile = agentProfile;
+        selectedContext.agent_profile = data.agent_profile || agentProfile;
         selectedContext.agent_profile_label = label;
       }
-      document.dispatchEvent(new CustomEvent("settings-updated", { detail: this.agentProfileSettings }));
       window.justToast?.(`Agent profile: ${label}`, "success", 1600, "agent-profile-switch");
       return true;
     } catch (e) {
