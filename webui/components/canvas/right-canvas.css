@@ -40,7 +40,7 @@ body.right-canvas-resizing {
 
 .right-canvas-rail {
   position: absolute;
-  top: 24%;
+  top: 33%;
   right: 100%;
   z-index: 4;
   display: flex;
