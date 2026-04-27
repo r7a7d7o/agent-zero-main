@@ -872,18 +872,20 @@ class Agent:
         # search for tool usage requests in agent message
         tool_request = extract_tools.json_parse_dirty(msg)
 
+        raw_tool_name = ""
+        tool_args = {}
+
         # Only validate when extraction produced an object; None means no JSON tool
-        # block was found — the misformat warning path below handles that.
+        # block was found - the misformat warning path below handles that.
         if tool_request is not None:
             try:
-                await self.validate_tool_request(tool_request)
+                raw_tool_name, tool_args = extract_tools.normalize_tool_request(
+                    tool_request
+                )
             except ValueError:
                 tool_request = None  # treat structural validation errors as misformat
 
         if tool_request is not None:
-            raw_tool_name = tool_request.get("tool_name", tool_request.get("tool",""))  # Get the raw tool name
-            tool_args = tool_request.get("tool_args", tool_request.get("args", {}))
-
             tool_name = raw_tool_name  # Initialize tool_name with raw_tool_name
             tool_method = None  # Initialize tool_method
 
@@ -977,14 +979,7 @@ class Agent:
 
     @extension.extensible
     async def validate_tool_request(self, tool_request: Any):
-        if not isinstance(tool_request, dict):
-            raise ValueError("Tool request must be a dictionary")
-        tool_name = tool_request.get("tool_name") or tool_request.get("tool")
-        if not tool_name or not isinstance(tool_name, str):
-            raise ValueError("Tool request must have a tool_name (type string) field")
-        tool_args = tool_request.get("tool_args", tool_request.get("args"))
-        if tool_args is None or not isinstance(tool_args, dict):
-            raise ValueError("Tool request must have a tool_args (type dictionary) field")
+        extract_tools.normalize_tool_request(tool_request)
 
 
 
