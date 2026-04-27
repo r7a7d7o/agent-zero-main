@@ -96,6 +96,7 @@ const model = {
   _surfaceOpenedAt: 0,
   _connectSequence: 0,
   _viewerToken: "",
+  _contextCreatePromise: null,
   extensionMenuOpen: false,
   extensionInstallUrl: "",
   extensionActionLoading: false,
@@ -202,6 +203,47 @@ const model = {
     const urlContext = new URLSearchParams(globalThis.location?.search || "").get("ctxid");
     const selectedChat = globalThis.Alpine?.store?.("chats")?.selected;
     return globalThis.getContext?.() || urlContext || selectedChat || "";
+  },
+
+  async ensureContextId() {
+    const existingContextId = String(this.resolveContextId() || "").trim();
+    if (existingContextId) {
+      this.contextId = existingContextId;
+      return existingContextId;
+    }
+
+    if (!this._contextCreatePromise) {
+      this._contextCreatePromise = this.createChatContextForBrowser();
+    }
+
+    try {
+      this.contextId = await this._contextCreatePromise;
+      return this.contextId;
+    } finally {
+      this._contextCreatePromise = null;
+    }
+  },
+
+  async createChatContextForBrowser() {
+    const response = await callJsonApi("/chat_create", {
+      current_context: this.resolveContextId() || "",
+    });
+    const selectedContextId = String(this.resolveContextId() || "").trim();
+    if (selectedContextId) return selectedContextId;
+
+    const contextId = String(response?.ctxid || "").trim();
+    if (!response?.ok || !contextId) {
+      throw new Error(response?.error || "Could not create a chat for Browser.");
+    }
+
+    if (typeof globalThis.setContext === "function") {
+      globalThis.setContext(contextId);
+    } else {
+      const chatsStore = globalThis.Alpine?.store?.("chats");
+      chatsStore?.setSelected?.(contextId);
+    }
+
+    return contextId;
   },
 
   async openExtensionsSettings() {
@@ -386,8 +428,8 @@ const model = {
     } else {
       this.setupCanvasSurface(element);
     }
-    this.contextId = this.resolveContextId();
     try {
+      await this.ensureContextId();
       await this.refreshStatus();
       const viewport = await this.waitForSurfaceViewport();
       this.resetRenderedFrameIfViewportChanged(viewport, requestedBrowserId);
@@ -475,9 +517,18 @@ const model = {
   },
 
   async connectViewer(options = {}) {
-    if (!this.contextId) {
+    let contextId = "";
+    try {
+      contextId = await this.ensureContextId();
+    } catch (error) {
       this.connected = false;
-      this.error = "No active chat context is selected.";
+      this.switchingBrowserId = null;
+      this._surfaceSwitching = false;
+      throw error;
+    }
+    if (!contextId) {
+      this.connected = false;
+      this.error = "Could not create a chat for Browser.";
       this.switchingBrowserId = null;
       this._surfaceSwitching = false;
       return;
@@ -638,6 +689,7 @@ const model = {
     this.commandInFlight = true;
     const previousActiveBrowserId = this.activeBrowserId;
     try {
+      await this.ensureContextId();
       const response = await websocket.request(
         "browser_viewer_command",
         {

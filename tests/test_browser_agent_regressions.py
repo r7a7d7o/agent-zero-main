@@ -347,6 +347,19 @@ def test_browser_viewer_allows_slow_extension_startup():
     assert "Installing Chromium for the first Browser run" in js
 
 
+def test_browser_viewer_creates_chat_when_no_context_is_selected():
+    js = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "async ensureContextId()" in js
+    assert "async createChatContextForBrowser()" in js
+    assert 'callJsonApi("/chat_create"' in js
+    assert "globalThis.setContext(contextId)" in js
+    assert "await this.ensureContextId();" in js
+    assert "No active chat context is selected." not in js
+
+
 def test_browser_canvas_startup_waits_for_raw_viewport_settle():
     js = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js").read_text(
         encoding="utf-8"
