@@ -8,6 +8,11 @@ export const store = createStore("onboarding", {
     step: 1,
     config: null,
     loading: true,
+    steps: [
+        { step: 1, label: "Main Model" },
+        { step: 2, label: "Utility Model" },
+        { step: 3, label: "Ready" },
+    ],
 
     async init() {
         this.step = 1;
@@ -60,6 +65,19 @@ export const store = createStore("onboarding", {
         if (this.step < 3) {
             this.step++;
         }
+    },
+
+    nextButtonLabel() {
+        if (this.step === 1) return "Use Main Model";
+        if (this.step === 2) return "Use Utility Model";
+        return "Next";
+    },
+
+    providerLabel(modelKey) {
+        const provider = this.config?.[modelKey]?.provider || "";
+        const providers = modelConfigStore.getProviders(modelKey) || [];
+        const match = providers.find((item) => item.value === provider);
+        return match?.label || provider || "Provider";
     },
 
     async finish() {
