@@ -11,16 +11,20 @@ MIN_EXPLICIT_ARTIFACT_CHARS = 240
 MIN_EXPLICIT_ARTIFACT_WORDS = 35
 
 CREATE_TERMS = {
-    "write",
-    "draft",
+    "author",
+    "build",
     "compose",
+    "convert",
     "create",
+    "draft",
+    "format",
     "generate",
+    "make",
     "prepare",
     "produce",
-    "make",
-    "build",
-    "author",
+    "save",
+    "turn",
+    "write",
 }
 
 DOCUMENT_TERMS = {
@@ -65,6 +69,49 @@ PRESENTATION_TERMS = {
     "slides",
 }
 
+DELIVERABLE_TERMS = {
+    "brief",
+    "contract",
+    "cv",
+    "letter",
+    "manual",
+    "memo",
+    "policy",
+    "proposal",
+    "report",
+    "resume",
+    "spec",
+    "whitepaper",
+}
+
+EXPLICIT_FORMAT_TERMS = {
+    "docx",
+    "odt",
+    "ods",
+    "odp",
+    "pptx",
+    "xlsx",
+}
+
+HANDOFF_TERMS = {
+    "artifact",
+    "artifacts",
+    "canvas",
+    "downloadable",
+    "editable",
+    "in office",
+    "office canvas",
+    "open it",
+    "open in office",
+    "save it",
+    "save this",
+}
+
+FILE_HANDOFF_TERMS = {
+    "file",
+    "files",
+}
+
 CHAT_ONLY_TERMS = {
     "answer in chat",
     "in chat",
@@ -107,10 +154,12 @@ def decide_response_artifact(user_message: Any, response_text: str) -> ArtifactD
     if looks_like_tool_or_status_response(response_text):
         return None
 
-    kind, fmt, explicit_artifact = infer_kind_and_format(lowered_user)
-    if not explicit_artifact and not has_document_creation_intent(lowered_user):
+    kind, fmt = infer_kind_and_format(lowered_user)
+    intent = artifact_intent(lowered_user, response_text)
+    if not intent:
         return None
 
+    explicit_artifact = intent == "explicit_handoff"
     if not is_substantial(response_text, explicit_artifact):
         return None
 
@@ -120,7 +169,7 @@ def decide_response_artifact(user_message: Any, response_text: str) -> ArtifactD
         fmt=fmt,
         title=title,
         content=response_text,
-        reason="explicit" if explicit_artifact else "document_intent",
+        reason=intent,
     )
 
 
@@ -151,17 +200,22 @@ def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value.lower()).strip()
 
 
-def infer_kind_and_format(lowered_user: str) -> tuple[str, str, bool]:
-    explicit = False
+def infer_kind_and_format(lowered_user: str) -> tuple[str, str]:
     if has_any(lowered_user, PRESENTATION_TERMS):
-        explicit = True
-        return "presentation", "pptx", explicit
+        return "presentation", "pptx"
     if has_any(lowered_user, SPREADSHEET_TERMS):
-        explicit = True
-        return "spreadsheet", "xlsx", explicit
-    if has_any(lowered_user, DOCUMENT_TERMS):
-        explicit = True
-    return "document", "docx", explicit
+        return "spreadsheet", "xlsx"
+    return "document", "docx"
+
+
+def artifact_intent(lowered_user: str, response_text: str) -> str | None:
+    if not has_document_creation_intent(lowered_user):
+        return None
+    if has_explicit_handoff_signal(lowered_user):
+        return "explicit_handoff"
+    if has_any(lowered_user, DELIVERABLE_TERMS) and looks_like_standalone_artifact(response_text):
+        return "document_intent"
+    return None
 
 
 def has_document_creation_intent(lowered_user: str) -> bool:
@@ -169,6 +223,28 @@ def has_document_creation_intent(lowered_user: str) -> bool:
         lowered_user,
         DOCUMENT_TERMS | SPREADSHEET_TERMS | PRESENTATION_TERMS,
     )
+
+
+def has_explicit_handoff_signal(lowered_user: str) -> bool:
+    if has_any(lowered_user, EXPLICIT_FORMAT_TERMS | HANDOFF_TERMS):
+        return True
+    if has_any(lowered_user, FILE_HANDOFF_TERMS) and has_any(
+        lowered_user,
+        DOCUMENT_TERMS | SPREADSHEET_TERMS | PRESENTATION_TERMS,
+    ):
+        return True
+    if re.search(
+        r"\b(?:convert|format|save|turn)\b(?:\W+\w+){0,8}?\W+(?:as|to|into)\s+"
+        r"(?:a|an|the)?\s*(?:doc|document|spreadsheet|workbook|presentation|deck|slides|docx|xlsx|pptx)\b",
+        lowered_user,
+    ):
+        return True
+    return bool(re.search(
+        r"\b(?:write|draft|compose|create|generate|prepare|produce|make|build|author|format)\b"
+        r"(?:\s+(?:me|us|a|an|the|new|blank|editable|office|word|excel|powerpoint))*"
+        r"\s+(?:doc|document|spreadsheet|workbook|presentation|deck|slides)\b",
+        lowered_user,
+    ))
 
 
 def has_any(text: str, terms: set[str]) -> bool:
@@ -190,6 +266,27 @@ def looks_like_tool_or_status_response(text: str) -> bool:
     if "/a0/usr/workdir/documents/" in stripped:
         return True
     return False
+
+
+def looks_like_standalone_artifact(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines or not title_from_response(text):
+        return False
+
+    heading_count = 0
+    formal_marker_count = 0
+    for line in lines[:40]:
+        normalized = normalize_text(line)
+        if re.match(r"^(#{1,4}\s+|\*\*.+\*\*$|[0-9]+[.)]\s+[A-Z])", line):
+            heading_count += 1
+        if re.match(
+            r"^(executive summary|summary|purpose|scope|background|introduction|"
+            r"recommendations?|conclusion|to:|from:|subject:|date:)\b",
+            normalized,
+        ):
+            formal_marker_count += 1
+
+    return heading_count >= 2 or formal_marker_count >= 2
 
 
 def infer_title(user_text: str, response_text: str, kind: str) -> str:

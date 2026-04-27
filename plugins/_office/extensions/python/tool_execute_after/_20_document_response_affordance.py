@@ -11,6 +11,9 @@ from helpers.tool import Response
 from plugins._office.helpers import document_affordance, wopi_store
 
 
+HANDOFF_CREATED_FLAG = "_office_document_handoff_created"
+
+
 class DocumentResponseAffordance(Extension):
     async def execute(
         self,
@@ -18,11 +21,21 @@ class DocumentResponseAffordance(Extension):
         response: Response | None = None,
         **kwargs: Any,
     ):
-        if tool_name != "response" or not self.agent or response is None:
+        if not self.agent or response is None:
+            return
+
+        if tool_name == "document_artifact":
+            if (response.additional or {}).get("file_id"):
+                self.agent.loop_data.params_persistent[HANDOFF_CREATED_FLAG] = True
+            return
+
+        if tool_name != "response":
             return
 
         tool = self.agent.loop_data.current_tool
         if not tool:
+            return
+        if self.agent.loop_data.params_persistent.get(HANDOFF_CREATED_FLAG):
             return
 
         text = str(tool.args.get("text") or tool.args.get("message") or response.message or "").strip()
@@ -51,6 +64,7 @@ class DocumentResponseAffordance(Extension):
         content = json.dumps(payload, indent=2, ensure_ascii=False)
 
         self.agent.hist_add_tool_result("document_artifact", content, **additional)
+        self.agent.loop_data.params_persistent[HANDOFF_CREATED_FLAG] = True
 
         display_path = display_workspace_path(doc["path"])
         note = document_affordance.format_created_response(doc["basename"], display_path)
