@@ -58,7 +58,7 @@ function shouldAutoOpenDocument(args, document) {
   if (kvps.canvas_surface && kvps.canvas_surface !== "office") return false;
   if (!document?.path) return false;
   const action = String(kvps.action || "").trim().toLowerCase();
-  if (["status", "version_history", "inspect"].includes(action)) return false;
+  if (["status", "version_history", "inspect", "read", "extract"].includes(action)) return false;
   return isFreshToolMessage(args?.timestamp);
 }
 

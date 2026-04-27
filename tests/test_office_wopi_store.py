@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from plugins._office.helpers import wopi_routes, wopi_store
+from plugins._office.helpers import artifact_editor, canvas_context, wopi_routes, wopi_store
 
 
 @pytest.fixture()
@@ -159,3 +159,83 @@ def test_office_proxy_accepts_encoded_wopi_socket_token_without_session_cookie(o
     assert proxy.upstream_websocket_url(scope).startswith("ws://127.0.0.1:32080/office/cool/")
     assert all(key.lower() not in {"host", "origin", "sec-websocket-key"} for key, _ in headers)
     assert ("user-agent", "qa") in headers
+
+
+def test_document_artifact_docx_edit_replaces_text_and_tracks_version(office_state):
+    doc = wopi_store.create_document("document", "Edit Text", "docx", "The old phrase stays here.")
+
+    updated, payload = artifact_editor.edit_artifact(
+        doc,
+        operation="replace_text",
+        find="old phrase",
+        replace="new phrase",
+    )
+    content = artifact_editor.read_artifact(updated)
+
+    assert payload["changed"] is True
+    assert payload["replacements"] == 1
+    assert "new phrase" in content["text"]
+    assert "old phrase" not in content["text"]
+    assert int(updated["version"]) == 2
+    assert wopi_store.version_history(doc["file_id"])
+
+
+def test_document_artifact_xlsx_edit_sets_cells_and_appends_rows(office_state):
+    doc = wopi_store.create_document("spreadsheet", "Budget", "xlsx", "Name,Amount")
+
+    updated, payload = artifact_editor.edit_artifact(
+        doc,
+        operation="set_cells",
+        cells={"A2": "Tools", "B2": 12500},
+    )
+    updated, payload = artifact_editor.edit_artifact(
+        updated,
+        operation="append_rows",
+        rows=[["Research", 9800]],
+    )
+    content = artifact_editor.read_artifact(updated)
+    rows = content["sheets"][0]["preview_rows"]
+
+    assert payload["changed"] is True
+    assert ["Tools", 12500] in rows
+    assert ["Research", 9800] in rows
+
+
+def test_document_artifact_pptx_edit_sets_slides(office_state):
+    doc = wopi_store.create_document("presentation", "Roadmap", "pptx", "Initial")
+
+    updated, payload = artifact_editor.edit_artifact(
+        doc,
+        operation="set_slides",
+        slides=[
+            {"title": "Vision", "bullets": ["Elegant", "Useful"]},
+            {"title": "Plan", "bullets": ["Build", "Verify"]},
+        ],
+    )
+    content = artifact_editor.read_artifact(updated)
+
+    assert payload["changed"] is True
+    assert content["slide_count"] == 2
+    assert [slide["title"] for slide in content["slides"]] == ["Vision", "Plan"]
+
+
+def test_office_canvas_context_lists_active_metadata_without_file_contents(office_state):
+    doc = wopi_store.create_document("document", "Canvas Context", "docx", "private body text")
+    wopi_store.create_session(doc["file_id"], "user-a", "write", "http://localhost:32080")
+
+    context = canvas_context.build_context()
+
+    assert "Canvas Context.docx" in context
+    assert doc["file_id"] in context
+    assert "private body text" not in context
+
+
+def test_office_artifacts_skill_metadata_is_valid():
+    skill_path = PROJECT_ROOT / "plugins" / "_office" / "skills" / "office-artifacts" / "SKILL.md"
+    text = skill_path.read_text(encoding="utf-8")
+
+    assert text.startswith("---\n")
+    assert "\nname: office-artifacts\n" in text
+    assert "description:" in text
+    assert "allowed_tools:" in text
+    assert "document_artifact" in text

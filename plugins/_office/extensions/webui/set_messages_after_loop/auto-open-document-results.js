@@ -11,6 +11,7 @@ export default async function autoOpenDocumentResults(context) {
     const document = getDocumentPayload(payload);
     if (!document?.path) continue;
     if (payload.canvas_surface && payload.canvas_surface !== "office") continue;
+    if (isReadOnlyAction(payload)) continue;
     if (!isFresh(args?.timestamp, document.last_modified)) continue;
 
     const key = [
@@ -46,6 +47,7 @@ function pickPayloadFields(args = {}) {
     "tool_name",
     "tool_result",
     "canvas_surface",
+    "action",
     "file_id",
     "path",
     "title",
@@ -78,6 +80,11 @@ function getDocumentPayload(payload = {}) {
     version: payload.version || document.version || "",
     last_modified: payload.last_modified || document.last_modified || "",
   };
+}
+
+function isReadOnlyAction(payload = {}) {
+  const action = String(payload.action || "").trim().toLowerCase();
+  return ["status", "version_history", "inspect", "read", "extract"].includes(action);
 }
 
 function parseMaybeJson(value) {

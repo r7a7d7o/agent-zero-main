@@ -216,6 +216,27 @@ def get_recent_documents(limit: int = 12) -> list[dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
+def get_open_documents(limit: int = 6) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                d.*,
+                COUNT(s.session_id) AS open_sessions,
+                MAX(s.created_at) AS last_opened_at,
+                MAX(s.expires_at) AS session_expires_at
+            FROM documents d
+            JOIN sessions s ON s.file_id = d.file_id
+            WHERE s.expires_at > ?
+            GROUP BY d.file_id
+            ORDER BY last_opened_at DESC
+            LIMIT ?
+            """,
+            (now(), limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def create_session(file_id: str, user_id: str, permission: str, origin: str, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> dict[str, Any]:
     permission = "write" if permission == "write" else "read"
     token = secrets.token_urlsafe(32)
@@ -245,6 +266,50 @@ def create_session(file_id: str, user_id: str, permission: str, origin: str, ttl
         "permission": permission,
         "origin": origin,
     }
+
+
+def replace_document_bytes(
+    file_id: str,
+    data: bytes,
+    actor: str = "agent",
+    invalidate_sessions: bool = True,
+) -> dict[str, Any]:
+    if len(data) > MAX_SAVE_BYTES:
+        raise OverflowError("Office save exceeds maximum size")
+    with connect() as conn:
+        doc = get_document(file_id, conn=conn)
+        path = Path(doc["path"])
+        previous = path.read_bytes() if path.exists() else b""
+        if previous == data:
+            return doc
+
+        _record_version(conn, file_id, path, item_version(doc), previous)
+        _write_atomic(path, data)
+        digest = sha256_bytes(data)
+        next_version = int(doc["version"]) + 1
+        changed_at = now()
+        conn.execute(
+            """
+            UPDATE documents
+            SET size=?, version=?, sha256=?, last_modified=?, updated_at=?
+            WHERE file_id=?
+            """,
+            (len(data), next_version, digest, now_iso(), changed_at, file_id),
+        )
+        if invalidate_sessions:
+            conn.execute("DELETE FROM locks WHERE file_id = ?", (file_id,))
+            conn.execute("DELETE FROM tokens WHERE file_id = ?", (file_id,))
+            conn.execute("DELETE FROM sessions WHERE file_id = ?", (file_id,))
+        conn.execute(
+            "INSERT INTO events (file_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
+            (
+                file_id,
+                "direct_edit",
+                json.dumps({"actor": actor, "version": f"{next_version}-{digest[:12]}"}),
+                changed_at,
+            ),
+        )
+        return get_document(file_id, conn=conn)
 
 
 def validate_token(raw_token: str, file_id: str, require_write: bool = False) -> dict[str, Any]:
@@ -379,12 +444,7 @@ def put_file(file_id: str, data: bytes, lock_value: str) -> str:
 
         previous = path.read_bytes() if path.exists() else b""
         _record_version(conn, file_id, path, item_version(doc), previous)
-        tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        with tmp_path.open("wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
+        _write_atomic(path, data)
         digest = sha256_bytes(data)
         next_version = int(doc["version"]) + 1
         conn.execute(
@@ -396,6 +456,20 @@ def put_file(file_id: str, data: bytes, lock_value: str) -> str:
             (len(data), next_version, digest, now_iso(), now(), file_id),
         )
         return f"{next_version}-{digest[:12]}"
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp_path.open("wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 class LockMismatch(Exception):
