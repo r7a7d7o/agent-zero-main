@@ -131,6 +131,29 @@ def test_kernel_boundary_real_git_repo_and_git_dir_exclusion(workspace):
     assert run_git(root, "rev-parse", "HEAD") == real_head
     assert run_git(root, "status", "--short") == real_status_before
     assert all(not path.startswith(".git/") and path != ".git" for path in tracked_paths(service))
+    assert "tracked.txt" in tracked_paths(service, snapshot.hash)
+    assert "untracked.txt" in tracked_paths(service, snapshot.hash)
+
+
+def test_usr_root_snapshot_skips_plugins_and_nested_git_projects(tmp_path: Path):
+    root = tmp_path / "usr"
+    root.mkdir()
+    (root / "workdir").mkdir()
+    (root / "workdir" / "note.txt").write_text("note\n", encoding="utf-8")
+    (root / "plugins" / "demo").mkdir(parents=True)
+    (root / "plugins" / "demo" / "plugin.yaml").write_text("name: demo\n", encoding="utf-8")
+    (root / "projects" / "git-project").mkdir(parents=True)
+    (root / "projects" / "git-project" / ".git").mkdir()
+    (root / "projects" / "git-project" / "app.py").write_text("print('tracked elsewhere')\n", encoding="utf-8")
+    (root / "projects" / "plain-project").mkdir(parents=True)
+    (root / "projects" / "plain-project" / "app.py").write_text("print('plain')\n", encoding="utf-8")
+
+    paths = set(tt.iter_snapshot_paths(root, display_path="/a0/usr"))
+
+    assert "workdir/note.txt" in paths
+    assert "projects/plain-project/app.py" in paths
+    assert "plugins/demo/plugin.yaml" not in paths
+    assert "projects/git-project/app.py" not in paths
 
 
 def test_metadata_policy_tracks_safe_project_files_and_preserves_exclusions(workspace):
@@ -236,6 +259,44 @@ def test_pagination_large_diff_and_invalid_inputs(workspace, monkeypatch: pytest
         service.history_diff(commit_hash="not-a-commit", path="file.txt", mode="commit")
     with pytest.raises(TimeTravelError):
         service.history_diff(commit_hash=hashes[-1], path="../file.txt", mode="commit")
+
+
+def test_debounced_snapshots_coalesce_to_one_commit(workspace):
+    root, service = workspace
+    tt.clear_debounced_snapshots()
+    try:
+        (root / "file.txt").write_text("one\n", encoding="utf-8")
+        tt.schedule_debounced_snapshot(
+            service.workspace,
+            trigger="watchdog",
+            metadata={"source": "watchdog", "changed_path_hints": ["/a0/usr/file.txt"]},
+            delay=60,
+        )
+        assert service.current_hash() == ""
+
+        (root / "file.txt").write_text("two\n", encoding="utf-8")
+        tt.schedule_debounced_snapshot(
+            service.workspace,
+            trigger="text_editor_write",
+            metadata={"source": "text_editor", "changed_path_hints": ["/a0/usr/other.txt"]},
+            delay=60,
+        )
+        tt.flush_debounced_snapshots()
+
+        current = service.current_hash()
+        assert current
+        commits = service.history_list(limit=10)["commits"]
+        assert len(commits) == 1
+        assert commits[0]["hash"] == current
+        assert commits[0]["metadata"]["trigger"] == "text_editor_write"
+        assert commits[0]["metadata"]["source"] == "text_editor"
+        assert commits[0]["metadata"]["changed_path_hints"] == [
+            "/a0/usr/file.txt",
+            "/a0/usr/other.txt",
+        ]
+        assert "two" in service.history_diff(commit_hash=current, path="file.txt", mode="commit")["patch"]
+    finally:
+        tt.clear_debounced_snapshots()
 
 
 def test_workspace_resolution_prefers_project_and_rejects_external_paths(monkeypatch: pytest.MonkeyPatch, workspace):

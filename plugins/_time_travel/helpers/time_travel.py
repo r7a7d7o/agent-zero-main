@@ -8,6 +8,7 @@ import os
 import posixpath
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,6 +28,13 @@ METADATA_PREFIX = "A0-Time-Travel-Metadata:"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 MAX_RENDERED_PATCH_BYTES = 1_000_000
 GIT_TIMEOUT_SECONDS = 20
+AUTO_SNAPSHOT_DEBOUNCE_SECONDS = 10.0
+WATCHDOG_ID = "time_travel_usr"
+WATCHDOG_DEBOUNCE_SECONDS = 1.0
+
+_AUTO_SNAPSHOT_LOCK = threading.RLock()
+_AUTO_SNAPSHOT_TIMERS: dict[str, threading.Timer] = {}
+_AUTO_SNAPSHOT_PAYLOADS: dict[str, dict[str, Any]] = {}
 
 STATUS_LABELS = {
     "A": "added",
@@ -76,6 +84,10 @@ EXCLUDED_FILE_PATTERNS = {
     ".env",
     ".env.*",
     "*.class",
+}
+
+USR_ROOT_EXCLUDED_DIR_NAMES = {
+    "plugins",
 }
 
 SAFE_A0PROJ_FILES = {
@@ -291,14 +303,29 @@ def clean_summary() -> dict[str, Any]:
     }
 
 
-def snapshot_for_agent(agent: Any, *, trigger: str, metadata: dict[str, Any] | None = None) -> SnapshotResult | None:
+def snapshot_for_agent(
+    agent: Any,
+    *,
+    trigger: str,
+    metadata: dict[str, Any] | None = None,
+    debounced: bool = True,
+) -> SnapshotResult | None:
     if not agent:
         return None
 
     context_id = str(getattr(getattr(agent, "context", None), "id", "") or "")
     try:
         workspace = resolve_workspace(context_id, context_loader=lambda _ctxid: agent.context)
-        return TimeTravelService(workspace).snapshot(trigger=trigger, metadata=_agent_metadata(agent, metadata))
+        full_metadata = _agent_metadata(agent, metadata)
+        if debounced:
+            schedule_debounced_snapshot(
+                workspace,
+                trigger=trigger,
+                metadata=full_metadata,
+                changed_path_hints=_extract_changed_path_hints(full_metadata),
+            )
+            return None
+        return TimeTravelService(workspace).snapshot(trigger=trigger, metadata=full_metadata)
     except WorkspaceRejectedError:
         return None
     except Exception as exc:
@@ -306,15 +333,165 @@ def snapshot_for_agent(agent: Any, *, trigger: str, metadata: dict[str, Any] | N
         return None
 
 
-def snapshot_for_path_hint(path_hint: str, *, trigger: str, metadata: dict[str, Any] | None = None) -> SnapshotResult | None:
+def snapshot_for_path_hint(
+    path_hint: str,
+    *,
+    trigger: str,
+    metadata: dict[str, Any] | None = None,
+    debounced: bool = True,
+) -> SnapshotResult | None:
     try:
         workspace = resolve_workspace_for_path_hint(path_hint)
         if workspace is None:
             return None
-        return TimeTravelService(workspace).snapshot(trigger=trigger, metadata=metadata or {})
+        full_metadata = metadata or {}
+        if debounced:
+            schedule_debounced_snapshot(
+                workspace,
+                trigger=trigger,
+                metadata=full_metadata,
+                changed_path_hints=_extract_changed_path_hints(full_metadata),
+            )
+            return None
+        return TimeTravelService(workspace).snapshot(trigger=trigger, metadata=full_metadata)
     except Exception as exc:
         PrintStyle.error(f"Time Travel file-browser snapshot failed: {exc}")
         return None
+
+
+def register_watchdogs() -> None:
+    from helpers import watchdog
+
+    root = real_path_for_display(USR_DISPLAY_ROOT)
+    if not root.exists() or not root.is_dir():
+        return
+
+    watchdog.add_watchdog(
+        id=WATCHDOG_ID,
+        roots=[str(root)],
+        patterns=["**/*"],
+        ignore_patterns=[
+            "**/.git",
+            "**/.git/**",
+            "**/.time_travel",
+            "**/.time_travel/**",
+            "**/__pycache__",
+            "**/__pycache__/**",
+            "**/*.pyc",
+            "**/.pytest_cache/**",
+            "**/.mypy_cache/**",
+            "**/.ruff_cache/**",
+            "**/.cache/**",
+            "**/node_modules/**",
+            "**/.venv/**",
+            "**/venv/**",
+            "**/dist/**",
+            "**/build/**",
+        ],
+        events=["create", "modify", "delete", "move"],
+        debounce=WATCHDOG_DEBOUNCE_SECONDS,
+        handler=_handle_usr_watchdog_events,
+    )
+
+
+def schedule_debounced_snapshot(
+    workspace: WorkspaceInfo,
+    *,
+    trigger: str,
+    metadata: dict[str, Any] | None = None,
+    changed_path_hints: list[str] | None = None,
+    delay: float | None = None,
+) -> None:
+    clean_metadata = dict(metadata or {})
+    metadata_hints = _extract_changed_path_hints(clean_metadata)
+    clean_metadata.pop("changed_path_hints", None)
+    hints = _merge_hints(metadata_hints, changed_path_hints or [])
+    delay_seconds = AUTO_SNAPSHOT_DEBOUNCE_SECONDS if delay is None else max(0.0, float(delay))
+    with _AUTO_SNAPSHOT_LOCK:
+        payload = _AUTO_SNAPSHOT_PAYLOADS.get(workspace.id)
+        if payload is None:
+            payload = {
+                "workspace": workspace,
+                "trigger": trigger,
+                "metadata": clean_metadata,
+                "changed_path_hints": hints,
+            }
+            _AUTO_SNAPSHOT_PAYLOADS[workspace.id] = payload
+            timer = threading.Timer(delay_seconds, _flush_debounced_snapshot, args=(workspace.id,))
+            timer.daemon = True
+            _AUTO_SNAPSHOT_TIMERS[workspace.id] = timer
+            timer.start()
+            return
+
+        payload["trigger"] = trigger
+        payload["metadata"] = {**payload.get("metadata", {}), **clean_metadata}
+        payload["changed_path_hints"] = _merge_hints(
+            payload.get("changed_path_hints", []),
+            hints,
+        )
+
+
+def flush_debounced_snapshots() -> None:
+    with _AUTO_SNAPSHOT_LOCK:
+        workspace_ids = list(_AUTO_SNAPSHOT_PAYLOADS)
+        for workspace_id in workspace_ids:
+            timer = _AUTO_SNAPSHOT_TIMERS.pop(workspace_id, None)
+            timer and timer.cancel()
+    for workspace_id in workspace_ids:
+        _flush_debounced_snapshot(workspace_id)
+
+
+def clear_debounced_snapshots() -> None:
+    with _AUTO_SNAPSHOT_LOCK:
+        timers = list(_AUTO_SNAPSHOT_TIMERS.values())
+        _AUTO_SNAPSHOT_TIMERS.clear()
+        _AUTO_SNAPSHOT_PAYLOADS.clear()
+    for timer in timers:
+        timer.cancel()
+
+
+def _flush_debounced_snapshot(workspace_id: str) -> None:
+    with _AUTO_SNAPSHOT_LOCK:
+        _AUTO_SNAPSHOT_TIMERS.pop(workspace_id, None)
+        payload = _AUTO_SNAPSHOT_PAYLOADS.pop(workspace_id, None)
+    if not payload:
+        return
+
+    try:
+        workspace = payload["workspace"]
+        TimeTravelService(workspace).snapshot(
+            trigger=str(payload.get("trigger") or "watchdog"),
+            metadata=payload.get("metadata") or {},
+            changed_path_hints=payload.get("changed_path_hints") or None,
+        )
+    except WorkspaceRejectedError:
+        return
+    except Exception as exc:
+        PrintStyle.error(f"Time Travel debounced snapshot failed: {exc}")
+
+
+def _handle_usr_watchdog_events(items: list[Any]) -> None:
+    by_workspace: dict[str, tuple[WorkspaceInfo, list[str]]] = {}
+    for path, _event in items:
+        display_path = normalize_display_path(str(path or ""))
+        if not _is_watchdog_snapshot_candidate(display_path):
+            continue
+        workspace = resolve_workspace_for_path_hint(display_path)
+        if workspace is None:
+            continue
+        hints = by_workspace.setdefault(workspace.id, (workspace, []))[1]
+        hints.append(display_path)
+
+    for workspace, hints in by_workspace.values():
+        schedule_debounced_snapshot(
+            workspace,
+            trigger="watchdog",
+            metadata={
+                "source": "watchdog",
+                "changed_path_hints": _merge_hints(hints),
+            },
+            changed_path_hints=hints,
+        )
 
 
 def _agent_metadata(agent: Any, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -338,6 +515,36 @@ def _agent_metadata(agent: Any, metadata: dict[str, Any] | None = None) -> dict[
             result.setdefault("log_item_id", str(getattr(log, "id", "") or ""))
             result.setdefault("log_item_no", getattr(log, "no", None))
     return {key: value for key, value in result.items() if value not in (None, "")}
+
+
+def _extract_changed_path_hints(metadata: dict[str, Any]) -> list[str]:
+    hints = metadata.get("changed_path_hints")
+    if not isinstance(hints, list):
+        return []
+    return [str(path) for path in hints if path]
+
+
+def _merge_hints(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for path in group:
+            normalized = normalize_display_path(str(path or ""))
+            if not normalized or normalized in seen:
+                continue
+            merged.append(normalized)
+            seen.add(normalized)
+    return merged
+
+
+def _is_watchdog_snapshot_candidate(display_path: str) -> bool:
+    normalized = normalize_display_path(display_path)
+    if not is_inside_usr_display(normalized):
+        return False
+    if normalized == "/a0/usr/plugins" or normalized.startswith("/a0/usr/plugins/"):
+        return False
+    parts = [part for part in normalized.split("/") if part]
+    return ".git" not in parts and ".time_travel" not in parts
 
 
 class TimeTravelService:
@@ -642,7 +849,7 @@ class TimeTravelService:
     def _stage_current_tree(self) -> tuple[str, list[str]]:
         self.ensure_repo()
         self._git("read-tree", "--empty")
-        paths = list(iter_snapshot_paths(self.workspace.real_path))
+        paths = list(iter_snapshot_paths(self.workspace.real_path, display_path=self.workspace.display_path))
         if paths:
             payload = "\0".join(paths).encode("utf-8") + b"\0"
             self._git_bytes(
@@ -951,8 +1158,12 @@ class TimeTravelService:
         return completed
 
 
-def iter_snapshot_paths(workspace: Path) -> Iterable[str]:
+def iter_snapshot_paths(workspace: Path, *, display_path: str = "") -> Iterable[str]:
     workspace = workspace.resolve(strict=False)
+    if display_path:
+        root_is_usr = normalize_display_path(display_path) == USR_DISPLAY_ROOT
+    else:
+        root_is_usr = workspace == real_path_for_display(USR_DISPLAY_ROOT)
 
     def walk(folder: Path, rel_prefix: str = "") -> Iterable[str]:
         try:
@@ -970,6 +1181,10 @@ def iter_snapshot_paths(workspace: Path) -> Iterable[str]:
             except OSError:
                 continue
             if is_dir:
+                if root_is_usr and not rel_prefix and entry.name in USR_ROOT_EXCLUDED_DIR_NAMES:
+                    continue
+                if _is_nested_git_worktree_dir(Path(entry.path), workspace):
+                    continue
                 if not is_snapshot_candidate(rel, is_dir=True):
                     continue
                 yield from walk(Path(entry.path), rel)
@@ -977,6 +1192,16 @@ def iter_snapshot_paths(workspace: Path) -> Iterable[str]:
                 yield rel
 
     yield from walk(workspace)
+
+
+def _is_nested_git_worktree_dir(folder: Path, workspace: Path) -> bool:
+    try:
+        if folder.resolve(strict=False) == workspace.resolve(strict=False):
+            return False
+    except OSError:
+        return False
+    dot_git = folder / ".git"
+    return dot_git.exists() or dot_git.is_symlink()
 
 
 def is_snapshot_candidate(rel_path: str, *, is_dir: bool) -> bool:
