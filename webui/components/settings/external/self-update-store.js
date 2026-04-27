@@ -218,7 +218,7 @@ const model = {
       return `This instance is significantly behind the latest release currently available on main. Restart Agent Zero to move to ${this.mainBranchLatestVersion}.`;
     }
     if (this.quickUpdateComparison === 0) {
-      return "This instance already matches the latest version currently available on main.";
+      return "You already have the latest version of Agent Zero main branch";
     }
     return "This checkout already reports a newer tagged version than main.";
   },

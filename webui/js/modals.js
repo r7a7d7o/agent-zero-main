@@ -49,7 +49,7 @@ function restoreModalScrollSnapshot(modal) {
 const backdrop = document.createElement("div");
 backdrop.className = "modal-backdrop";
 backdrop.style.display = "none";
-backdrop.style.backdropFilter = "blur(5px)";
+backdrop.style.backdropFilter = "blur(8px) saturate(112%)";
 document.body.appendChild(backdrop);
 
 function modalSuppressesBackdrop(modal) {
@@ -86,7 +86,7 @@ function updateModalZIndexes() {
   }
 
   backdrop.style.display = "block";
-  backdrop.style.backdropFilter = "blur(5px)";
+  backdrop.style.backdropFilter = "blur(8px) saturate(112%)";
   backdrop.style.backgroundColor = "";
 
   if (backdropModalStack.length === modalStack.length && modalStack.length > 1) {

@@ -38,7 +38,7 @@
 
           <div class="right-canvas-rail-separator" aria-hidden="true"></div>
 
-          <template x-for="surface in $store.rightCanvas.surfaces" :key="surface.id">
+          <template x-for="surface in $store.rightCanvas.railSurfaces" :key="surface.id">
             <button
               type="button"
               class="right-canvas-rail-button"
@@ -47,7 +47,12 @@
               :aria-label="surface.title"
               @click="$store.rightCanvas.open(surface.id)"
             >
-              <span class="material-symbols-outlined" x-text="surface.icon"></span>
+              <template x-if="surface.image">
+                <img class="right-canvas-surface-image" :src="surface.image" alt="" aria-hidden="true">
+              </template>
+              <template x-if="!surface.image">
+                <span class="material-symbols-outlined" x-text="surface.icon"></span>
+              </template>
             </button>
           </template>
         </nav>
@@ -58,7 +63,7 @@
           <header class="right-canvas-header">
             <div class="right-canvas-tabs" role="tablist" aria-label="Canvas tabs">
               <x-extension id="right-canvas-tabs-start"></x-extension>
-              <template x-for="surface in $store.rightCanvas.surfaces" :key="surface.id">
+              <template x-for="surface in $store.rightCanvas.panelSurfaces" :key="surface.id">
                 <button
                   type="button"
                   class="right-canvas-tab"
@@ -68,7 +73,12 @@
                   :class="{ 'is-active': $store.rightCanvas.isSurfaceActive(surface.id) }"
                   @click="$store.rightCanvas.open(surface.id)"
                 >
-                  <span class="material-symbols-outlined" aria-hidden="true" x-text="surface.icon"></span>
+                  <template x-if="surface.image">
+                    <img class="right-canvas-surface-image" :src="surface.image" alt="" aria-hidden="true">
+                  </template>
+                  <template x-if="!surface.image">
+                    <span class="material-symbols-outlined" aria-hidden="true" x-text="surface.icon"></span>
+                  </template>
                   <span class="right-canvas-tab-label" x-text="surface.title"></span>
                 </button>
               </template>
@@ -93,7 +103,7 @@
 
           <main class="right-canvas-panels">
             <x-extension id="right-canvas-panels"></x-extension>
-            <template x-if="$store.rightCanvas.surfaces.length === 0">
+            <template x-if="$store.rightCanvas.panelSurfaces.length === 0">
               <div class="right-canvas-empty-state">
                 <x-extension id="right-canvas-empty-state"></x-extension>
                 <span class="material-symbols-outlined">space_dashboard</span>

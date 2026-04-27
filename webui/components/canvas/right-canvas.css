@@ -40,7 +40,7 @@ body.right-canvas-resizing {
 
 .right-canvas-rail {
   position: absolute;
-  top: 50%;
+  top: 24%;
   right: 100%;
   z-index: 4;
   display: flex;
@@ -125,6 +125,14 @@ body.right-canvas-resizing {
   font-size: 19px;
 }
 
+.right-canvas-surface-image {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
 .right-canvas-shell {
   display: flex;
   flex: 1 1 auto;
@@ -192,6 +200,13 @@ body.right-canvas-resizing {
 .right-canvas-tab .material-symbols-outlined {
   flex: 0 0 auto;
   font-size: 18px;
+}
+
+.right-canvas-tab .right-canvas-surface-image {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
 }
 
 .right-canvas-tab-label {

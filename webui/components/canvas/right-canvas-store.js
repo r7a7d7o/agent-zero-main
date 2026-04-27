@@ -64,11 +64,13 @@ const model = {
     const normalized = {
       title: surface.id,
       icon: "web_asset",
+      image: "",
       order: 100,
       canOpen: () => true,
       open: () => {},
       close: () => {},
       modalPath: "",
+      actionOnly: false,
       ...surface,
     };
 
@@ -83,21 +85,31 @@ const model = {
   },
 
   ensureActiveSurface() {
-    if (!this.surfaces.length) {
+    const panelSurfaces = this.panelSurfaces;
+    if (!panelSurfaces.length) {
       this.activeSurfaceId = "";
       return;
     }
-    if (!this.surfaces.some((surface) => surface.id === this.activeSurfaceId)) {
-      this.activeSurfaceId = this.surfaces[0].id;
+    if (!panelSurfaces.some((surface) => surface.id === this.activeSurfaceId)) {
+      this.activeSurfaceId = panelSurfaces[0].id;
     }
   },
 
   async open(surfaceId = "", payload = {}) {
-    const targetId = surfaceId || this.activeSurfaceId || this.surfaces[0]?.id || "";
+    const targetId = surfaceId || this.activeSurfaceId || this.panelSurfaces[0]?.id || "";
     const surface = this.getSurface(targetId);
     if (!surface) return false;
     if (typeof surface.canOpen === "function" && surface.canOpen(payload) === false) {
       return false;
+    }
+
+    if (surface.actionOnly) {
+      try {
+        await surface.open?.(payload || {});
+      } catch (error) {
+        console.error(`Canvas action ${targetId} failed`, error);
+      }
+      return true;
     }
 
     this.activeSurfaceId = targetId;
@@ -167,7 +179,7 @@ const model = {
   },
 
   async toggle(surfaceId = "", payload = {}) {
-    const targetId = surfaceId || this.activeSurfaceId || this.surfaces[0]?.id || "";
+    const targetId = surfaceId || this.activeSurfaceId || this.panelSurfaces[0]?.id || "";
     if (this.isOpen && targetId === this.activeSurfaceId) {
       await this.close();
       return false;
@@ -180,7 +192,7 @@ const model = {
       await this.close();
       return false;
     }
-    return await this.open(this.activeSurfaceId || this.surfaces[0]?.id || "");
+    return await this.open(this.activeSurfaceId || this.panelSurfaces[0]?.id || "");
   },
 
   setWidth(px, options = {}) {
@@ -274,6 +286,14 @@ const model = {
 
   getSurface(id) {
     return this.surfaces.find((surface) => surface.id === id) || null;
+  },
+
+  get railSurfaces() {
+    return this.surfaces;
+  },
+
+  get panelSurfaces() {
+    return this.surfaces.filter((surface) => !surface.actionOnly);
   },
 
   currentSurface() {
