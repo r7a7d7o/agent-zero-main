@@ -13,6 +13,8 @@ const BROWSER_FIRST_INSTALL_TIMEOUT_MS = 300000;
 const BROWSER_CONFIG_REFRESH_MS = 15000;
 const VIEWPORT_SYNC_DEBOUNCE_MS = 220;
 const VIEWPORT_SYNC_SIZE_TOLERANCE = 4;
+const CANVAS_VIEWPORT_SETTLE_MS = 260;
+const SURFACE_VIEWPORT_STABLE_FRAMES = 2;
 const ANNOTATION_DRAG_THRESHOLD = 6;
 const ANNOTATION_MAX_COMMENTS = 24;
 const ANNOTATION_DOM_LIMIT = 1200;
@@ -91,6 +93,7 @@ const model = {
   _mode: "",
   _surfaceMounted: false,
   _surfaceSwitching: false,
+  _surfaceOpenedAt: 0,
   _connectSequence: 0,
   _viewerToken: "",
   extensionMenuOpen: false,
@@ -403,6 +406,7 @@ const model = {
     const targetBrowserId = requestedBrowserId || this.activeBrowserId || this.firstBrowserId();
     this._mode = nextMode;
     this._surfaceMounted = true;
+    this._surfaceOpenedAt = Date.now();
     this._lastViewportKey = "";
     if (!modeChanged && (this.frameSrc || !targetBrowserId)) return;
 
@@ -442,12 +446,17 @@ const model = {
     let stableCount = 0;
     for (let index = 0; index < 24; index += 1) {
       await nextAnimationFrame();
-      const viewport = this.currentViewportSize();
+      const viewport = this.surfaceViewportMeasurement();
       if (!viewport) continue;
-      const key = `${viewport.width}x${viewport.height}`;
+      const key = `${viewport.rawWidth}x${viewport.rawHeight}`;
       if (key === lastKey) {
         stableCount += 1;
-        if (stableCount >= 2) return viewport;
+        const canvasSettled = this._mode !== "canvas"
+          || !this._surfaceOpenedAt
+          || Date.now() - this._surfaceOpenedAt >= CANVAS_VIEWPORT_SETTLE_MS;
+        if (canvasSettled && stableCount >= SURFACE_VIEWPORT_STABLE_FRAMES) {
+          return { width: viewport.width, height: viewport.height };
+        }
       } else {
         stableCount = 0;
         lastKey = key;
@@ -1286,15 +1295,26 @@ const model = {
   },
 
   currentViewportSize() {
+    const measurement = this.surfaceViewportMeasurement();
+    if (!measurement) return null;
+    return {
+      width: measurement.width,
+      height: measurement.height,
+    };
+  },
+
+  surfaceViewportMeasurement() {
     const stage = this._stageElement;
     if (!stage) return null;
     const rect = stage.getBoundingClientRect?.();
-    const width = Math.round(rect?.width || stage.clientWidth || 0);
-    const height = Math.round(rect?.height || stage.clientHeight || 0);
-    if (width < 80 || height < 80) return null;
+    const rawWidth = Math.round(rect?.width || stage.clientWidth || 0);
+    const rawHeight = Math.round(rect?.height || stage.clientHeight || 0);
+    if (rawWidth < 80 || rawHeight < 80) return null;
     return {
-      width: Math.max(320, width),
-      height: Math.max(200, height),
+      rawWidth,
+      rawHeight,
+      width: Math.max(320, rawWidth),
+      height: Math.max(200, rawHeight),
     };
   },
 

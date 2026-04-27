@@ -347,6 +347,19 @@ def test_browser_viewer_allows_slow_extension_startup():
     assert "Installing Chromium for the first Browser run" in js
 
 
+def test_browser_canvas_startup_waits_for_raw_viewport_settle():
+    js = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "const CANVAS_VIEWPORT_SETTLE_MS = 260;" in js
+    assert "surfaceViewportMeasurement()" in js
+    assert "rawWidth" in js
+    assert "rawHeight" in js
+    assert "const key = `${viewport.rawWidth}x${viewport.rawHeight}`;" in js
+    assert "Date.now() - this._surfaceOpenedAt >= CANVAS_VIEWPORT_SETTLE_MS" in js
+
+
 def test_browser_ui_spinners_have_browser_local_animation():
     main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-panel.html").read_text(
         encoding="utf-8"
