@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -564,8 +567,6 @@ def template_bytes(kind: str, ext: str, title: str, content: str) -> bytes:
 
 
 def _zip_bytes(files_map: dict[str, str | bytes], stored: set[str] | None = None) -> bytes:
-    import io
-
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, value in files_map.items():
@@ -587,10 +588,10 @@ def _docx(title: str, content: str) -> bytes:
 
 
 def _xlsx(title: str, content: str) -> bytes:
-    rows = [title] + [line for line in content.splitlines() if line.strip()]
+    rows = _xlsx_rows(title, content)
     sheet_rows = "".join(
-        f'<row r="{idx}"><c r="A{idx}" t="inlineStr"><is><t>{escape(line)}</t></is></c></row>'
-        for idx, line in enumerate(rows, start=1)
+        f'<row r="{row_idx}">{"".join(_xlsx_cell(row_idx, col_idx, value) for col_idx, value in enumerate(row, start=1))}</row>'
+        for row_idx, row in enumerate(rows, start=1)
     )
     return _zip_bytes({
         "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>""",
@@ -599,6 +600,85 @@ def _xlsx(title: str, content: str) -> bytes:
         "xl/workbook.xml": """<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>""",
         "xl/worksheets/sheet1.xml": f"""<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{sheet_rows}</sheetData></worksheet>""",
     })
+
+
+def _xlsx_rows(title: str, content: str) -> list[list[Any]]:
+    parsed = _tabular_rows(content)
+    if parsed:
+        return parsed
+    lines = [line for line in str(content or "").splitlines() if line.strip()]
+    if lines:
+        return [[title], *[[line] for line in lines]]
+    return [[title]]
+
+
+def _tabular_rows(content: str) -> list[list[Any]]:
+    text = str(content or "").strip("\n")
+    if not text.strip():
+        return []
+    lines = [line for line in text.splitlines() if line.strip()]
+    markdown_rows = _markdown_table_rows(lines)
+    if markdown_rows:
+        return markdown_rows
+
+    delimiter = "\t" if any("\t" in line for line in lines) else ("," if any("," in line for line in lines) else None)
+    if not delimiter:
+        return []
+    return [[_xlsx_value(cell) for cell in row] for row in csv.reader(io.StringIO("\n".join(lines)), delimiter=delimiter)]
+
+
+def _markdown_table_rows(lines: list[str]) -> list[list[Any]]:
+    table_lines = [line.strip() for line in lines if line.strip().startswith("|") and line.strip().endswith("|")]
+    if len(table_lines) < 2:
+        return []
+    rows = []
+    for line in table_lines:
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells):
+            continue
+        rows.append([_xlsx_value(cell) for cell in cells])
+    return rows
+
+
+def _xlsx_cell(row_idx: int, col_idx: int, value: Any) -> str:
+    ref = f"{_column_name(col_idx)}{row_idx}"
+    value = _xlsx_value(value)
+    if value in (None, ""):
+        return f'<c r="{ref}"/>'
+    if isinstance(value, bool):
+        return f'<c r="{ref}" t="b"><v>{1 if value else 0}</v></c>'
+    if isinstance(value, (int, float)):
+        return f'<c r="{ref}"><v>{value}</v></c>'
+    return f'<c r="{ref}" t="inlineStr"><is><t>{escape(str(value))}</t></is></c>'
+
+
+def _xlsx_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    if stripped.lower() in {"true", "false"}:
+        return stripped.lower() == "true"
+    if re.fullmatch(r"[+-]?\d+", stripped) and not (len(stripped.lstrip("+-")) > 1 and stripped.lstrip("+-").startswith("0")):
+        try:
+            return int(stripped)
+        except ValueError:
+            return stripped
+    if re.fullmatch(r"[+-]?(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?", stripped) or re.fullmatch(r"[+-]?\d+[eE][+-]?\d+", stripped):
+        try:
+            return float(stripped)
+        except ValueError:
+            return stripped
+    return stripped
+
+
+def _column_name(index: int) -> str:
+    name = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
 
 
 def _pptx(title: str, content: str) -> bytes:

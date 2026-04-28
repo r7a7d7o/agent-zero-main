@@ -25,6 +25,7 @@ class DocumentArtifact(Tool):
         sheet: str = "",
         cells: Any = None,
         rows: Any = None,
+        chart: Any = None,
         slides: Any = None,
         max_chars: int | str = 12000,
         **kwargs: Any,
@@ -57,6 +58,7 @@ class DocumentArtifact(Tool):
                     sheet=sheet,
                     cells=cells,
                     rows=rows,
+                    chart=chart,
                     slides=slides,
                     **kwargs,
                 )

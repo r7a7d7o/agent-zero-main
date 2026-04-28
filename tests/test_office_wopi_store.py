@@ -201,6 +201,85 @@ def test_document_artifact_xlsx_edit_sets_cells_and_appends_rows(office_state):
     assert ["Research", 9800] in rows
 
 
+def test_document_artifact_xlsx_create_parses_csv_content_for_charting(office_state):
+    doc = wopi_store.create_document(
+        "spreadsheet",
+        "Revenue Demo",
+        "xlsx",
+        "\n".join([
+            "Month,Revenue,Costs",
+            "Jan,120,80",
+            "Feb,135,92",
+            "Mar,150,96",
+        ]),
+    )
+    content = artifact_editor.read_artifact(doc)
+    rows = content["sheets"][0]["preview_rows"]
+
+    assert rows[0] == ["Month", "Revenue", "Costs"]
+    assert rows[1] == ["Jan", 120, 80]
+
+    updated, payload = artifact_editor.edit_artifact(
+        doc,
+        operation="create_chart",
+        chart={"type": "line", "position": "E1"},
+    )
+
+    assert payload["changed"] is True
+    assert payload["charts"][0]["type"] == "line"
+    assert payload["charts"][0]["position"] == "E1"
+    assert artifact_editor.read_artifact(updated)["sheets"][0]["chart_count"] == 1
+
+
+def test_document_artifact_xlsx_stock_chart_rejects_non_numeric_ohlc_data(office_state):
+    doc = wopi_store.create_document(
+        "spreadsheet",
+        "Broken Trading Demo",
+        "xlsx",
+        "\n".join([
+            "Date,Open,High,Low,Close",
+            "2026-04-24,open,high,low,close",
+            "2026-04-25,still,not,real,numbers",
+        ]),
+    )
+
+    with pytest.raises(ValueError, match="no numeric data"):
+        artifact_editor.edit_artifact(doc, operation="create_chart", chart={"type": "candlestick"})
+
+
+def test_document_artifact_xlsx_edit_creates_stock_chart(office_state):
+    doc = wopi_store.create_document("spreadsheet", "Trading Demo", "xlsx", "")
+    rows = [
+        ["Date", "Open", "High", "Low", "Close", "Volume"],
+        ["2026-04-24", 100, 105, 99, 104, 1000],
+        ["2026-04-25", 104, 106, 102, 103, 1200],
+        ["2026-04-28", 103, 108, 101, 107, 1800],
+    ]
+    updated, _ = artifact_editor.edit_artifact(doc, operation="set_rows", rows=rows)
+
+    updated, payload = artifact_editor.edit_artifact(
+        updated,
+        operation="create_chart",
+        chart={
+            "type": "candlestick",
+            "title": "DEMO Stock Price (OHLC)",
+            "position": "A8",
+            "width": 16,
+            "height": 8,
+        },
+    )
+    content = artifact_editor.read_artifact(updated)
+    sheet = content["sheets"][0]
+
+    assert payload["changed"] is True
+    assert payload["charts_created"] == 1
+    assert payload["charts"][0]["type"] == "stock"
+    assert payload["charts"][0]["series_count"] == 4
+    assert sheet["chart_count"] == 1
+    assert sheet["charts"][0]["type"] == "stock"
+    assert sheet["charts"][0]["title"] == "DEMO Stock Price (OHLC)"
+
+
 def test_document_artifact_pptx_edit_sets_slides(office_state):
     doc = wopi_store.create_document("presentation", "Roadmap", "pptx", "Initial")
 
