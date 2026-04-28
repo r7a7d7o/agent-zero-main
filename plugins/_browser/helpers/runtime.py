@@ -916,6 +916,7 @@ class _BrowserRuntimeCore:
             history_length = 0
         return {
             "id": browser_page.id,
+            "context_id": self.context_id,
             "currentUrl": page.url,
             "title": title,
             "canGoBack": bool(history_length and int(history_length) > 1),
@@ -1059,6 +1060,27 @@ def close_all_runtimes_sync() -> None:
 def known_context_ids() -> list[str]:
     with _runtime_lock:
         return sorted(_runtimes)
+
+
+async def list_runtime_sessions() -> list[dict[str, Any]]:
+    with _runtime_lock:
+        runtimes = list(_runtimes.items())
+
+    sessions: list[dict[str, Any]] = []
+    for context_id, runtime in runtimes:
+        try:
+            listing = await runtime.call("list")
+        except Exception as exc:
+            PrintStyle.warning(f"Browser runtime list failed for context {context_id}: {exc}")
+            continue
+        sessions.append(
+            {
+                "context_id": context_id,
+                "browsers": listing.get("browsers") or [],
+                "last_interacted_browser_id": listing.get("last_interacted_browser_id"),
+            }
+        )
+    return sessions
 
 
 atexit.register(close_all_runtimes_sync)

@@ -93,6 +93,7 @@ export default async function registerBrowserSurface(canvas) {
         await browser.onOpen(panel, {
           mode: "canvas",
           browserId: payload.browserId || payload.browser_id || null,
+          contextId: payload.contextId || payload.context_id || null,
         });
       }
     },

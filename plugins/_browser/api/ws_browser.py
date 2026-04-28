@@ -8,7 +8,7 @@ from typing import Any, ClassVar
 from agent import AgentContext
 from helpers.ws import WsHandler
 from helpers.ws_manager import WsResult
-from plugins._browser.helpers.runtime import get_runtime
+from plugins._browser.helpers.runtime import get_runtime, list_runtime_sessions
 
 
 FRAME_IDLE_POLL_SECONDS = 0.05
@@ -38,6 +38,8 @@ class WsBrowser(WsHandler):
             return await self._subscribe(data, sid)
         if event == "browser_viewer_unsubscribe":
             return self._unsubscribe(data, sid)
+        if event == "browser_viewer_sessions":
+            return await self._sessions(data)
         if event == "browser_viewer_command":
             return await self._command(data, sid)
         if event == "browser_viewer_input":
@@ -90,8 +92,10 @@ class WsBrowser(WsHandler):
 
         return {
             "context_id": context_id,
+            "active_browser_context_id": context_id,
             "active_browser_id": active_id,
-            "browsers": browsers,
+            "browsers": await self._all_browser_tabs(),
+            "all_browsers": True,
             "viewer_id": viewer_id,
         }
 
@@ -103,6 +107,13 @@ class WsBrowser(WsHandler):
         if task:
             task.cancel()
         return {"context_id": context_id, "unsubscribed": True}
+
+    async def _sessions(self, data: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "context_id": self._context_id(data),
+            "browsers": await self._all_browser_tabs(),
+            "all_browsers": True,
+        }
 
     async def _command(self, data: dict[str, Any], sid: str) -> dict[str, Any] | WsResult:
         context_id = self._context_id(data)
@@ -136,17 +147,20 @@ class WsBrowser(WsHandler):
         listing = await runtime.call("list")
         last_interacted_browser_id = listing.get("last_interacted_browser_id")
         snapshot = await self._snapshot_for_result(runtime, result)
+        all_browsers = await self._all_browser_tabs()
         await self.emit_to(
             sid,
             "browser_viewer_state",
             {
                 "context_id": context_id,
+                "active_browser_context_id": context_id,
                 "viewer_id": viewer_id,
                 "command": command,
                 "browser_id": browser_id,
                 "result": result,
                 "snapshot": snapshot,
-                "browsers": listing.get("browsers") or [],
+                "browsers": all_browsers,
+                "all_browsers": True,
                 "last_interacted_browser_id": last_interacted_browser_id,
             },
             correlation_id=data.get("correlationId"),
@@ -154,7 +168,9 @@ class WsBrowser(WsHandler):
         return {
             "result": result,
             "snapshot": snapshot,
-            "browsers": listing.get("browsers") or [],
+            "browsers": all_browsers,
+            "all_browsers": True,
+            "active_browser_context_id": context_id,
             "last_interacted_browser_id": last_interacted_browser_id,
             "command": command,
             "browser_id": browser_id,
@@ -254,6 +270,16 @@ class WsBrowser(WsHandler):
         with contextlib.suppress(Exception):
             return await runtime.call("screenshot", browser_id, quality=SCREENCAST_QUALITY)
         return None
+
+    async def _all_browser_tabs(self) -> list[dict[str, Any]]:
+        browsers: list[dict[str, Any]] = []
+        for session in await list_runtime_sessions():
+            context_id = str(session.get("context_id") or "")
+            for browser in session.get("browsers") or []:
+                entry = dict(browser or {})
+                entry.setdefault("context_id", context_id)
+                browsers.append(entry)
+        return browsers
 
     async def _stream_frames(
         self,

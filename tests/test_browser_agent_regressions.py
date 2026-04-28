@@ -97,6 +97,7 @@ import plugins._browser.helpers.extension_manager as browser_extension_manager_m
 from plugins._browser.helpers.runtime import (
     _BrowserRuntimeCore,
     _BrowserScreencast,
+    list_runtime_sessions,
     normalize_url,
 )
 import plugins._browser.helpers.runtime as browser_runtime_module
@@ -373,7 +374,11 @@ def test_browser_viewer_creates_chat_when_no_context_is_selected():
     assert 'import { getContext, setContext } from "/index.js";' in js
     assert "setContext(contextId)" in js
     assert "chatsStore.setSelected?.(contextId)" in js
-    assert "await this.ensureContextId();" in js
+    assert "this.contextId = existingContextId;" in js
+    assert "this.contextId = contextId;" in js
+    assert "let targetContextId = requestedContextId;" in js
+    assert "targetContextId = await this.ensureContextId();" in js
+    assert "contextId: targetContextId" in js
     assert "No active chat context is selected." not in js
 
 
@@ -455,7 +460,7 @@ def test_browser_canvas_restarts_stream_after_page_navigation():
     assert "await this.restartCanvasStreamAfterPageChange();" in js
     assert "await this.waitForSurfaceViewport({ sequence: surfaceSequence });" in js
     assert "await this.syncViewport(true, { restartStream: true });" in js
-    reconnect_index = js.index("await this.connectViewer({ browserId: this.activeBrowserId });")
+    reconnect_index = js.index("contextId: this.activeBrowserContextId")
     restart_index = js.index("await this.restartCanvasStreamAfterPageChange();")
     assert reconnect_index < restart_index
 
@@ -623,6 +628,18 @@ def test_browser_viewer_uses_tabs_for_session_switching():
     assert 'class="browser-session-tabs" role="tablist"' in main_html
     assert 'class="browser-tab"' in main_html
     assert 'class="browser-new-tab"' in main_html
+    assert ':key="$store.browserPage.browserTabKey(browser)"' in main_html
+    assert "browser.context_id" in main_html
+    assert ':title="$store.browserPage.browserTabTooltip(browser)"' in main_html
+    assert "browser-tab-context" not in main_html
+    assert 'handleSelectedContextChange($store.chats?.selected)' in main_html
+    assert "activeBrowserContextId" in browser_store
+    assert "sameBrowserTab" in browser_store
+    assert "applyBrowserListing" in browser_store
+    assert "browserTabTooltip(browser)" in browser_store
+    assert "browserChatTitle(browser = {})" in browser_store
+    assert "contextId.slice" not in browser_store
+    assert '"browser_viewer_sessions"' in browser_store
     assert "$store.browserPage.openNewBrowser()" in main_html
     assert "browser-select" not in main_html
     assert "browser-live-dot" not in main_html
@@ -644,14 +661,14 @@ def test_browser_tabs_close_without_confirmation_or_busy_lock():
     close_end = main_html.index("</button>", close_start)
     close_markup = main_html[close_start:close_end]
 
-    assert '@click.stop="$store.browserPage.closeBrowser(browser.id)"' in main_html
+    assert '@click.stop="$store.browserPage.closeBrowser(browser.id, browser.context_id)"' in main_html
     assert "@pointerdown.stop" in close_markup
     assert "$confirmClick" not in main_html
     assert "isBusy()" not in close_markup
-    assert ':disabled="$store.browserPage.isClosingBrowser(browser.id)"' in close_markup
+    assert ':disabled="$store.browserPage.isClosingBrowser(browser.id, browser.context_id)"' in close_markup
     assert "--browser-tab-close-size: 32px;" in main_html
-    assert "async closeBrowser(id)" in browser_store
-    assert "isClosingBrowser(id)" in browser_store
+    assert "async closeBrowser(id, contextId = \"\")" in browser_store
+    assert "isClosingBrowser(id, contextId = \"\")" in browser_store
     assert "_closingBrowserIds" in browser_store
     assert "_commandInFlightCount" in browser_store
 
@@ -1086,6 +1103,121 @@ async def test_browser_viewer_subscribe_unregisters_stream(monkeypatch):
     await handler.on_disconnect("sid-1")
 
     assert ("sid-1", "ctx") not in ws_browser_module.WsBrowser._streams
+
+
+@pytest.mark.anyio
+async def test_browser_runtime_sessions_are_context_qualified(monkeypatch):
+    class FakeRuntime:
+        async def call(self, method, *args, **kwargs):
+            assert method == "list"
+            return {
+                "browsers": [{"id": 1, "context_id": "ctx-a", "currentUrl": "https://example.com/"}],
+                "last_interacted_browser_id": 1,
+            }
+
+    with browser_runtime_module._runtime_lock:
+        previous_runtimes = dict(browser_runtime_module._runtimes)
+        browser_runtime_module._runtimes.clear()
+        browser_runtime_module._runtimes["ctx-a"] = FakeRuntime()
+    try:
+        sessions = await list_runtime_sessions()
+    finally:
+        with browser_runtime_module._runtime_lock:
+            browser_runtime_module._runtimes.clear()
+            browser_runtime_module._runtimes.update(previous_runtimes)
+
+    assert sessions == [
+        {
+            "context_id": "ctx-a",
+            "browsers": [{"id": 1, "context_id": "ctx-a", "currentUrl": "https://example.com/"}],
+            "last_interacted_browser_id": 1,
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_browser_viewer_command_returns_tabs_from_all_contexts(monkeypatch):
+    class FakeRuntime:
+        async def call(self, method, *args, **kwargs):
+            if method == "list":
+                return {
+                    "browsers": [{"id": 1, "context_id": "ctx-a", "currentUrl": "about:blank"}],
+                    "last_interacted_browser_id": 1,
+                }
+            raise AssertionError(method)
+
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx-a"
+        return FakeRuntime()
+
+    async def fake_list_runtime_sessions():
+        return [
+            {
+                "context_id": "ctx-a",
+                "browsers": [{"id": 1, "context_id": "ctx-a", "currentUrl": "about:blank"}],
+                "last_interacted_browser_id": 1,
+            },
+            {
+                "context_id": "ctx-b",
+                "browsers": [{"id": 1, "context_id": "ctx-b", "currentUrl": "https://example.org/"}],
+                "last_interacted_browser_id": 1,
+            },
+        ]
+
+    monkeypatch.setattr(ws_browser_module, "get_runtime", fake_get_runtime)
+    monkeypatch.setattr(ws_browser_module, "list_runtime_sessions", fake_list_runtime_sessions)
+
+    handler = ws_browser_module.WsBrowser(
+        SimpleNamespace(),
+        threading.RLock(),
+        manager=None,
+    )
+
+    result = await handler.process(
+        "browser_viewer_command",
+        {"context_id": "ctx-a", "command": "list"},
+        "sid-1",
+    )
+
+    assert result["all_browsers"] is True
+    assert result["active_browser_context_id"] == "ctx-a"
+    assert [browser["context_id"] for browser in result["browsers"]] == ["ctx-a", "ctx-b"]
+
+
+@pytest.mark.anyio
+async def test_browser_viewer_sessions_lists_without_creating_runtime(monkeypatch):
+    async def fake_list_runtime_sessions():
+        return [
+            {
+                "context_id": "ctx-a",
+                "browsers": [{"id": 1, "context_id": "ctx-a", "currentUrl": "about:blank"}],
+                "last_interacted_browser_id": 1,
+            }
+        ]
+
+    async def fail_get_runtime(*args, **kwargs):
+        raise AssertionError("sessions refresh must not create or fetch one runtime")
+
+    monkeypatch.setattr(ws_browser_module, "list_runtime_sessions", fake_list_runtime_sessions)
+    monkeypatch.setattr(ws_browser_module, "get_runtime", fail_get_runtime)
+
+    handler = ws_browser_module.WsBrowser(
+        SimpleNamespace(),
+        threading.RLock(),
+        manager=None,
+    )
+
+    result = await handler.process(
+        "browser_viewer_sessions",
+        {"context_id": "ctx-b"},
+        "sid-1",
+    )
+
+    assert result == {
+        "context_id": "ctx-b",
+        "browsers": [{"id": 1, "context_id": "ctx-a", "currentUrl": "about:blank"}],
+        "all_browsers": True,
+    }
 
 
 @pytest.mark.anyio

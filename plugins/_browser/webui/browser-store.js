@@ -95,6 +95,7 @@ const model = {
   contextId: "",
   browsers: [],
   activeBrowserId: null,
+  activeBrowserContextId: "",
   address: "",
   frameSrc: "",
   frameState: null,
@@ -142,6 +143,8 @@ const model = {
   _connectSequence: 0,
   _viewerToken: "",
   _contextCreatePromise: null,
+  _lastSelectedContextId: "",
+  _sessionRefreshPromise: null,
   extensionMenuOpen: false,
   extensionInstallUrl: "",
   extensionActionLoading: false,
@@ -173,7 +176,7 @@ const model = {
     try {
       const response = await callJsonApi("/plugins/_browser/extensions", {
         action: "list",
-        context_id: this.contextId,
+        context_id: this.resolveContextId() || this.contextId,
       });
       if (!response?.ok) {
         throw new Error(response?.error || "Could not load browser extensions.");
@@ -210,7 +213,7 @@ const model = {
     this._configRefreshPromise = (async () => {
       const response = await callJsonApi("/plugins/_browser/extensions", {
         action: "list",
-        context_id: this.contextId || this.resolveContextId(),
+        context_id: this.resolveContextId() || this.contextId,
       });
       if (!response?.ok) {
         throw new Error(response?.error || "Could not load browser settings.");
@@ -233,6 +236,39 @@ const model = {
     return this.autofocusActivePage !== false;
   },
 
+  handleSelectedContextChange(contextId = "") {
+    const selectedContextId = this.normalizeContextId(contextId || this.resolveContextId());
+    if (selectedContextId === this._lastSelectedContextId) return;
+    this._lastSelectedContextId = selectedContextId;
+    if (!this._surfaceMounted) return;
+    void this.refreshBrowserSessions(selectedContextId);
+  },
+
+  async refreshBrowserSessions(contextId = "") {
+    if (this._sessionRefreshPromise) {
+      await this._sessionRefreshPromise;
+      return;
+    }
+    this._sessionRefreshPromise = (async () => {
+      const response = await websocket.request(
+        "browser_viewer_sessions",
+        { context_id: this.normalizeContextId(contextId || this.resolveContextId()) },
+        { timeoutMs: 10000 },
+      );
+      const data = firstOk(response);
+      this.applyBrowserListing(data.browsers || [], data.context_id || "", {
+        replaceAll: Boolean(data.all_browsers),
+      });
+    })();
+    try {
+      await this._sessionRefreshPromise;
+    } catch (error) {
+      console.warn("Browser session refresh failed", error);
+    } finally {
+      this._sessionRefreshPromise = null;
+    }
+  },
+
   toggleExtensionsMenu() {
     this.extensionMenuOpen = !this.extensionMenuOpen;
     if (this.extensionMenuOpen) {
@@ -251,6 +287,10 @@ const model = {
     return getContext() || urlContext || chatsStore.selected || "";
   },
 
+  normalizeContextId(contextId = "") {
+    return String(contextId || "").trim();
+  },
+
   async ensureContextId() {
     const existingContextId = String(this.resolveContextId() || "").trim();
     if (existingContextId) {
@@ -263,11 +303,22 @@ const model = {
     }
 
     try {
-      this.contextId = await this._contextCreatePromise;
-      return this.contextId;
+      const contextId = await this._contextCreatePromise;
+      this.contextId = contextId;
+      return contextId;
     } finally {
       this._contextCreatePromise = null;
     }
+  },
+
+  async contextIdForNewBrowser() {
+    return await this.ensureContextId();
+  },
+
+  async contextIdForActiveBrowser() {
+    const activeContextId = this.normalizeContextId(this.activeBrowserContextId || this.contextId);
+    if (activeContextId) return activeContextId;
+    return await this.ensureContextId();
   },
 
   async createChatContextForBrowser() {
@@ -361,7 +412,7 @@ const model = {
     try {
       const response = await callJsonApi("/plugins/_browser/extensions", {
         action: "install_web_store",
-        context_id: this.contextId,
+        context_id: this.resolveContextId() || this.contextId,
         url,
       });
       if (!response?.ok) {
@@ -388,7 +439,7 @@ const model = {
     try {
       const response = await callJsonApi("/plugins/_browser/extensions", {
         action: "set_extension_enabled",
-        context_id: this.contextId,
+        context_id: this.resolveContextId() || this.contextId,
         path,
         enabled: Boolean(enabled),
       });
@@ -415,7 +466,7 @@ const model = {
     try {
       const response = await callJsonApi("/plugins/_browser/extensions", {
         action: "set_model_preset",
-        context_id: this.contextId,
+        context_id: this.resolveContextId() || this.contextId,
         model_preset: presetName,
       });
       if (!response?.ok) {
@@ -463,17 +514,21 @@ const model = {
     const requestedBrowserId = this.normalizeBrowserId(
       options.requestedBrowserId ?? options.browserId ?? options.browser_id,
     );
+    const requestedContextId = this.normalizeContextId(
+      options.requestedContextId ?? options.contextId ?? options.context_id,
+    );
     const nextMode = options?.mode === "modal" ? "modal" : "canvas";
     if (nextMode === "canvas" && !this.isCanvasSurfaceVisible(element)) {
       return;
     }
-    const openSignature = this.surfaceOpenSignature(element, nextMode, requestedBrowserId);
+    const openSignature = this.surfaceOpenSignature(element, nextMode, requestedBrowserId, requestedContextId);
     if (this._openPromise && this._openSignature === openSignature) {
       return await this._openPromise;
     }
     const promise = this.openSurface(element, {
       ...options,
       requestedBrowserId,
+      requestedContextId,
       nextMode,
     });
     this._openPromise = promise;
@@ -494,6 +549,10 @@ const model = {
     const requestedBrowserId = this.normalizeBrowserId(
       options.requestedBrowserId ?? options.browserId ?? options.browser_id,
     );
+    const requestedContextId = this.normalizeContextId(
+      options.requestedContextId ?? options.contextId ?? options.context_id,
+    );
+    let targetContextId = requestedContextId;
     const nextMode = options?.nextMode || (options?.mode === "modal" ? "modal" : "canvas");
     if (nextMode === "canvas" && !this.isCanvasSurfaceVisible(element)) {
       this.loading = false;
@@ -501,22 +560,28 @@ const model = {
     }
     const surfaceSequence = this._surfaceOpenSequence + 1;
     this._surfaceOpenSequence = surfaceSequence;
-    this.prepareSurfaceOpen(nextMode, requestedBrowserId);
+    this.prepareSurfaceOpen(nextMode, requestedBrowserId, requestedContextId);
     if (nextMode === "modal") {
       this.setupFloatingModal(element);
     } else {
       this.setupCanvasSurface(element);
     }
     try {
-      await this.ensureContextId();
+      if (!targetContextId && !this.activeBrowserContextId && !this.contextId) {
+        targetContextId = await this.ensureContextId();
+      }
       if (!this.isCurrentSurfaceOpen(surfaceSequence)) return;
       await this.refreshStatus();
       if (!this.isCurrentSurfaceOpen(surfaceSequence)) return;
       const viewport = await this.waitForSurfaceViewport({ sequence: surfaceSequence });
       if (!this.isCurrentSurfaceOpen(surfaceSequence)) return;
       if (nextMode === "canvas" && !viewport) return;
-      this.resetRenderedFrameIfViewportChanged(viewport, requestedBrowserId);
-      await this.connectViewer({ browserId: requestedBrowserId, initialViewport: viewport });
+      this.resetRenderedFrameIfViewportChanged(viewport, requestedBrowserId, targetContextId);
+      await this.connectViewer({
+        browserId: requestedBrowserId,
+        contextId: targetContextId,
+        initialViewport: viewport,
+      });
       if (!this.isCurrentSurfaceOpen(surfaceSequence)) return;
       await this.syncViewportAfterSurfaceOpen(surfaceSequence);
     } catch (error) {
@@ -534,13 +599,14 @@ const model = {
     }
   },
 
-  surfaceOpenSignature(element = null, mode = "", browserId = null) {
+  surfaceOpenSignature(element = null, mode = "", browserId = null, contextId = "") {
     const root = element || globalThis.document?.querySelector(".browser-panel");
     if (root && !root.__browserSurfaceOpenId) {
       root.__browserSurfaceOpenId = makeViewerToken();
     }
     return [
       mode || "",
+      this.normalizeContextId(contextId) || "",
       this.normalizeBrowserId(browserId) || "",
       root?.__browserSurfaceOpenId || "",
     ].join(":");
@@ -600,10 +666,10 @@ const model = {
     return Boolean(rect && Math.round(rect.width || 0) >= 80 && Math.round(rect.height || 0) >= 80);
   },
 
-  prepareSurfaceOpen(nextMode, requestedBrowserId = null) {
+  prepareSurfaceOpen(nextMode, requestedBrowserId = null, requestedContextId = "") {
     const previousMode = this._mode;
     const modeChanged = this._surfaceMounted && previousMode && previousMode !== nextMode;
-    const targetBrowserId = requestedBrowserId || this.activeBrowserId || this.firstBrowserId();
+    const targetBrowserId = requestedBrowserId || this.activeBrowserId || this.firstBrowserId(requestedContextId);
     this._mode = nextMode;
     this._surfaceMounted = true;
     this._surfaceOpenedAt = Date.now();
@@ -628,10 +694,11 @@ const model = {
     this._lastFrameAt = 0;
   },
 
-  resetRenderedFrameIfViewportChanged(viewport = null, requestedBrowserId = null) {
+  resetRenderedFrameIfViewportChanged(viewport = null, requestedBrowserId = null, requestedContextId = "") {
     if (!viewport || !this.frameSrc || !this._lastViewport) return;
     const targetBrowserId = requestedBrowserId || this.activeBrowserId || this.firstBrowserId();
-    if (!this.sameBrowserId(this._lastViewport.browserId, targetBrowserId)) return;
+    const targetContextId = this.normalizeContextId(requestedContextId || this.contextIdForBrowserId(targetBrowserId) || this.activeBrowserContextId);
+    if (!this.sameBrowserTab(this._lastViewport.browserId, this._lastViewport.contextId, targetBrowserId, targetContextId)) return;
     const changed = Math.abs(this._lastViewport.width - viewport.width) > VIEWPORT_SYNC_SIZE_TOLERANCE
       || Math.abs(this._lastViewport.height - viewport.height) > VIEWPORT_SYNC_SIZE_TOLERANCE;
     if (!changed) return;
@@ -695,8 +762,16 @@ const model = {
 
   async connectViewer(options = {}) {
     let contextId = "";
+    const requestedBrowserId = this.normalizeBrowserId(options.browserId ?? this.activeBrowserId);
+    const requestedContextId = this.normalizeContextId(
+      options.contextId
+      ?? options.context_id
+      ?? this.contextIdForBrowserId(requestedBrowserId)
+      ?? this.activeBrowserContextId
+      ?? this.contextId
+    );
     try {
-      contextId = await this.ensureContextId();
+      contextId = requestedContextId || await this.ensureContextId();
     } catch (error) {
       this.connected = false;
       this.switchingBrowserId = null;
@@ -710,7 +785,13 @@ const model = {
       this._surfaceSwitching = false;
       return;
     }
-    const requestedBrowserId = this.normalizeBrowserId(options.browserId ?? this.activeBrowserId);
+    const previousContextId = this.normalizeContextId(this.contextId);
+    if (previousContextId && previousContextId !== contextId) {
+      try {
+        await websocket.emit("browser_viewer_unsubscribe", { context_id: previousContextId });
+      } catch {}
+    }
+    this.contextId = contextId;
     const sequence = this._connectSequence + 1;
     const viewerToken = makeViewerToken();
     this._connectSequence = sequence;
@@ -726,7 +807,7 @@ const model = {
       response = await websocket.request(
         "browser_viewer_subscribe",
         {
-          context_id: this.contextId,
+          context_id: contextId,
           browser_id: requestedBrowserId,
           viewer_id: viewerToken,
           viewport_width: initialViewport?.width,
@@ -750,8 +831,11 @@ const model = {
       return;
     }
     const data = firstOk(response);
-    this.browsers = data.browsers || [];
-    this.setActiveBrowserId(data.active_browser_id || requestedBrowserId || this.activeBrowserId || null);
+    this.applyBrowserListing(data.browsers || [], contextId, { replaceAll: Boolean(data.all_browsers) });
+    this.setActiveBrowserId(
+      data.active_browser_id || requestedBrowserId || this.activeBrowserId || null,
+      data.active_browser_context_id || contextId,
+    );
 	    this.connected = true;
 	    this.browserInstallExpected = false;
 	  },
@@ -761,12 +845,17 @@ const model = {
       const frameHandler = ({ data }) => {
         if (data?.context_id !== this.contextId) return;
         if (data?.viewer_id && data.viewer_id !== this._viewerToken) return;
+        const incomingContextId = this.normalizeContextId(data.context_id || this.contextId);
         const incomingBrowserId = this.normalizeBrowserId(data.browser_id || data.state?.id);
-        this.browsers = data.browsers || this.browsers;
+        this.applyBrowserListing(data.browsers || [], incomingContextId, { replaceContext: true });
         if (incomingBrowserId && !this.activeBrowserId) {
-          this.setActiveBrowserId(incomingBrowserId);
+          this.setActiveBrowserId(incomingBrowserId, incomingContextId);
         }
-        if (incomingBrowserId && this.activeBrowserId && !this.sameBrowserId(incomingBrowserId, this.activeBrowserId)) {
+        if (
+          incomingBrowserId
+          && this.activeBrowserId
+          && !this.sameBrowserTab(incomingBrowserId, incomingContextId, this.activeBrowserId, this.activeBrowserContextId)
+        ) {
           return;
         }
         if (data.state) {
@@ -779,8 +868,12 @@ const model = {
           const frameBrowserId = incomingBrowserId || this.activeBrowserId;
           this.queueFrameRender(`data:${data.mime || "image/jpeg"};base64,${data.image}`, {
             browserId: frameBrowserId,
+            contextId: incomingContextId,
             onAccepted: () => {
-              if (this.sameBrowserId(this.switchingBrowserId, frameBrowserId)) {
+              if (
+                this.sameBrowserId(this.switchingBrowserId, frameBrowserId)
+                && this.normalizeContextId(this.activeBrowserContextId) === incomingContextId
+              ) {
                 this.switchingBrowserId = null;
               }
               this._surfaceSwitching = false;
@@ -794,7 +887,7 @@ const model = {
         }
         if (!data.image && !data.state) {
           if (!this.activeBrowserId) {
-            this.setActiveBrowserId(null);
+            this.setActiveBrowserId(null, "");
             this.frameState = null;
             this.frameSrc = "";
           }
@@ -808,27 +901,33 @@ const model = {
 	      const stateHandler = ({ data }) => {
 	        if (data?.context_id !== this.contextId) return;
 	        if (data?.viewer_id && data.viewer_id !== this._viewerToken) return;
-	        this.browsers = data.browsers || [];
+        const commandContextId = this.normalizeContextId(data.active_browser_context_id || data.context_id || this.contextId);
+        this.applyBrowserListing(data.browsers || [], commandContextId, { replaceAll: Boolean(data.all_browsers) });
         const command = String(data.command || "").toLowerCase();
         const commandBrowserId = this.normalizeBrowserId(data.browser_id);
         const result = data.result || {};
         const resultState = this.stateFromCommandResult(result);
+        const resultContextId = this.normalizeContextId(
+          result.context_id
+          || result.state?.context_id
+          || commandContextId
+        );
         const preferredBrowserId = this.normalizeBrowserId(
           result.id
           || result.state?.id
           || data.last_interacted_browser_id
           || this.activeBrowserId
-          || this.firstBrowserId()
+          || this.firstBrowserId(resultContextId)
         );
 	        if (
 	          !this.activeBrowserId
 	          || command === "open"
 	          || command === "close"
-	          || this.sameBrowserId(commandBrowserId, this.activeBrowserId)
+	          || this.sameBrowserTab(commandBrowserId, commandContextId, this.activeBrowserId, this.activeBrowserContextId)
 	        ) {
-	          this.setActiveBrowserId(preferredBrowserId);
+	          this.setActiveBrowserId(preferredBrowserId, resultContextId);
 	        }
-	        this.applyActiveFrameState(resultState || this.browserById(this.activeBrowserId));
+	        this.applyActiveFrameState(resultState || this.browserById(this.activeBrowserId, this.activeBrowserContextId));
 	        this.applySnapshot(data.snapshot);
 	      };
       await websocket.on("browser_viewer_state", stateHandler);
@@ -989,31 +1088,49 @@ const model = {
     this.annotationError = "";
     this.beginCommand();
     const previousActiveBrowserId = this.activeBrowserId;
+    const previousActiveContextId = this.activeBrowserContextId;
     const commandName = String(command || "").toLowerCase();
     try {
-      await this.ensureContextId();
+      const targetContextId = commandName === "open"
+        ? await this.contextIdForNewBrowser()
+        : this.normalizeContextId(extra.context_id || extra.contextId) || await this.contextIdForActiveBrowser();
+      const targetBrowserId = this.normalizeBrowserId(extra.browser_id ?? this.activeBrowserId);
+      this.contextId = targetContextId;
       const response = await websocket.request(
         "browser_viewer_command",
         {
-          context_id: this.contextId,
-          browser_id: this.activeBrowserId,
+          ...extra,
+          context_id: targetContextId,
+          browser_id: targetBrowserId,
           viewer_id: this._viewerToken,
           command,
-          ...extra,
         },
         { timeoutMs: 20000 },
       );
       const data = firstOk(response);
-      this.browsers = data.browsers || this.browsers;
+      this.applyBrowserListing(data.browsers || [], targetContextId, { replaceAll: Boolean(data.all_browsers) });
       const result = data.result || {};
-      this.setActiveBrowserId(
+      const resultContextId = this.normalizeContextId(
+        result.context_id
+        || result.state?.context_id
+        || data.active_browser_context_id
+        || targetContextId
+      );
+      const preferredBrowser = this.browserById(
         result.id
         || result.state?.id
         || result.last_interacted_browser_id
-        || data.last_interacted_browser_id
-        || this.firstBrowserId()
+        || data.last_interacted_browser_id,
+        resultContextId,
+      )
+        || this.browserById(this.activeBrowserId, this.activeBrowserContextId)
+        || this.firstBrowser(resultContextId)
+        || this.firstBrowser();
+      this.setActiveBrowserId(preferredBrowser?.id || null, preferredBrowser?.context_id || resultContextId);
+      this.applyActiveFrameState(
+        this.stateFromCommandResult(result)
+        || this.browserById(this.activeBrowserId, this.activeBrowserContextId)
       );
-      this.applyActiveFrameState(this.stateFromCommandResult(result) || this.browserById(this.activeBrowserId));
       if (!this.activeBrowserId) {
         this.frameState = null;
         this.frameSrc = "";
@@ -1023,12 +1140,21 @@ const model = {
       }
       this.applySnapshot(data.snapshot);
       if (["navigate", "back", "forward", "reload", "close"].includes(commandName)) {
-        this.clearAnnotationsForBrowser(previousActiveBrowserId);
+        this.clearAnnotationsForBrowser(previousActiveBrowserId, null, previousActiveContextId);
         this.cancelAnnotationDraft();
       }
-      const activeChanged = this.activeBrowserId && this.activeBrowserId !== previousActiveBrowserId;
+      const activeChanged = this.activeBrowserId
+        && !this.sameBrowserTab(
+          this.activeBrowserId,
+          this.activeBrowserContextId,
+          previousActiveBrowserId,
+          previousActiveContextId,
+        );
       if ((commandName === "open" || commandName === "close" || activeChanged) && this.contextId && this.activeBrowserId) {
-        await this.connectViewer({ browserId: this.activeBrowserId });
+        await this.connectViewer({
+          browserId: this.activeBrowserId,
+          contextId: this.activeBrowserContextId,
+        });
       } else if (["navigate", "back", "forward", "reload"].includes(commandName)) {
         await this.restartCanvasStreamAfterPageChange();
       }
@@ -1074,16 +1200,21 @@ const model = {
     }
   },
 
-  async selectBrowser(id) {
+  async selectBrowser(id, contextId = "") {
     const targetId = this.normalizeBrowserId(id);
+    const targetContextId = this.normalizeContextId(contextId || this.contextIdForBrowserId(targetId));
     if (!targetId) {
       await this.openNewBrowser();
       return;
     }
-    if (this.sameBrowserId(targetId, this.activeBrowserId) && this.connected && !this.isSwitchingBrowser()) {
+    if (
+      this.sameBrowserTab(targetId, targetContextId, this.activeBrowserId, this.activeBrowserContextId)
+      && this.connected
+      && !this.isSwitchingBrowser()
+    ) {
       return;
     }
-    const browser = this.browserById(targetId);
+    const browser = this.browserById(targetId, targetContextId);
     this.error = "";
     this.switchingBrowserId = targetId;
     this.cancelFrameRender();
@@ -1092,12 +1223,15 @@ const model = {
     if (!this.addressFocused && browser?.currentUrl) {
       this.address = browser.currentUrl;
     }
-    this.setActiveBrowserId(targetId);
-    if (this.contextId) {
+    this.setActiveBrowserId(targetId, targetContextId);
+    if (this.activeBrowserContextId) {
       try {
-        await this.connectViewer({ browserId: targetId });
+        await this.connectViewer({ browserId: targetId, contextId: targetContextId });
       } catch (error) {
-        if (this.sameBrowserId(this.switchingBrowserId, targetId)) {
+        if (
+          this.sameBrowserId(this.switchingBrowserId, targetId)
+          && this.normalizeContextId(this.activeBrowserContextId) === targetContextId
+        ) {
           this.switchingBrowserId = null;
         }
         this.error = error instanceof Error ? error.message : String(error);
@@ -1109,15 +1243,23 @@ const model = {
     await this.command("open");
   },
 
-  isClosingBrowser(id) {
+  isClosingBrowser(id, contextId = "") {
     const browserId = this.normalizeBrowserId(id);
-    return Boolean(browserId && this._closingBrowserIds[String(browserId)]);
+    const key = this.browserTabKey({
+      id: browserId,
+      context_id: contextId || this.contextIdForBrowserId(browserId),
+    });
+    return Boolean(key && this._closingBrowserIds[key]);
   },
 
-  markBrowserClosing(id, closing = true) {
+  markBrowserClosing(id, contextId = "", closing = true) {
     const browserId = this.normalizeBrowserId(id);
     if (!browserId) return;
-    const key = String(browserId);
+    const key = this.browserTabKey({
+      id: browserId,
+      context_id: contextId || this.contextIdForBrowserId(browserId),
+    });
+    if (!key) return;
     const nextClosing = { ...this._closingBrowserIds };
     if (closing) {
       nextClosing[key] = true;
@@ -1127,19 +1269,20 @@ const model = {
     this._closingBrowserIds = nextClosing;
   },
 
-  async closeBrowser(id) {
+  async closeBrowser(id, contextId = "") {
     const browserId = this.normalizeBrowserId(id);
-    if (!browserId || this.isClosingBrowser(browserId)) return;
-    this.markBrowserClosing(browserId, true);
+    const browserContextId = this.normalizeContextId(contextId || this.contextIdForBrowserId(browserId));
+    if (!browserId || !browserContextId || this.isClosingBrowser(browserId, browserContextId)) return;
+    this.markBrowserClosing(browserId, browserContextId, true);
     try {
-      await this.command("close", { browser_id: browserId });
+      await this.command("close", { browser_id: browserId, context_id: browserContextId });
     } finally {
-      this.markBrowserClosing(browserId, false);
+      this.markBrowserClosing(browserId, browserContextId, false);
     }
   },
 
   isActiveBrowser(browser) {
-    return Number(browser?.id) === Number(this.activeBrowserId);
+    return this.sameBrowserTab(browser?.id, browser?.context_id, this.activeBrowserId, this.activeBrowserContextId);
   },
 
   browserTabTitle(browser) {
@@ -1150,12 +1293,41 @@ const model = {
 
   browserTabLabel(browser) {
     const id = browser?.id ? `#${browser.id}` : "Browser";
-    return `${id} ${this.browserTabTitle(browser)}`;
+    return [id, this.browserTabTitle(browser)].filter(Boolean).join(" ");
   },
 
-  firstBrowserId() {
-    const first = Array.isArray(this.browsers) ? this.browsers[0] : null;
-    return first?.id || null;
+  browserTabTooltip(browser) {
+    const chatTitle = this.browserChatTitle(browser);
+    return [this.browserTabLabel(browser), chatTitle ? `Chat: ${chatTitle}` : ""]
+      .filter(Boolean)
+      .join("\n");
+  },
+
+  browserTabKey(browser = {}) {
+    const id = this.normalizeBrowserId(browser?.id ?? browser);
+    const contextId = this.normalizeContextId(browser?.context_id || browser?.contextId || this.activeBrowserContextId || this.contextId);
+    return id && contextId ? `${contextId}:${id}` : "";
+  },
+
+  browserChatTitle(browser = {}) {
+    const contextId = this.normalizeContextId(browser?.context_id || browser?.contextId);
+    if (!contextId) return "";
+    const context = chatsStore.contexts?.find?.((item) => item?.id === contextId);
+    return String(context?.name || context?.title || "").trim();
+  },
+
+  firstBrowser(contextId = "") {
+    const normalizedContextId = this.normalizeContextId(contextId);
+    const browsers = Array.isArray(this.browsers) ? this.browsers : [];
+    if (normalizedContextId) {
+      const scoped = browsers.find((browser) => this.normalizeContextId(browser?.context_id) === normalizedContextId);
+      if (scoped) return scoped;
+    }
+    return browsers[0] || null;
+  },
+
+  firstBrowserId(contextId = "") {
+    return this.firstBrowser(contextId)?.id || null;
   },
 
   normalizeBrowserId(id) {
@@ -1168,10 +1340,49 @@ const model = {
     return Boolean(leftId && rightId && leftId === rightId);
   },
 
-  browserById(id) {
+  sameBrowserTab(leftId, leftContextId, rightId, rightContextId) {
+    return this.sameBrowserId(leftId, rightId)
+      && this.normalizeContextId(leftContextId) === this.normalizeContextId(rightContextId);
+  },
+
+  browserById(id, contextId = "") {
     const numeric = this.normalizeBrowserId(id);
     if (!numeric || !Array.isArray(this.browsers)) return null;
-    return this.browsers.find((browser) => Number(browser?.id) === numeric) || null;
+    const normalizedContextId = this.normalizeContextId(contextId);
+    return this.browsers.find((browser) => (
+      Number(browser?.id) === numeric
+      && (!normalizedContextId || this.normalizeContextId(browser?.context_id) === normalizedContextId)
+    )) || null;
+  },
+
+  contextIdForBrowserId(id) {
+    const numeric = this.normalizeBrowserId(id);
+    if (!numeric) return "";
+    if (this.sameBrowserId(numeric, this.activeBrowserId) && this.activeBrowserContextId) {
+      return this.activeBrowserContextId;
+    }
+    return this.normalizeContextId(this.browserById(numeric)?.context_id);
+  },
+
+  applyBrowserListing(browsers = [], fallbackContextId = "", options = {}) {
+    const incoming = Array.isArray(browsers)
+      ? browsers.map((browser) => ({
+          ...browser,
+          context_id: this.normalizeContextId(browser?.context_id || fallbackContextId),
+        })).filter((browser) => browser.id && browser.context_id)
+      : [];
+    const incomingKeys = new Set(incoming.map((browser) => this.browserTabKey(browser)));
+    const fallback = this.normalizeContextId(fallbackContextId);
+    const existing = Array.isArray(this.browsers) ? this.browsers : [];
+    const retained = options.replaceAll
+      ? []
+      : existing.filter((browser) => {
+          const key = this.browserTabKey(browser);
+          if (incomingKeys.has(key)) return false;
+          if (options.replaceContext && fallback && this.normalizeContextId(browser?.context_id) === fallback) return false;
+          return true;
+        });
+    this.browsers = [...retained, ...incoming];
   },
 
   stateFromCommandResult(result = {}) {
@@ -1187,7 +1398,12 @@ const model = {
   applyActiveFrameState(nextState = null) {
     if (!nextState) return;
     const stateId = this.normalizeBrowserId(nextState.id);
-    if (stateId && this.activeBrowserId && !this.sameBrowserId(stateId, this.activeBrowserId)) {
+    const stateContextId = this.normalizeContextId(nextState.context_id || this.activeBrowserContextId);
+    if (
+      stateId
+      && this.activeBrowserId
+      && !this.sameBrowserTab(stateId, stateContextId, this.activeBrowserId, this.activeBrowserContextId)
+    ) {
       return;
     }
     const previousUrl = String(this.frameState?.currentUrl || "");
@@ -1204,7 +1420,12 @@ const model = {
 	  applySnapshot(snapshot = null) {
 	    if (!snapshot?.image) return;
 	    const snapshotId = this.normalizeBrowserId(snapshot.browser_id || snapshot.state?.id);
-	    if (snapshotId && this.activeBrowserId && !this.sameBrowserId(snapshotId, this.activeBrowserId)) {
+    const snapshotContextId = this.normalizeContextId(snapshot.context_id || snapshot.state?.context_id || this.activeBrowserContextId);
+	    if (
+      snapshotId
+      && this.activeBrowserId
+      && !this.sameBrowserTab(snapshotId, snapshotContextId, this.activeBrowserId, this.activeBrowserContextId)
+    ) {
 	      return;
 	    }
 	    if (snapshot.state) {
@@ -1213,8 +1434,12 @@ const model = {
 	    const frameBrowserId = snapshotId || this.activeBrowserId;
 	    this.queueFrameRender(`data:${snapshot.mime || "image/jpeg"};base64,${snapshot.image}`, {
 	      browserId: frameBrowserId,
+      contextId: snapshotContextId,
 	      onAccepted: () => {
-	        if (this.sameBrowserId(this.switchingBrowserId, frameBrowserId)) {
+	        if (
+          this.sameBrowserId(this.switchingBrowserId, frameBrowserId)
+          && this.normalizeContextId(this.activeBrowserContextId) === snapshotContextId
+        ) {
 	          this.switchingBrowserId = null;
 	        }
 	        this._surfaceSwitching = false;
@@ -1223,19 +1448,32 @@ const model = {
 	  },
 
   isSwitchingBrowser() {
-    return Boolean(this.switchingBrowserId && this.sameBrowserId(this.switchingBrowserId, this.activeBrowserId));
+    return Boolean(
+      this.switchingBrowserId
+      && this.sameBrowserId(this.switchingBrowserId, this.activeBrowserId)
+      && this.normalizeContextId(this.contextId) === this.normalizeContextId(this.activeBrowserContextId)
+    );
   },
 
   isBusy() {
     return Boolean(this.loading || this.commandInFlight || this._surfaceSwitching || this.isSwitchingBrowser());
   },
 
-  setActiveBrowserId(id) {
+  setActiveBrowserId(id, contextId = "") {
     const previous = this.activeBrowserId;
+    const previousContextId = this.activeBrowserContextId;
     const numeric = this.normalizeBrowserId(id);
-    const exists = !numeric || !Array.isArray(this.browsers) || this.browsers.some((browser) => Number(browser.id) === numeric);
+    const normalizedContextId = this.normalizeContextId(contextId || this.contextIdForBrowserId(numeric));
+    const exists = !numeric
+      || !Array.isArray(this.browsers)
+      || this.browsers.some((browser) => (
+        Number(browser.id) === numeric
+        && (!normalizedContextId || this.normalizeContextId(browser.context_id) === normalizedContextId)
+      ));
     this.activeBrowserId = exists ? numeric : null;
-    if (this.activeBrowserId !== previous) {
+    this.activeBrowserContextId = this.activeBrowserId ? normalizedContextId : "";
+    this.contextId = this.activeBrowserContextId || this.contextId;
+    if (this.activeBrowserId !== previous || this.activeBrowserContextId !== previousContextId) {
       this._lastViewportKey = "";
       this._lastViewport = null;
       this.cancelAnnotationDraft();
@@ -1338,9 +1576,10 @@ const model = {
 
   visibleAnnotations() {
     const browserId = this.normalizeBrowserId(this.activeBrowserId);
+    const contextId = this.normalizeContextId(this.activeBrowserContextId);
     const url = this.activeAnnotationUrl();
     return this.annotationComments.filter((annotation) => (
-      this.sameBrowserId(annotation.browserId, browserId)
+      this.sameBrowserTab(annotation.browserId, annotation.contextId, browserId, contextId)
       && String(annotation.url || "") === url
     ));
   },
@@ -1350,14 +1589,15 @@ const model = {
   },
 
   clearVisibleAnnotations() {
-    this.clearAnnotationsForBrowser(this.activeBrowserId, this.activeAnnotationUrl());
+    this.clearAnnotationsForBrowser(this.activeBrowserId, this.activeAnnotationUrl(), this.activeBrowserContextId);
   },
 
-  clearAnnotationsForBrowser(browserId, url = null) {
+  clearAnnotationsForBrowser(browserId, url = null, contextId = "") {
     const numericBrowserId = this.normalizeBrowserId(browserId);
+    const normalizedContextId = this.normalizeContextId(contextId || this.activeBrowserContextId);
     if (!numericBrowserId) return;
     this.annotationComments = this.annotationComments.filter((annotation) => {
-      if (!this.sameBrowserId(annotation.browserId, numericBrowserId)) return true;
+      if (!this.sameBrowserTab(annotation.browserId, annotation.contextId, numericBrowserId, normalizedContextId)) return true;
       return url ? String(annotation.url || "") !== String(url) : false;
     });
   },
@@ -1510,7 +1750,8 @@ const model = {
   },
 
   async createAnnotationDraft(payload, fallbackRect) {
-    if (!this.activeBrowserId || !this.contextId) return;
+    const contextId = this.normalizeContextId(this.activeBrowserContextId || this.contextId);
+    if (!this.activeBrowserId || !contextId) return;
     const sequence = this._annotationSequence + 1;
     const browserId = this.activeBrowserId;
     const url = this.activeAnnotationUrl();
@@ -1522,7 +1763,7 @@ const model = {
       const response = await websocket.request(
         "browser_viewer_annotation",
         {
-          context_id: this.contextId,
+          context_id: contextId,
           browser_id: browserId,
           viewer_id: this._viewerToken,
           payload,
@@ -1535,6 +1776,7 @@ const model = {
       this.annotationDraft = {
         id: makeViewerToken(),
         browserId,
+        contextId,
         url,
         title,
         kind: metadata.kind || payload.kind,
@@ -1733,21 +1975,22 @@ const model = {
 
   async syncViewport(force = false, options = {}) {
     const restartStream = Boolean(options.restartStream);
-    if (!this.contextId || !this.activeBrowserId) {
+    const contextId = this.normalizeContextId(this.activeBrowserContextId || this.contextId);
+    if (!contextId || !this.activeBrowserId) {
       return;
     }
     const viewport = this.currentViewportSize();
     if (!viewport) {
       return;
     }
-    const key = `${this.activeBrowserId}:${viewport.width}x${viewport.height}`;
+    const key = `${contextId}:${this.activeBrowserId}:${viewport.width}x${viewport.height}`;
     if (
       (!restartStream && this._lastViewportKey === key)
       || (
         !force
         && !restartStream
         && this._lastViewport
-        && this.sameBrowserId(this._lastViewport.browserId, this.activeBrowserId)
+        && this.sameBrowserTab(this._lastViewport.browserId, this._lastViewport.contextId, this.activeBrowserId, contextId)
         && Math.abs(this._lastViewport.width - viewport.width) <= VIEWPORT_SYNC_SIZE_TOLERANCE
         && Math.abs(this._lastViewport.height - viewport.height) <= VIEWPORT_SYNC_SIZE_TOLERANCE
       )
@@ -1756,7 +1999,7 @@ const model = {
     }
     try {
       await websocket.emit("browser_viewer_input", {
-        context_id: this.contextId,
+        context_id: contextId,
         browser_id: this.activeBrowserId,
         viewer_id: this._viewerToken,
         input_type: "viewport",
@@ -1767,6 +2010,7 @@ const model = {
       this._lastViewportKey = key;
       this._lastViewport = {
         browserId: this.activeBrowserId,
+        contextId,
         width: viewport.width,
         height: viewport.height,
       };
@@ -1779,11 +2023,12 @@ const model = {
 
   async sendMouse(eventType, event) {
     if (this.annotating) return;
-    if (!this.activeBrowserId || !event?.currentTarget) return;
+    const contextId = this.normalizeContextId(this.activeBrowserContextId || this.contextId);
+    if (!contextId || !this.activeBrowserId || !event?.currentTarget) return;
     const pointer = this.pointerCoordinatesFor(event);
     if (!pointer) return;
     const payload = {
-      context_id: this.contextId,
+      context_id: contextId,
       browser_id: this.activeBrowserId,
       viewer_id: this._viewerToken,
       input_type: "mouse",
@@ -1807,12 +2052,13 @@ const model = {
   },
 
   async sendWheel(event) {
-    if (!this.activeBrowserId || !event) return;
+    const contextId = this.normalizeContextId(this.activeBrowserContextId || this.contextId);
+    if (!contextId || !this.activeBrowserId || !event) return;
     const image = event.currentTarget?.querySelector?.(".browser-frame") || event.target?.closest?.(".browser-frame");
     const pointer = this.pointerCoordinatesFor(event, image);
     if (!pointer) return;
     const payload = {
-      context_id: this.contextId,
+      context_id: contextId,
       browser_id: this.activeBrowserId,
       viewer_id: this._viewerToken,
       input_type: "wheel",
@@ -1830,14 +2076,15 @@ const model = {
 
   async sendKey(event) {
     if (this.annotating) return;
-    if (!this.activeBrowserId) return;
+    const contextId = this.normalizeContextId(this.activeBrowserContextId || this.contextId);
+    if (!contextId || !this.activeBrowserId) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const editable = ["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName);
     if (editable) return;
     event.preventDefault();
     const printable = event.key && event.key.length === 1;
     await websocket.emit("browser_viewer_input", {
-      context_id: this.contextId,
+      context_id: contextId,
       browser_id: this.activeBrowserId,
       input_type: "keyboard",
       key: printable ? "" : event.key,

@@ -69,6 +69,16 @@ function browserIdFromResult(result = {}, kvps = {}) {
   );
 }
 
+function browserContextIdFromResult(result = {}, kvps = {}) {
+  return (
+    result.context_id
+    || result.state?.context_id
+    || kvps.context_id
+    || kvps.contextId
+    || null
+  );
+}
+
 function isFreshToolMessage(timestamp) {
   const value = Number(timestamp);
   if (!Number.isFinite(value) || value <= 0) return true;
@@ -94,7 +104,11 @@ function autoOpenBrowserCanvas(args, result) {
   sessionStorage.setItem(persistedKey, "1");
   requestAnimationFrame(async () => {
     if (!(await browserAllowsToolAutofocus())) return;
-    void openBrowserCanvas({ browserId, source: "tool" });
+    void openBrowserCanvas({
+      browserId,
+      contextId: browserContextIdFromResult(result, kvps),
+      source: "tool",
+    });
   });
 }
 
@@ -119,7 +133,11 @@ function drawBrowserTool({
   const browserButton = createActionButton(
     "visibility",
     "Browser",
-    () => openBrowserCanvas({ browserId: browserIdFromResult(browserResult, kvps), source: "tool" }),
+    () => openBrowserCanvas({
+      browserId: browserIdFromResult(browserResult, kvps),
+      contextId: browserContextIdFromResult(browserResult, kvps),
+      source: "tool",
+    }),
   );
   browserButton.setAttribute("title", "Open Browser");
   browserButton.setAttribute("aria-label", "Open Browser");

@@ -11,25 +11,26 @@
   <div x-data>
     <template x-if="$store.browserPage">
       <div class="browser-panel" x-create="$store.browserPage.onOpen($el, xAttrs($el) || {})" x-destroy="$store.browserPage.cleanup()"
+        x-effect="$store.browserPage.handleSelectedContextChange($store.chats?.selected)"
         @keydown.window="$store.browserPage.handleKeydown($event)">
         <div class="browser-meta">
           <div class="browser-meta-top">
             <div class="browser-session-tabs" role="tablist" aria-label="Browser sessions">
-              <template x-for="browser in $store.browserPage.browsers" :key="browser.id">
+              <template x-for="browser in $store.browserPage.browsers" :key="$store.browserPage.browserTabKey(browser)">
                 <div class="browser-tab-shell" :class="{ 'is-active': $store.browserPage.isActiveBrowser(browser) }">
 	                  <button type="button" class="browser-tab" role="tab"
 	                    :aria-selected="$store.browserPage.isActiveBrowser(browser).toString()"
-	                    :title="$store.browserPage.browserTabLabel(browser)"
-	                    @click="$store.browserPage.selectBrowser(browser.id)">
+	                    :title="$store.browserPage.browserTabTooltip(browser)"
+	                    @click="$store.browserPage.selectBrowser(browser.id, browser.context_id)">
                     <span class="material-symbols-outlined browser-tab-icon" aria-hidden="true">language</span>
                     <span class="browser-tab-title" x-text="$store.browserPage.browserTabTitle(browser)"></span>
                   </button>
 	                  <button type="button" class="browser-tab-close"
 	                    :title="'Close ' + $store.browserPage.browserTabLabel(browser)"
 	                    :aria-label="'Close ' + $store.browserPage.browserTabLabel(browser)"
-	                    :disabled="$store.browserPage.isClosingBrowser(browser.id)"
+	                    :disabled="$store.browserPage.isClosingBrowser(browser.id, browser.context_id)"
 	                    @pointerdown.stop
-	                    @click.stop="$store.browserPage.closeBrowser(browser.id)">
+	                    @click.stop="$store.browserPage.closeBrowser(browser.id, browser.context_id)">
                     <span class="material-symbols-outlined">close</span>
                   </button>
                 </div>

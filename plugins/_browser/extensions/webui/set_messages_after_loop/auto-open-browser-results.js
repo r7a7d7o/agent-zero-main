@@ -16,6 +16,7 @@ export default async function autoOpenBrowserResults(context) {
     if (!shouldAutoOpen(args, payload, result)) continue;
 
     const browserId = getBrowserId(payload, result);
+    const contextId = getBrowserContextId(payload, result);
     const key = [
       args?.id || "",
       browserId || "",
@@ -26,7 +27,7 @@ export default async function autoOpenBrowserResults(context) {
 
     requestAnimationFrame(async () => {
       if (!(await browserAllowsToolAutofocus())) return;
-      void openBrowserCanvas({ browserId, source: "tool-result" });
+      void openBrowserCanvas({ browserId, contextId, source: "tool-result" });
     });
   }
 }
@@ -101,6 +102,16 @@ function getBrowserId(payload = {}, result = {}) {
     || result.last_interacted_browser_id
     || payload.browser_id
     || payload.browserId
+    || null
+  );
+}
+
+function getBrowserContextId(payload = {}, result = {}) {
+  return (
+    result.context_id
+    || result.state?.context_id
+    || payload.context_id
+    || payload.contextId
     || null
   );
 }
