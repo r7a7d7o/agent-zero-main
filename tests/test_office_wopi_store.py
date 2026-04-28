@@ -113,6 +113,11 @@ def test_sync_open_sessions_closes_sessions_without_visible_tabs(office_state):
     orphan = wopi_store.create_session(second["file_id"], "user-a", "write", "http://localhost:32080")
     ok, _ = wopi_store.lock(second["file_id"], "orphan-lock", orphan["session_id"], 120)
     assert ok is True
+    with wopi_store.connect() as conn:
+        conn.execute(
+            "UPDATE sessions SET created_at = ? WHERE session_id = ?",
+            (wopi_store.now() - wopi_store.ORPHAN_SESSION_GRACE_SECONDS - 1, orphan["session_id"]),
+        )
 
     assert wopi_store.sync_open_sessions([visible["session_id"]]) == 1
 
@@ -122,6 +127,16 @@ def test_sync_open_sessions_closes_sessions_without_visible_tabs(office_state):
     assert wopi_store.get_lock(second["file_id"]) == ""
     with pytest.raises(PermissionError):
         wopi_store.validate_token(orphan["access_token"], second["file_id"])
+
+
+def test_sync_open_sessions_preserves_new_sessions_during_mount_race(office_state):
+    doc = wopi_store.create_document("document", "Fresh", "docx", "new")
+    session = wopi_store.create_session(doc["file_id"], "user-a", "write", "http://localhost:32080")
+
+    assert wopi_store.sync_open_sessions([]) == 0
+
+    token_info = wopi_store.validate_token(session["access_token"], doc["file_id"], require_write=True)
+    assert token_info["session"]["session_id"] == session["session_id"]
 
 
 def test_recent_documents_include_lightweight_previews(office_state):

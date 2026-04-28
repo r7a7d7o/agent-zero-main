@@ -25,6 +25,7 @@ PLUGIN_NAME = "_office"
 SUPPORTED_EXTENSIONS = {"docx", "xlsx", "pptx", "odt", "ods", "odp"}
 DEFAULT_TTL_SECONDS = 8 * 60 * 60
 DEFAULT_LOCK_SECONDS = 30 * 60
+ORPHAN_SESSION_GRACE_SECONDS = 30
 MAX_LOCK_SECONDS = 3600
 MIN_LOCK_SECONDS = 60
 MAX_SAVE_BYTES = 512 * 1024 * 1024
@@ -289,20 +290,24 @@ def sync_open_sessions(active_session_ids: list[str] | tuple[str, ...] | set[str
     active_ids = {str(session_id).strip() for session_id in active_session_ids if str(session_id).strip()}
     with connect() as conn:
         _clear_expired_sessions(conn)
+        cutoff = now() - ORPHAN_SESSION_GRACE_SECONDS
         if active_ids:
             placeholders = ",".join("?" for _ in active_ids)
             rows = conn.execute(
-                f"SELECT session_id, file_id FROM sessions WHERE session_id NOT IN ({placeholders})",
-                tuple(active_ids),
+                f"SELECT session_id, file_id FROM sessions WHERE session_id NOT IN ({placeholders}) AND created_at < ?",
+                (*tuple(active_ids), cutoff),
             ).fetchall()
-            conn.execute(f"DELETE FROM tokens WHERE session_id NOT IN ({placeholders})", tuple(active_ids))
-            conn.execute(f"DELETE FROM sessions WHERE session_id NOT IN ({placeholders})", tuple(active_ids))
-            conn.execute(f"DELETE FROM locks WHERE session_id NOT IN ({placeholders})", tuple(active_ids))
         else:
-            rows = conn.execute("SELECT session_id, file_id FROM sessions").fetchall()
-            conn.execute("DELETE FROM tokens")
-            conn.execute("DELETE FROM sessions")
-            conn.execute("DELETE FROM locks")
+            rows = conn.execute("SELECT session_id, file_id FROM sessions WHERE created_at < ?", (cutoff,)).fetchall()
+
+        if not rows:
+            return 0
+
+        session_ids = tuple(row["session_id"] for row in rows)
+        placeholders = ",".join("?" for _ in session_ids)
+        conn.execute(f"DELETE FROM tokens WHERE session_id IN ({placeholders})", session_ids)
+        conn.execute(f"DELETE FROM sessions WHERE session_id IN ({placeholders})", session_ids)
+        conn.execute(f"DELETE FROM locks WHERE session_id IN ({placeholders})", session_ids)
 
         for row in rows:
             conn.execute(
