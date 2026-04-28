@@ -13,8 +13,9 @@ const BROWSER_FIRST_INSTALL_TIMEOUT_MS = 300000;
 const BROWSER_CONFIG_REFRESH_MS = 15000;
 const VIEWPORT_SYNC_DEBOUNCE_MS = 220;
 const VIEWPORT_SYNC_SIZE_TOLERANCE = 4;
-const CANVAS_VIEWPORT_SETTLE_MS = 260;
-const SURFACE_VIEWPORT_STABLE_FRAMES = 2;
+const CANVAS_VIEWPORT_SETTLE_MS = 520;
+const SURFACE_VIEWPORT_STABLE_FRAMES = 4;
+const FRAME_REJECT_SYNC_COOLDOWN_MS = 600;
 const ANNOTATION_DRAG_THRESHOLD = 6;
 const ANNOTATION_MAX_COMMENTS = 24;
 const ANNOTATION_DOM_LIMIT = 1200;
@@ -55,6 +56,34 @@ function nextAnimationFrame() {
   });
 }
 
+function loadFrameDimensions(src) {
+  return new Promise((resolve) => {
+    if (!src) {
+      resolve(null);
+      return;
+    }
+
+    const image = new Image();
+    let settled = false;
+    const finish = (dimensions) => {
+      if (settled) return;
+      settled = true;
+      resolve(dimensions);
+    };
+
+    image.onload = () => finish({
+      width: image.naturalWidth || 0,
+      height: image.naturalHeight || 0,
+    });
+    image.onerror = () => finish(null);
+    image.src = src;
+
+    if (image.complete) {
+      image.onload();
+    }
+  });
+}
+
 const model = {
   loading: true,
   error: "",
@@ -79,13 +108,17 @@ const model = {
   _frameOff: null,
   _stateOff: null,
   _lastFrameAt: 0,
+  _lastFrameDimensions: null,
   _pendingFrameSrc: "",
+  _pendingFrameOptions: null,
   _frameRenderHandle: null,
   _frameRenderCancel: null,
+  _frameRenderSequence: 0,
   _floatingCleanup: null,
   _stageElement: null,
   _stageResizeObserver: null,
   _viewportSyncTimer: null,
+  _lastFrameRejectSyncAt: 0,
   _lastViewportKey: "",
   _lastViewport: null,
   _annotationPointer: null,
@@ -466,6 +499,7 @@ const model = {
   resetRenderedFrame() {
     this.cancelFrameRender();
     this.frameSrc = "";
+    this._lastFrameDimensions = null;
     this._lastFrameAt = 0;
   },
 
@@ -599,11 +633,16 @@ const model = {
           this.address = data.state.currentUrl;
         }
         if (data.image) {
-          this.queueFrameRender(`data:${data.mime || "image/jpeg"};base64,${data.image}`);
-          if (this.sameBrowserId(this.switchingBrowserId, incomingBrowserId || this.activeBrowserId)) {
-            this.switchingBrowserId = null;
-          }
-          this._surfaceSwitching = false;
+          const frameBrowserId = incomingBrowserId || this.activeBrowserId;
+          this.queueFrameRender(`data:${data.mime || "image/jpeg"};base64,${data.image}`, {
+            browserId: frameBrowserId,
+            onAccepted: () => {
+              if (this.sameBrowserId(this.switchingBrowserId, frameBrowserId)) {
+                this.switchingBrowserId = null;
+              }
+              this._surfaceSwitching = false;
+            },
+          });
         } else {
           this.cancelFrameRender();
           if (!data.state) {
@@ -654,8 +693,9 @@ const model = {
     }
   },
 
-  queueFrameRender(frameSrc) {
+  queueFrameRender(frameSrc, options = {}) {
     this._pendingFrameSrc = frameSrc;
+    this._pendingFrameOptions = options || null;
     if (this._frameRenderHandle) return;
     const schedule = globalThis.requestAnimationFrame?.bind(globalThis);
     if (schedule) {
@@ -670,8 +710,59 @@ const model = {
   flushFrameRender() {
     this._frameRenderHandle = null;
     this._frameRenderCancel = null;
-    this.frameSrc = this._pendingFrameSrc || "";
+    const frameSrc = this._pendingFrameSrc || "";
+    const options = this._pendingFrameOptions || {};
     this._pendingFrameSrc = "";
+    this._pendingFrameOptions = null;
+    const sequence = this._frameRenderSequence + 1;
+    this._frameRenderSequence = sequence;
+    void this.renderDecodedFrame(frameSrc, options, sequence);
+  },
+
+  async renderDecodedFrame(frameSrc, options = {}, sequence = 0) {
+    if (!frameSrc) {
+      if (sequence === this._frameRenderSequence) {
+        this.frameSrc = "";
+      }
+      return;
+    }
+    const dimensions = await loadFrameDimensions(frameSrc);
+    if (sequence !== this._frameRenderSequence) return;
+    const viewport = this.currentViewportSize() || this._lastViewport;
+    if (!this.frameMatchesViewport(dimensions, viewport)) {
+      this.requestViewportSyncAfterRejectedFrame();
+      return;
+    }
+    this.frameSrc = frameSrc;
+    this._lastFrameDimensions = dimensions;
+    this._lastFrameAt = Date.now();
+    options?.onAccepted?.();
+  },
+
+  frameMatchesViewport(dimensions = null, viewport = null) {
+    if (!dimensions?.width || !dimensions?.height || !viewport?.width || !viewport?.height) {
+      return false;
+    }
+    return Math.abs(Number(dimensions.width) - Number(viewport.width)) <= VIEWPORT_SYNC_SIZE_TOLERANCE
+      && Math.abs(Number(dimensions.height) - Number(viewport.height)) <= VIEWPORT_SYNC_SIZE_TOLERANCE;
+  },
+
+  requestViewportSyncAfterRejectedFrame() {
+    const now = Date.now();
+    if (now - this._lastFrameRejectSyncAt < FRAME_REJECT_SYNC_COOLDOWN_MS) return;
+    this._lastFrameRejectSyncAt = now;
+    this.queueViewportSync(true);
+  },
+
+  clearRenderedFrameIfViewportChanged() {
+    const viewport = this.currentViewportSize();
+    if (!this.frameSrc || !this._lastFrameDimensions || !viewport) return;
+    if (this.frameMatchesViewport(this._lastFrameDimensions, viewport)) return;
+    this.resetRenderedFrame();
+    if (this.activeBrowserId) {
+      this._surfaceSwitching = true;
+      this.switchingBrowserId = this.activeBrowserId;
+    }
   },
 
   cancelFrameRender() {
@@ -681,6 +772,8 @@ const model = {
     this._frameRenderHandle = null;
     this._frameRenderCancel = null;
     this._pendingFrameSrc = "";
+    this._pendingFrameOptions = null;
+    this._frameRenderSequence += 1;
   },
 
   async command(command, extra = {}) {
@@ -865,11 +958,16 @@ const model = {
 	    if (snapshot.state) {
 	      this.applyActiveFrameState(snapshot.state);
 	    }
-	    this.queueFrameRender(`data:${snapshot.mime || "image/jpeg"};base64,${snapshot.image}`);
-	    if (this.sameBrowserId(this.switchingBrowserId, snapshotId || this.activeBrowserId)) {
-	      this.switchingBrowserId = null;
-	    }
-	    this._surfaceSwitching = false;
+	    const frameBrowserId = snapshotId || this.activeBrowserId;
+	    this.queueFrameRender(`data:${snapshot.mime || "image/jpeg"};base64,${snapshot.image}`, {
+	      browserId: frameBrowserId,
+	      onAccepted: () => {
+	        if (this.sameBrowserId(this.switchingBrowserId, frameBrowserId)) {
+	          this.switchingBrowserId = null;
+	        }
+	        this._surfaceSwitching = false;
+	      },
+	    });
 	  },
 
   isSwitchingBrowser() {
@@ -1371,6 +1469,7 @@ const model = {
   },
 
   queueViewportSync(force = false) {
+    this.clearRenderedFrameIfViewportChanged();
     if (this._viewportSyncTimer) {
       globalThis.clearTimeout(this._viewportSyncTimer);
     }

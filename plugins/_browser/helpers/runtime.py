@@ -111,7 +111,6 @@ class _BrowserScreencast:
         self._ack_tasks: set[asyncio.Task] = set()
         self._expected_width = 0
         self._expected_height = 0
-        self._dimension_mismatches = 0
 
     async def start(
         self,
@@ -125,7 +124,6 @@ class _BrowserScreencast:
         height = max(200, min(4096, int(viewport.get("height") or DEFAULT_VIEWPORT["height"])))
         self._expected_width = width
         self._expected_height = height
-        self._dimension_mismatches = 0
         with contextlib.suppress(Exception):
             await self.session.send("Page.enable")
         await self.session.send(
@@ -229,10 +227,12 @@ class _BrowserScreencast:
         if not size:
             return True
         width, height = size
-        if abs(width - self._expected_width) <= 2 and abs(height - self._expected_height) <= 2:
+        if (
+            abs(width - self._expected_width) <= VIEWPORT_SIZE_TOLERANCE
+            and abs(height - self._expected_height) <= VIEWPORT_SIZE_TOLERANCE
+        ):
             return True
-        self._dimension_mismatches += 1
-        return self._dimension_mismatches > 10
+        return False
 
     @staticmethod
     def _jpeg_size(data: str) -> tuple[int, int] | None:

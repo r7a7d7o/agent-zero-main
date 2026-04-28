@@ -110,6 +110,21 @@ import plugins._browser.tools.browser as browser_tool_module
 import plugins._browser.api.ws_browser as ws_browser_module
 
 
+SMALL_JPEG_10X10 = (
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsL"
+    "DBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/"
+    "2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy"
+    "MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAKAAoDASIAAhEBAxEB/8QAFQAB"
+    "AAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhADE"
+    "AAAAKf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAA"
+    "AAAAAAAAAAAAA/9oACAEDAQE/ASP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECA"
+    "QE/ASP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAA"
+    "AAAAAAAAAAAAAA/9oACAEBAAE/ISf/2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAA"
+    "AAAAAAAAAAP/aAAgBAwEBPxAk/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEB"
+    "PxAk/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxAn/9k="
+)
+
+
 def test_browser_url_normalization_matches_address_bar_hosts():
     assert normalize_url("localhost:3000") == "http://localhost:3000/"
     assert normalize_url("127.0.0.1:8000/path") == "http://127.0.0.1:8000/path"
@@ -365,7 +380,8 @@ def test_browser_canvas_startup_waits_for_raw_viewport_settle():
         encoding="utf-8"
     )
 
-    assert "const CANVAS_VIEWPORT_SETTLE_MS = 260;" in js
+    assert "const CANVAS_VIEWPORT_SETTLE_MS = 520;" in js
+    assert "const SURFACE_VIEWPORT_STABLE_FRAMES = 4;" in js
     assert "surfaceViewportMeasurement()" in js
     assert "rawWidth" in js
     assert "rawHeight" in js
@@ -454,6 +470,9 @@ def test_browser_viewer_uses_cdp_screencast_transport():
     assert "viewport_width: initialViewport?.width" in browser_store
     assert "viewport_height: initialViewport?.height" in browser_store
     assert "this.frameState = data.state || null" not in browser_store
+    assert "function loadFrameDimensions(src)" in browser_store
+    assert "frameMatchesViewport(dimensions = null, viewport = null)" in browser_store
+    assert "requestViewportSyncAfterRejectedFrame()" in browser_store
     assert "overflow: hidden;" in main_html
     assert "object-fit: fill;" in main_html
     assert "image-rendering: auto;" in main_html
@@ -504,19 +523,7 @@ def test_browser_runtime_and_content_helper_expose_annotation_target():
 
 @pytest.mark.anyio
 async def test_browser_screencast_acknowledges_and_drops_stale_frames():
-    first_image = (
-        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsL"
-        "DBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/"
-        "2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy"
-        "MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAKAAoDASIAAhEBAxEB/8QAFQAB"
-        "AAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhADE"
-        "AAAAKf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAA"
-        "AAAAAAAAAAAAA/9oACAEDAQE/ASP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECA"
-        "QE/ASP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAA"
-        "AAAAAAAAAAAAAA/9oACAEBAAE/ISf/2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAA"
-        "AAAAAAAAAAP/aAAgBAwEBPxAk/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEB"
-        "PxAk/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxAn/9k="
-    )
+    first_image = SMALL_JPEG_10X10
 
     class FakeSession:
         def __init__(self):
@@ -570,6 +577,43 @@ async def test_browser_screencast_acknowledges_and_drops_stale_frames():
 
     assert ("Page.stopScreencast", {}) in session.sent
     assert session.detached is True
+
+
+@pytest.mark.anyio
+async def test_browser_screencast_keeps_rejecting_wrong_viewport_frames():
+    class FakeSession:
+        def __init__(self):
+            self.handlers = {}
+            self.sent = []
+
+        def on(self, event, handler):
+            self.handlers[event] = handler
+
+        async def send(self, method, params=None):
+            self.sent.append((method, params or {}))
+
+        async def detach(self):
+            pass
+
+    session = FakeSession()
+    screencast = _BrowserScreencast(
+        stream_id="stream",
+        browser_id=7,
+        session=session,
+        mime="image/jpeg",
+    )
+
+    await screencast.start(quality=92, every_nth_frame=1, viewport={"width": 1118, "height": 662})
+    for session_id in range(1, 14):
+        session.handlers["Page.screencastFrame"](
+            {"data": SMALL_JPEG_10X10, "metadata": {}, "sessionId": session_id}
+        )
+    await asyncio.sleep(0)
+
+    assert await screencast.pop_frame() is None
+    assert ("Page.screencastFrameAck", {"sessionId": 13}) in session.sent
+
+    await screencast.stop()
 
 
 def test_browser_docker_installs_full_chromium_to_persistent_cache():
