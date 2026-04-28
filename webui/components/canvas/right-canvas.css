@@ -316,6 +316,10 @@ body.right-canvas-mobile-mode .right-canvas.is-closed {
 }
 
 body.right-canvas-mobile-mode .right-canvas-rail {
+  display: flex;
+}
+
+body.right-canvas-mobile-mode .right-canvas.is-open .right-canvas-rail {
   display: none;
 }
 

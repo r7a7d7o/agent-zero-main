@@ -24,6 +24,14 @@ class OfficeSession(ApiHandler):
             return {"ok": True, **collabora_status.read_status()}
         if action == "recent":
             return {"ok": True, "documents": wopi_store.get_recent_documents()}
+        if action == "open_documents":
+            return {"ok": True, "documents": wopi_store.get_open_documents(limit=24)}
+        if action == "close":
+            closed = wopi_store.close_session(
+                session_id=str(input.get("session_id") or ""),
+                file_id=str(input.get("file_id") or ""),
+            )
+            return {"ok": True, "closed": closed, "documents": wopi_store.get_open_documents(limit=24)}
         if action == "create":
             doc = wopi_store.create_document(
                 kind=str(input.get("kind") or "document"),
@@ -34,7 +42,12 @@ class OfficeSession(ApiHandler):
             )
             return await self._open_document(doc, input, request)
         if action == "open":
-            doc = wopi_store.register_document(str(input.get("path") or ""))
+            file_id = str(input.get("file_id") or "").strip()
+            doc = (
+                wopi_store.get_document(file_id)
+                if file_id
+                else wopi_store.register_document(str(input.get("path") or ""))
+            )
             return await self._open_document(doc, input, request)
         return {"ok": False, "error": f"Unsupported office session action: {action}"}
 
@@ -74,6 +87,7 @@ class OfficeSession(ApiHandler):
         return {
             "ok": True,
             "file_id": doc["file_id"],
+            "session_id": session["session_id"],
             "iframe_action": iframe_action,
             "access_token": session["access_token"],
             "access_token_ttl": session["access_token_ttl"],

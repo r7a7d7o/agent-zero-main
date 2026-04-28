@@ -38,9 +38,47 @@
           <button type="button" class="office-icon-button" title="Save" @click="$store.office.save()" :disabled="!$store.office.session">
             <span class="material-symbols-outlined">save</span>
           </button>
+          <button
+            type="button"
+            class="office-icon-button"
+            title="Close file"
+            aria-label="Close file"
+            :disabled="!$store.office.session"
+            @click="$confirmClick($event, () => $store.office.closeFile())"
+          >
+            <span class="material-symbols-outlined">close</span>
+          </button>
           <button type="button" class="office-icon-button" title="Refresh status" @click="$store.office.refresh()">
             <span class="material-symbols-outlined">refresh</span>
           </button>
+        </div>
+
+        <div class="office-tabs" x-show="$store.office.tabs.length" role="tablist" aria-label="Open Office files" style="display: none;">
+          <template x-for="tab in $store.office.tabs" :key="tab.tab_id">
+            <div class="office-tab-shell" :class="{ 'is-active': $store.office.isActiveTab(tab) }">
+              <button
+                type="button"
+                class="office-tab"
+                role="tab"
+                :aria-selected="$store.office.isActiveTab(tab).toString()"
+                :title="$store.office.tabLabel(tab)"
+                @click="$store.office.selectTab(tab.tab_id)"
+              >
+                <span class="material-symbols-outlined office-tab-icon" aria-hidden="true" x-text="$store.office.tabIcon(tab)"></span>
+                <span class="office-tab-title" x-text="$store.office.tabTitle(tab)"></span>
+              </button>
+              <button
+                type="button"
+                class="office-tab-close"
+                :title="'Close ' + $store.office.tabLabel(tab)"
+                :aria-label="'Close ' + $store.office.tabLabel(tab)"
+                :disabled="$store.office.loading"
+                @click.stop="$confirmClick($event, () => $store.office.closeTab(tab.tab_id))"
+              >
+                <span class="material-symbols-outlined">close</span>
+              </button>
+            </div>
+          </template>
         </div>
 
         <div class="office-status-line" x-show="$store.office.message || $store.office.error || $store.office.loading" style="display: none;">
@@ -85,11 +123,27 @@
                 <span>Presentation</span>
               </button>
             </div>
+            <div class="office-recent" x-show="$store.office.openDocuments.length">
+              <div class="office-list-label">Open files</div>
+              <template x-for="doc in $store.office.openDocuments" :key="doc.file_id">
+                <button type="button" class="office-recent-row" :title="doc.path" @click="$store.office.openPath(doc.path)">
+                  <span class="material-symbols-outlined" x-text="$store.office.tabIcon(doc)"></span>
+                  <span class="office-recent-text">
+                    <span x-text="$store.office.openDocumentLabel(doc)"></span>
+                    <small x-text="$store.office.openDocumentMeta(doc)"></small>
+                  </span>
+                </button>
+              </template>
+            </div>
             <div class="office-recent" x-show="$store.office.recent.length">
+              <div class="office-list-label">Recent files</div>
               <template x-for="doc in $store.office.recent" :key="doc.file_id">
                 <button type="button" class="office-recent-row" :title="doc.path" @click="$store.office.openPath(doc.path)">
-                  <span class="material-symbols-outlined">description</span>
-                  <span x-text="doc.basename"></span>
+                  <span class="material-symbols-outlined" x-text="$store.office.tabIcon(doc)"></span>
+                  <span class="office-recent-text">
+                    <span x-text="doc.basename"></span>
+                    <small x-text="String(doc.extension || '').toUpperCase()"></small>
+                  </span>
                 </button>
               </template>
             </div>
@@ -138,6 +192,14 @@
       border-radius: 7px;
       box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
       background: color-mix(in srgb, var(--color-background) 94%, #000 6%);
+    }
+
+    .modal.modal-floating {
+      pointer-events: none;
+    }
+
+    .modal.modal-floating .modal-inner {
+      pointer-events: auto;
     }
 
     .modal-inner.office-modal .modal-header {
@@ -198,6 +260,136 @@
       border-bottom: 1px solid color-mix(in srgb, var(--color-border) 66%, transparent);
       background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
       overflow-x: auto;
+    }
+
+    .office-tabs {
+      --office-tab-height: 34px;
+      --office-tab-close-size: 27px;
+      display: flex;
+      align-items: end;
+      gap: 4px;
+      min-height: 39px;
+      min-width: 0;
+      padding: 5px 9px 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
+      background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: thin;
+    }
+
+    .office-tabs::-webkit-scrollbar {
+      height: 4px;
+    }
+
+    .office-tabs::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .office-tabs::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--color-border) 76%, transparent);
+      border-radius: 999px;
+    }
+
+    .office-tab-shell {
+      flex: 0 1 220px;
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) var(--office-tab-close-size);
+      align-items: center;
+      gap: 3px;
+      min-width: 132px;
+      max-width: 260px;
+      height: var(--office-tab-height);
+      padding: 0 6px 0 10px;
+      border: 1px solid transparent;
+      border-radius: 7px 7px 0 0;
+      opacity: 0.72;
+      transition: border-color 0.16s ease, opacity 0.16s ease, background-color 0.16s ease;
+    }
+
+    .office-tab-shell:hover,
+    .office-tab-shell:focus-within {
+      opacity: 0.94;
+      border-color: color-mix(in srgb, var(--color-border) 78%, transparent);
+    }
+
+    .office-tab-shell.is-active {
+      z-index: 2;
+      margin-bottom: -1px;
+      opacity: 1;
+      border-color: color-mix(in srgb, var(--color-border) 68%, transparent);
+      background: color-mix(in srgb, var(--color-panel) 72%, transparent);
+    }
+
+    .office-tab,
+    .office-tab-close {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .office-tab {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 8px;
+      min-width: 0;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      text-align: left;
+    }
+
+    .office-tab-icon {
+      flex: 0 0 auto;
+      color: color-mix(in srgb, var(--color-text) 72%, var(--color-primary) 28%);
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .office-tab-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.84rem;
+      font-weight: 650;
+    }
+
+    .office-tab-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: var(--office-tab-close-size);
+      min-width: var(--office-tab-close-size);
+      height: var(--office-tab-close-size);
+      min-height: var(--office-tab-close-size);
+      padding: 0;
+      border-radius: 6px;
+      color: color-mix(in srgb, var(--color-text) 52%, var(--color-primary) 48%);
+      opacity: 0.74;
+    }
+
+    .office-tab-close:hover,
+    .office-tab-close.confirming {
+      opacity: 1;
+      background: color-mix(in srgb, var(--color-background-hover) 70%, transparent);
+      color: var(--color-text);
+    }
+
+    .office-tab-close:focus-visible,
+    .office-tab:focus-visible {
+      outline: 1px solid color-mix(in srgb, var(--color-primary) 70%, transparent);
+      outline-offset: 1px;
+    }
+
+    .office-tab-close .material-symbols-outlined {
+      font-size: 15px;
+      line-height: 1;
     }
 
     .office-toolbar-spacer {
@@ -392,6 +584,14 @@
       max-width: 720px;
     }
 
+    .office-list-label {
+      margin-top: 2px;
+      color: var(--color-text-muted);
+      font-size: 0.76rem;
+      font-weight: 650;
+      text-transform: uppercase;
+    }
+
     .office-recent-row {
       justify-content: flex-start;
       min-height: 36px;
@@ -399,10 +599,23 @@
       text-align: left;
     }
 
-    .office-recent-row span:last-child {
+    .office-recent-text {
+      display: grid;
+      min-width: 0;
+      gap: 1px;
+      line-height: 1.2;
+    }
+
+    .office-recent-text > span,
+    .office-recent-text > small {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .office-recent-text > small {
+      color: var(--color-text-muted);
+      font-size: 0.72rem;
     }
 
     .office-frame-wrap {
@@ -443,6 +656,10 @@
       .office-health-pill span:last-child {
         display: none;
       }
+      .office-tab-shell {
+        flex-basis: 152px;
+        min-width: 116px;
+      }
       .office-create-tile {
         min-width: 104px;
       }
@@ -454,6 +671,10 @@
       }
       .office-health-pill span:last-child {
         display: none;
+      }
+      .office-tab-shell {
+        flex-basis: 152px;
+        min-width: 116px;
       }
       .office-create-tile {
         min-width: 104px;

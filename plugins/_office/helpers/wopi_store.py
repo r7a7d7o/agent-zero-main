@@ -221,6 +221,7 @@ def get_recent_documents(limit: int = 12) -> list[dict[str, Any]]:
 
 def get_open_documents(limit: int = 6) -> list[dict[str, Any]]:
     with connect() as conn:
+        _clear_expired_sessions(conn)
         rows = conn.execute(
             """
             SELECT
@@ -238,6 +239,38 @@ def get_open_documents(limit: int = 6) -> list[dict[str, Any]]:
             (now(), limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def close_session(session_id: str = "", file_id: str = "") -> int:
+    session_id = str(session_id or "").strip()
+    file_id = str(file_id or "").strip()
+    if not session_id and not file_id:
+        return 0
+
+    with connect() as conn:
+        _clear_expired_sessions(conn)
+        if session_id:
+            row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+            if not row:
+                return 0
+            conn.execute("DELETE FROM tokens WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+            conn.execute("DELETE FROM locks WHERE session_id = ?", (session_id,))
+            conn.execute(
+                "INSERT INTO events (file_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
+                (row["file_id"], "close_session", json.dumps({"session_id": session_id}), now()),
+            )
+            return 1
+
+        rows = conn.execute("SELECT session_id FROM sessions WHERE file_id = ?", (file_id,)).fetchall()
+        conn.execute("DELETE FROM tokens WHERE file_id = ?", (file_id,))
+        conn.execute("DELETE FROM sessions WHERE file_id = ?", (file_id,))
+        conn.execute("DELETE FROM locks WHERE file_id = ?", (file_id,))
+        conn.execute(
+            "INSERT INTO events (file_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
+            (file_id, "close_document_sessions", json.dumps({"closed": len(rows)}), now()),
+        )
+        return len(rows)
 
 
 def create_session(file_id: str, user_id: str, permission: str, origin: str, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> dict[str, Any]:
@@ -491,6 +524,13 @@ def clamp_lock_timeout(value: int | str | None) -> int:
 
 def _clear_expired_locks(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM locks WHERE expires_at < ?", (now(),))
+
+
+def _clear_expired_sessions(conn: sqlite3.Connection) -> None:
+    current = now()
+    conn.execute("DELETE FROM tokens WHERE expires_at < ?", (current,))
+    conn.execute("DELETE FROM sessions WHERE expires_at < ?", (current,))
+    conn.execute("DELETE FROM locks WHERE expires_at < ?", (current,))
 
 
 def _record_version(conn: sqlite3.Connection, file_id: str, path: Path, version: str, data: bytes) -> None:

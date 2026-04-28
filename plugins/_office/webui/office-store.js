@@ -23,10 +23,39 @@ function parseMessage(data) {
   return data && typeof data === "object" ? data : {};
 }
 
+function nextAnimationFrame() {
+  return new Promise((resolve) => {
+    const schedule = globalThis.requestAnimationFrame || ((callback) => globalThis.setTimeout(callback, 16));
+    schedule(() => resolve());
+  });
+}
+
+function normalizeTabId(value) {
+  return String(value || "").trim();
+}
+
+function makeTabId(session) {
+  return normalizeTabId(session?.session_id)
+    || normalizeTabId(session?.file_id)
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function sameDocument(left = {}, right = {}) {
+  const leftFileId = normalizeTabId(left.file_id);
+  const rightFileId = normalizeTabId(right.file_id);
+  if (leftFileId && rightFileId) return leftFileId === rightFileId;
+  const leftPath = String(left.path || "").trim();
+  const rightPath = String(right.path || "").trim();
+  return Boolean(leftPath && rightPath && leftPath === rightPath);
+}
+
 const model = {
   status: null,
   logs: null,
   recent: [],
+  openDocuments: [],
+  tabs: [],
+  activeTabId: "",
   session: null,
   loading: false,
   error: "",
@@ -42,6 +71,7 @@ const model = {
   _frameOrigin: "",
   _mode: "canvas",
   _floatingCleanup: null,
+  _saveWaiters: [],
 
   async init(element = null) {
     return await this.onMount(element, { mode: "canvas" });
@@ -62,6 +92,7 @@ const model = {
       this.setupCanvasSurface(element);
     }
     await this.refresh();
+    this.ensureActiveTab();
     if (this.session && this._root) {
       await this.restartFrameLoad();
     }
@@ -69,8 +100,13 @@ const model = {
 
   async onOpen(payload = {}) {
     await this.refresh();
-    if (payload?.path) {
-      await this.openPath(payload.path);
+    if (payload?.path || payload?.file_id) {
+      await this.openSession({
+        action: "open",
+        path: payload.path || "",
+        file_id: payload.file_id || "",
+        mode: "edit",
+      });
     } else if (this.session && !this.frameReady) {
       await this.restartFrameLoad();
     }
@@ -89,6 +125,8 @@ const model = {
       this.status = await callJsonApi("/plugins/_office/office_session", { action: "status" });
       const recent = await callJsonApi("/plugins/_office/office_session", { action: "recent" });
       this.recent = recent?.documents || [];
+      const openDocuments = await callJsonApi("/plugins/_office/office_session", { action: "open_documents" });
+      this.openDocuments = openDocuments?.documents || [];
       if (!this.status?.healthy) {
         const logs = await callJsonApi("/plugins/_office/collabora_logs", {});
         this.logs = logs;
@@ -134,6 +172,7 @@ const model = {
     this.error = "";
     this.message = "";
     try {
+      await this.save({ wait: true, timeoutMs: 900 });
       await this.prepareBrowserHostForEditor();
       const response = await callJsonApi("/plugins/_office/office_session", payload);
       if (!response?.ok) {
@@ -141,14 +180,7 @@ const model = {
         if (response?.status) this.status = response.status;
         return;
       }
-      this.clearFrameTimers();
-      this.session = response;
-      this.frameReady = false;
-      this._frameOrigin = "";
-      this._frameAttempt = 0;
-      this._frameRecoveryTried = false;
-      await this.submitFrame();
-      this.scheduleFrameWatch();
+      await this.activateSession(response);
       await this.refresh();
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
@@ -157,8 +189,32 @@ const model = {
     }
   },
 
+  async activateSession(response) {
+    const tab = this.normalizeTab(response);
+    const existingIndex = this.findTabIndexForSession(tab);
+    if (existingIndex >= 0) {
+      const previous = this.tabs[existingIndex];
+      if (previous?.session_id && previous.session_id !== tab.session_id) {
+        await this.closeBackendSession(previous);
+      }
+      this.tabs.splice(existingIndex, 1, tab);
+    } else {
+      this.tabs.push(tab);
+    }
+    this.activeTabId = tab.tab_id;
+    this.syncActiveSession();
+    this.frameReady = false;
+    this._frameOrigin = "";
+    this._frameAttempt = 0;
+    this._frameRecoveryTried = false;
+    this.clearFrameTimers();
+    await this.submitFrame();
+    this.scheduleFrameWatch();
+  },
+
   async submitFrame() {
-    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await nextAnimationFrame();
+    this.syncActiveSession();
     const session = this.session;
     const frame = this.activeFrame();
     if (!session || !frame?.name) return;
@@ -185,6 +241,8 @@ const model = {
   },
 
   async restartFrameLoad() {
+    this.syncActiveSession();
+    if (!this.session) return;
     this.frameReady = false;
     this._frameOrigin = "";
     this._frameAttempt = 0;
@@ -254,24 +312,192 @@ const model = {
     frame?.contentWindow?.postMessage(JSON.stringify(message), targetOrigin);
   },
 
-  save() {
-    this.postToFrame({
-      MessageId: "Action_Save",
-      Values: {
-        DontTerminateEdit: true,
-        DontSaveIfUnmodified: true,
-      },
+  async save(options = {}) {
+    const { wait = false, timeoutMs = 1500 } = options;
+    if (!this.session || !this.activeFrame() || !this.frameReady) return true;
+    if (!wait) {
+      this.postToFrame({
+        MessageId: "Action_Save",
+        Values: {
+          DontTerminateEdit: true,
+          DontSaveIfUnmodified: true,
+        },
+      });
+      return true;
+    }
+    return await new Promise((resolve) => {
+      const timeout = globalThis.setTimeout(() => {
+        this._saveWaiters = this._saveWaiters.filter((waiter) => waiter !== done);
+        resolve(false);
+      }, timeoutMs);
+      const done = (ok) => {
+        globalThis.clearTimeout(timeout);
+        resolve(ok);
+      };
+      this._saveWaiters.push(done);
+      this.postToFrame({
+        MessageId: "Action_Save",
+        Values: {
+          DontTerminateEdit: true,
+          DontSaveIfUnmodified: true,
+        },
+      });
     });
   },
 
+  resolveSaveWaiters(ok = true) {
+    const waiters = this._saveWaiters.splice(0);
+    for (const waiter of waiters) waiter(ok);
+  },
+
   closeFile() {
-    this.save();
-    this.session = null;
-    this.frameReady = false;
-    this._frameOrigin = "";
-    this._frameAttempt = 0;
-    this._frameRecoveryTried = false;
-    this.clearFrameTimers();
+    return this.closeTab(this.activeTabId);
+  },
+
+  blankFrame() {
+    const frame = this.activeFrame();
+    if (frame) {
+      frame.src = "about:blank";
+    }
+  },
+
+  async closeTab(tabId = this.activeTabId, options = {}) {
+    const normalized = normalizeTabId(tabId);
+    const index = this.tabs.findIndex((tab) => tab.tab_id === normalized);
+    if (index < 0) return;
+
+    const tab = this.tabs[index];
+    const wasActive = tab.tab_id === this.activeTabId;
+    if (wasActive && !options.skipSave) {
+      await this.save({ wait: true, timeoutMs: 1200 });
+    }
+    await this.closeBackendSession(tab);
+    this.tabs.splice(index, 1);
+
+    if (!this.tabs.length) {
+      this.activeTabId = "";
+      this.session = null;
+      this.frameReady = false;
+      this._frameOrigin = "";
+      this._frameAttempt = 0;
+      this._frameRecoveryTried = false;
+      this.clearFrameTimers();
+      this.blankFrame();
+      await this.refresh();
+      return;
+    }
+
+    if (wasActive) {
+      const nextTab = this.tabs[Math.min(index, this.tabs.length - 1)];
+      this.activeTabId = nextTab.tab_id;
+      this.syncActiveSession();
+      await this.restartFrameLoad();
+    } else {
+      this.syncActiveSession();
+    }
+    await this.refresh();
+  },
+
+  async closeBackendSession(tab) {
+    if (!tab?.session_id && !tab?.file_id) return;
+    try {
+      await callJsonApi("/plugins/_office/office_session", {
+        action: "close",
+        session_id: tab.session_id || "",
+        file_id: tab.session_id ? "" : (tab.file_id || ""),
+      });
+    } catch (error) {
+      console.warn("Office session close skipped", error);
+    }
+  },
+
+  async selectTab(tabId) {
+    const tab = this.tabById(tabId);
+    if (!tab) return;
+    if (tab.tab_id === this.activeTabId && this.session) return;
+    await this.save({ wait: true, timeoutMs: 900 });
+    this.activeTabId = tab.tab_id;
+    this.syncActiveSession();
+    await this.restartFrameLoad();
+  },
+
+  normalizeTab(session) {
+    const tabId = makeTabId(session);
+    return {
+      ...session,
+      tab_id: tabId,
+      session_id: normalizeTabId(session?.session_id) || tabId,
+      title: String(session?.title || session?.basename || session?.path || "Office file"),
+      opened_at: session?.opened_at || Date.now(),
+    };
+  },
+
+  findTabIndexForSession(session) {
+    return this.tabs.findIndex((tab) => sameDocument(tab, session));
+  },
+
+  tabById(tabId) {
+    const normalized = normalizeTabId(tabId);
+    return this.tabs.find((tab) => tab.tab_id === normalized) || null;
+  },
+
+  activeTab() {
+    return this.tabById(this.activeTabId) || this.tabs[0] || null;
+  },
+
+  ensureActiveTab() {
+    if (!this.tabs.length) {
+      this.activeTabId = "";
+      this.session = null;
+      return;
+    }
+    if (!this.tabById(this.activeTabId)) {
+      this.activeTabId = this.tabs[0].tab_id;
+    }
+    this.syncActiveSession();
+  },
+
+  syncActiveSession() {
+    this.session = this.activeTab();
+  },
+
+  isActiveTab(tab) {
+    return Boolean(tab?.tab_id && tab.tab_id === this.activeTabId);
+  },
+
+  tabTitle(tab) {
+    const title = String(tab?.title || tab?.basename || "").trim();
+    if (title) return title;
+    const path = String(tab?.path || "").trim();
+    return path.split("/").filter(Boolean).pop() || "Office file";
+  },
+
+  tabLabel(tab) {
+    const extension = String(tab?.extension || "").trim().toUpperCase();
+    return extension ? `${this.tabTitle(tab)} (${extension})` : this.tabTitle(tab);
+  },
+
+  tabIcon(tab) {
+    const extension = String(tab?.extension || "").toLowerCase();
+    if (["xlsx", "ods"].includes(extension)) return "table_chart";
+    if (["pptx", "odp"].includes(extension)) return "co_present";
+    if (["docx", "odt"].includes(extension)) return "article";
+    return "description";
+  },
+
+  openDocumentLabel(doc) {
+    const basename = String(doc?.basename || doc?.title || "").trim();
+    const path = String(doc?.path || "").trim();
+    return basename || path.split("/").filter(Boolean).pop() || "Office file";
+  },
+
+  openDocumentMeta(doc) {
+    const sessions = Number(doc?.open_sessions || 0);
+    const extension = String(doc?.extension || "").trim().toUpperCase();
+    return [
+      extension,
+      sessions ? `${sessions} session${sessions === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(" / ");
   },
 
   onPostMessage(event) {
@@ -287,9 +513,11 @@ const model = {
       if (this.message === "Still opening the editor... trying a fresh editor load.") this.message = "";
       this.postToFrame({ MessageId: "Host_PostmessageReady" });
     } else if (id === "UI_Close") {
-      this.session = null;
+      void this.closeTab(this.activeTabId, { skipSave: true });
     } else if (id === "Action_Save_Resp") {
-      this.message = message.Values?.success === false ? "Save did not complete." : "Saved";
+      const ok = message.Values?.success !== false;
+      this.message = ok ? "Saved" : "Save did not complete.";
+      this.resolveSaveWaiters(ok);
     }
   },
 

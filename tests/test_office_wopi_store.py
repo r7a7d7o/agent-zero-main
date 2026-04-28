@@ -86,6 +86,26 @@ def test_lock_conflicts_refresh_unlock_and_relock(office_state):
     assert current == ""
 
 
+def test_close_session_revokes_token_lock_and_open_document_metadata(office_state):
+    doc = wopi_store.create_document("document", "Close Test", "docx", "")
+    session = wopi_store.create_session(doc["file_id"], "user-a", "write", "http://localhost:32080")
+    ok, current = wopi_store.lock(doc["file_id"], "close-lock", session["session_id"], 120)
+    assert ok is True
+    assert current == "close-lock"
+
+    open_docs = wopi_store.get_open_documents()
+    assert len(open_docs) == 1
+    assert open_docs[0]["file_id"] == doc["file_id"]
+    assert open_docs[0]["open_sessions"] == 1
+
+    assert wopi_store.close_session(session_id=session["session_id"]) == 1
+    assert wopi_store.get_open_documents() == []
+    assert wopi_store.get_lock(doc["file_id"]) == ""
+    with pytest.raises(PermissionError):
+        wopi_store.validate_token(session["access_token"], doc["file_id"])
+    assert wopi_store.close_session(session_id=session["session_id"]) == 0
+
+
 def test_put_file_requires_lock_and_updates_version_history(office_state):
     doc = wopi_store.create_document("document", "Save Test", "docx", "before")
     session = wopi_store.create_session(doc["file_id"], "user-a", "write", "http://localhost:32080")
