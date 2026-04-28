@@ -55,6 +55,9 @@ async def test_default_agent0_prompt_budget_and_guardrails():
     assert '"tool_name": "code_execution_tool"' in system_text
     assert '"tool_name": "memory_load"' in system_text
     assert "informative but tight" in system_text
+    assert "# code_execution_remote tool" not in system_text
+    assert "# text_editor_remote tool" not in system_text
+    assert "# computer_use_remote tool" not in system_text
 
 
 def test_a0_small_profile_removed_and_prompt_text_generic():
