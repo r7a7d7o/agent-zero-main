@@ -12,6 +12,7 @@ import sqlite3
 import time
 import uuid
 import zipfile
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,14 @@ DEFAULT_LOCK_SECONDS = 30 * 60
 MAX_LOCK_SECONDS = 3600
 MIN_LOCK_SECONDS = 60
 MAX_SAVE_BYTES = 512 * 1024 * 1024
+PREVIEW_LINE_LIMIT = 5
+PREVIEW_ROW_LIMIT = 5
+PREVIEW_COLUMN_LIMIT = 4
+PREVIEW_SLIDE_LIMIT = 2
+
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+X_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 STATE_DIR = Path(files.get_abs_path("usr", "plugins", PLUGIN_NAME, "collabora"))
 DB_PATH = STATE_DIR / "documents.sqlite3"
@@ -210,13 +219,16 @@ def get_document(file_id: str, conn: sqlite3.Connection | None = None) -> dict[s
         return _fetch(active)
 
 
-def get_recent_documents(limit: int = 12) -> list[dict[str, Any]]:
+def get_recent_documents(limit: int = 12, include_preview: bool = True) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
             "SELECT * FROM documents ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        documents = [dict(row) for row in rows]
+    if include_preview:
+        return [with_preview(document) for document in documents]
+    return documents
 
 
 def get_open_documents(limit: int = 6) -> list[dict[str, Any]]:
@@ -273,6 +285,38 @@ def close_session(session_id: str = "", file_id: str = "") -> int:
         return len(rows)
 
 
+def sync_open_sessions(active_session_ids: list[str] | tuple[str, ...] | set[str]) -> int:
+    active_ids = {str(session_id).strip() for session_id in active_session_ids if str(session_id).strip()}
+    with connect() as conn:
+        _clear_expired_sessions(conn)
+        if active_ids:
+            placeholders = ",".join("?" for _ in active_ids)
+            rows = conn.execute(
+                f"SELECT session_id, file_id FROM sessions WHERE session_id NOT IN ({placeholders})",
+                tuple(active_ids),
+            ).fetchall()
+            conn.execute(f"DELETE FROM tokens WHERE session_id NOT IN ({placeholders})", tuple(active_ids))
+            conn.execute(f"DELETE FROM sessions WHERE session_id NOT IN ({placeholders})", tuple(active_ids))
+            conn.execute(f"DELETE FROM locks WHERE session_id NOT IN ({placeholders})", tuple(active_ids))
+        else:
+            rows = conn.execute("SELECT session_id, file_id FROM sessions").fetchall()
+            conn.execute("DELETE FROM tokens")
+            conn.execute("DELETE FROM sessions")
+            conn.execute("DELETE FROM locks")
+
+        for row in rows:
+            conn.execute(
+                "INSERT INTO events (file_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    row["file_id"],
+                    "close_orphan_session",
+                    json.dumps({"session_id": row["session_id"]}),
+                    now(),
+                ),
+            )
+        return len(rows)
+
+
 def create_session(file_id: str, user_id: str, permission: str, origin: str, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> dict[str, Any]:
     permission = "write" if permission == "write" else "read"
     token = secrets.token_urlsafe(32)
@@ -302,6 +346,157 @@ def create_session(file_id: str, user_id: str, permission: str, origin: str, ttl
         "permission": permission,
         "origin": origin,
     }
+
+
+def with_preview(document: dict[str, Any]) -> dict[str, Any]:
+    return {**document, "preview": build_preview(document)}
+
+
+def build_preview(document: dict[str, Any]) -> dict[str, Any]:
+    ext = str(document.get("extension") or "").lower()
+    path = Path(str(document.get("path") or ""))
+    preview = {
+        "available": False,
+        "kind": _preview_kind(ext),
+        "lines": [],
+        "rows": [],
+        "slides": [],
+    }
+    if not path.exists():
+        return preview
+    try:
+        if ext == "docx":
+            lines = _preview_docx(path)
+            return {**preview, "available": bool(lines), "lines": lines}
+        if ext == "xlsx":
+            rows = _preview_xlsx(path)
+            return {**preview, "available": bool(rows), "rows": rows}
+        if ext == "pptx":
+            slides = _preview_pptx(path)
+            return {**preview, "available": bool(slides), "slides": slides}
+        if ext in {"odt", "ods", "odp"}:
+            lines = _preview_odf(path)
+            return {**preview, "available": bool(lines), "lines": lines}
+    except Exception:
+        return preview
+    return preview
+
+
+def _preview_kind(ext: str) -> str:
+    if ext in {"xlsx", "ods"}:
+        return "spreadsheet"
+    if ext in {"pptx", "odp"}:
+        return "presentation"
+    if ext in {"docx", "odt"}:
+        return "document"
+    return "file"
+
+
+def _qn(namespace: str, tag: str) -> str:
+    return f"{{{namespace}}}{tag}"
+
+
+def _clean_preview_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _preview_docx(path: Path) -> list[str]:
+    with zipfile.ZipFile(path) as archive:
+        root = ET.fromstring(archive.read("word/document.xml"))
+    lines = []
+    for paragraph in root.iter(_qn(W_NS, "p")):
+        text = _clean_preview_text("".join(node.text or "" for node in paragraph.iter(_qn(W_NS, "t"))))
+        if text:
+            lines.append(text)
+        if len(lines) >= PREVIEW_LINE_LIMIT:
+            break
+    return lines
+
+
+def _preview_xlsx(path: Path) -> list[list[str]]:
+    with zipfile.ZipFile(path) as archive:
+        shared_strings = _xlsx_shared_strings(archive)
+        sheet_names = sorted(
+            (name for name in archive.namelist() if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)),
+            key=_natural_name_key,
+        )
+        if not sheet_names:
+            return []
+        root = ET.fromstring(archive.read(sheet_names[0]))
+
+    rows = []
+    for row in root.iter(_qn(X_NS, "row")):
+        cells = []
+        for cell in list(row)[:PREVIEW_COLUMN_LIMIT]:
+            cells.append(_xlsx_cell_preview(cell, shared_strings))
+        if any(cells):
+            rows.append(cells)
+        if len(rows) >= PREVIEW_ROW_LIMIT:
+            break
+    return rows
+
+
+def _xlsx_shared_strings(archive: zipfile.ZipFile) -> list[str]:
+    try:
+        root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+    except KeyError:
+        return []
+    strings = []
+    for item in root.iter(_qn(X_NS, "si")):
+        strings.append(_clean_preview_text("".join(node.text or "" for node in item.iter(_qn(X_NS, "t")))))
+    return strings
+
+
+def _xlsx_cell_preview(cell: ET.Element, shared_strings: list[str]) -> str:
+    cell_type = cell.attrib.get("t", "")
+    if cell_type == "inlineStr":
+        return _clean_preview_text("".join(node.text or "" for node in cell.iter(_qn(X_NS, "t"))))
+    value_node = cell.find(_qn(X_NS, "v"))
+    value = _clean_preview_text(value_node.text if value_node is not None else "")
+    if cell_type == "s":
+        try:
+            return shared_strings[int(value)]
+        except (ValueError, IndexError):
+            return value
+    if cell_type == "b":
+        return "TRUE" if value == "1" else "FALSE"
+    return value
+
+
+def _preview_pptx(path: Path) -> list[dict[str, Any]]:
+    with zipfile.ZipFile(path) as archive:
+        names = sorted(
+            (name for name in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)),
+            key=_natural_name_key,
+        )
+        slides = []
+        for name in names[:PREVIEW_SLIDE_LIMIT]:
+            root = ET.fromstring(archive.read(name))
+            lines = []
+            for paragraph in root.iter(_qn(A_NS, "p")):
+                text = _clean_preview_text("".join(node.text or "" for node in paragraph.iter(_qn(A_NS, "t"))))
+                if text:
+                    lines.append(text)
+            if lines:
+                slides.append({"title": lines[0], "lines": lines[1:PREVIEW_LINE_LIMIT]})
+        return slides
+
+
+def _preview_odf(path: Path) -> list[str]:
+    with zipfile.ZipFile(path) as archive:
+        root = ET.fromstring(archive.read("content.xml"))
+    lines = []
+    for node in root.iter():
+        text = _clean_preview_text(node.text)
+        if text:
+            lines.append(text)
+        if len(lines) >= PREVIEW_LINE_LIMIT:
+            break
+    return lines
+
+
+def _natural_name_key(value: str) -> list[int | str]:
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", value)]
 
 
 def replace_document_bytes(

@@ -5,6 +5,7 @@ const FRAME_NAME_PREFIX = "a0-office-frame";
 const COLLABORA_STATE_VERSION = "2026-04-26.1";
 const COLLABORA_STATE_MARKER = "a0.office.collaboraStateVersion";
 const SERVICE_WORKER_CLEANUP_MARKER = "a0.office.serviceWorkerCleanupReloaded";
+const SETUP_POLL_INTERVAL_MS = 4000;
 
 function makeFrameName() {
   const id = globalThis.crypto?.randomUUID?.()
@@ -49,9 +50,22 @@ function sameDocument(left = {}, right = {}) {
   return Boolean(leftPath && rightPath && leftPath === rightPath);
 }
 
+function formatBytes(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let amount = size;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  const digits = amount >= 10 || index === 0 ? 0 : 1;
+  return `${amount.toFixed(digits)} ${units[index]}`;
+}
+
 const model = {
   status: null,
-  logs: null,
   recent: [],
   openDocuments: [],
   tabs: [],
@@ -72,6 +86,7 @@ const model = {
   _mode: "canvas",
   _floatingCleanup: null,
   _saveWaiters: [],
+  _statusPollTimer: null,
 
   async init(element = null) {
     return await this.onMount(element, { mode: "canvas" });
@@ -115,6 +130,7 @@ const model = {
   cleanup() {
     this._floatingCleanup?.();
     this._floatingCleanup = null;
+    this.clearStatusPoll();
     if (this._mode === "modal") {
       this._root = null;
     }
@@ -125,20 +141,103 @@ const model = {
       this.status = await callJsonApi("/plugins/_office/office_session", { action: "status" });
       const recent = await callJsonApi("/plugins/_office/office_session", { action: "recent" });
       this.recent = recent?.documents || [];
-      const openDocuments = await callJsonApi("/plugins/_office/office_session", { action: "open_documents" });
-      this.openDocuments = openDocuments?.documents || [];
-      if (!this.status?.healthy) {
-        const logs = await callJsonApi("/plugins/_office/collabora_logs", {});
-        this.logs = logs;
+      if (this.status?.healthy) {
+        await this.syncOpenSessions();
+      } else {
+        this.openDocuments = [];
       }
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.scheduleStatusPoll();
     }
   },
 
+  async syncOpenSessions() {
+    const sessionIds = this.tabs
+      .map((tab) => normalizeTabId(tab?.session_id))
+      .filter(Boolean);
+    const response = await callJsonApi("/plugins/_office/office_session", {
+      action: "sync_open_sessions",
+      session_ids: sessionIds,
+    });
+    this.openDocuments = response?.documents || [];
+    return response;
+  },
+
   async retry() {
-    this.message = "Retrying Collabora setup...";
+    this.message = "Retrying Office setup...";
     this.status = await callJsonApi("/plugins/_office/office_session", { action: "retry" });
+    this.scheduleStatusPoll();
+  },
+
+  clearStatusPoll() {
+    if (!this._statusPollTimer) return;
+    globalThis.clearTimeout(this._statusPollTimer);
+    this._statusPollTimer = null;
+  },
+
+  scheduleStatusPoll() {
+    this.clearStatusPoll();
+    if (!this.shouldPollSetup()) return;
+    this._statusPollTimer = globalThis.setTimeout(() => {
+      this._statusPollTimer = null;
+      void this.refresh();
+    }, SETUP_POLL_INTERVAL_MS);
+  },
+
+  shouldPollSetup() {
+    if (this.session || this.status?.healthy) return false;
+    if (!this.status) return true;
+    const state = String(this.status.state || "").toLowerCase();
+    return Boolean(this.status.installing || state === "installing" || state === "idle");
+  },
+
+  setupState() {
+    return String(this.status?.state || "installing").toLowerCase();
+  },
+
+  isSetupBusy() {
+    const state = this.setupState();
+    return !this.status || Boolean(this.status.installing) || state === "installing" || state === "idle";
+  },
+
+  isSetupBlocked() {
+    const state = this.setupState();
+    return state === "failed" || state === "degraded";
+  },
+
+  showSetupActions() {
+    return this.isSetupBlocked() || (!this.isSetupBusy() && !this.status?.healthy);
+  },
+
+  setupIcon() {
+    return this.isSetupBlocked() ? "error" : "progress_activity";
+  },
+
+  setupTitle() {
+    if (this.isSetupBlocked()) return "Setup needs attention";
+    return "Setup in progress";
+  },
+
+  setupMessage() {
+    if (this.isSetupBlocked()) {
+      return "Office could not finish setup. Retry when you are ready.";
+    }
+    return "Please wait while Office is prepared. This can take a few minutes the first time.";
+  },
+
+  healthTitle() {
+    if (this.status?.healthy) return "Office is ready";
+    if (this.isSetupBlocked()) return "Office setup needs attention";
+    if (this.isSetupBusy()) return "Office setup is in progress";
+    return "Office status";
+  },
+
+  healthText() {
+    if (this.isSetupBlocked()) return "attention";
+    if (this.isSetupBusy()) return "setup";
+    return String(this.status?.state || "status");
   },
 
   async create(kind = "document") {
@@ -491,13 +590,71 @@ const model = {
     return basename || path.split("/").filter(Boolean).pop() || "Office file";
   },
 
-  openDocumentMeta(doc) {
-    const sessions = Number(doc?.open_sessions || 0);
+  openCards() {
+    return this.tabs.map((tab) => ({ ...tab, dashboard_open: true }));
+  },
+
+  recentCards() {
+    const openFileIds = new Set(this.tabs.map((tab) => normalizeTabId(tab?.file_id)).filter(Boolean));
+    return (this.recent || []).filter((doc) => !openFileIds.has(normalizeTabId(doc?.file_id)));
+  },
+
+  dashboardTitle(doc) {
+    return this.openDocumentLabel(doc);
+  },
+
+  dashboardMeta(doc) {
     const extension = String(doc?.extension || "").trim().toUpperCase();
-    return [
-      extension,
-      sessions ? `${sessions} session${sessions === 1 ? "" : "s"}` : "",
-    ].filter(Boolean).join(" / ");
+    const size = formatBytes(doc?.size);
+    return [extension, size].filter(Boolean).join(" / ");
+  },
+
+  previewKind(doc) {
+    const kind = String(doc?.preview?.kind || "").trim();
+    if (kind === "spreadsheet" && !doc?.preview?.rows?.length && doc?.preview?.lines?.length) return "document";
+    if (kind === "presentation" && !doc?.preview?.slides?.length && doc?.preview?.lines?.length) return "document";
+    if (kind) return kind;
+    const extension = String(doc?.extension || "").toLowerCase();
+    if (["xlsx", "ods"].includes(extension)) return "spreadsheet";
+    if (["pptx", "odp"].includes(extension)) return "presentation";
+    if (["docx", "odt"].includes(extension)) return "document";
+    return "file";
+  },
+
+  hasPreview(doc) {
+    const preview = doc?.preview || {};
+    return Boolean(
+      preview.available
+      && (
+        preview.lines?.length
+        || preview.rows?.length
+        || preview.slides?.length
+      )
+    );
+  },
+
+  previewLines(doc) {
+    const lines = doc?.preview?.lines || [];
+    if (lines.length) return lines.slice(0, 5).map((line) => String(line || ""));
+    const slides = doc?.preview?.slides || [];
+    if (slides.length) {
+      return [slides[0]?.title, ...(slides[0]?.lines || [])].filter(Boolean).slice(0, 5);
+    }
+    return [];
+  },
+
+  previewRows(doc) {
+    return (doc?.preview?.rows || [])
+      .slice(0, 5)
+      .map((row) => {
+        const cells = (Array.isArray(row) ? row : []).slice(0, 4).map((cell) => String(cell ?? ""));
+        while (cells.length < 4) cells.push("");
+        return cells;
+      });
+  },
+
+  previewSlides(doc) {
+    return (doc?.preview?.slides || []).slice(0, 2);
   },
 
   onPostMessage(event) {

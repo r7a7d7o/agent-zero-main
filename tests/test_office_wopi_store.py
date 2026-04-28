@@ -106,6 +106,39 @@ def test_close_session_revokes_token_lock_and_open_document_metadata(office_stat
     assert wopi_store.close_session(session_id=session["session_id"]) == 0
 
 
+def test_sync_open_sessions_closes_sessions_without_visible_tabs(office_state):
+    first = wopi_store.create_document("document", "Visible", "docx", "shown")
+    second = wopi_store.create_document("document", "Orphan", "docx", "hidden")
+    visible = wopi_store.create_session(first["file_id"], "user-a", "write", "http://localhost:32080")
+    orphan = wopi_store.create_session(second["file_id"], "user-a", "write", "http://localhost:32080")
+    ok, _ = wopi_store.lock(second["file_id"], "orphan-lock", orphan["session_id"], 120)
+    assert ok is True
+
+    assert wopi_store.sync_open_sessions([visible["session_id"]]) == 1
+
+    open_docs = wopi_store.get_open_documents()
+    assert len(open_docs) == 1
+    assert open_docs[0]["file_id"] == first["file_id"]
+    assert wopi_store.get_lock(second["file_id"]) == ""
+    with pytest.raises(PermissionError):
+        wopi_store.validate_token(orphan["access_token"], second["file_id"])
+
+
+def test_recent_documents_include_lightweight_previews(office_state):
+    doc = wopi_store.create_document("document", "Preview Memo", "docx", "A calm dashboard.")
+    sheet = wopi_store.create_document("spreadsheet", "Preview Sheet", "xlsx", "Name,Value\nOffice,1")
+    deck = wopi_store.create_document("presentation", "Preview Deck", "pptx", "First slide")
+
+    previews = {
+        item["file_id"]: item["preview"]
+        for item in wopi_store.get_recent_documents(limit=3)
+    }
+
+    assert previews[doc["file_id"]]["lines"][0] == "Preview Memo"
+    assert previews[sheet["file_id"]]["rows"][0] == ["Name", "Value"]
+    assert previews[deck["file_id"]]["slides"][0]["title"] == "Preview Deck"
+
+
 def test_put_file_requires_lock_and_updates_version_history(office_state):
     doc = wopi_store.create_document("document", "Save Test", "docx", "before")
     session = wopi_store.create_session(doc["file_id"], "user-a", "write", "http://localhost:32080")

@@ -26,6 +26,12 @@ class OfficeSession(ApiHandler):
             return {"ok": True, "documents": wopi_store.get_recent_documents()}
         if action == "open_documents":
             return {"ok": True, "documents": wopi_store.get_open_documents(limit=24)}
+        if action == "sync_open_sessions":
+            session_ids = input.get("session_ids")
+            if not isinstance(session_ids, list):
+                session_ids = []
+            closed = wopi_store.sync_open_sessions(session_ids)
+            return {"ok": True, "closed": closed, "documents": wopi_store.get_open_documents(limit=24)}
         if action == "close":
             closed = wopi_store.close_session(
                 session_id=str(input.get("session_id") or ""),
@@ -96,6 +102,7 @@ class OfficeSession(ApiHandler):
             "extension": doc["extension"],
             "path": doc["path"],
             "version": wopi_store.item_version(doc),
+            "preview": wopi_store.build_preview(doc),
         }
 
     def _origin(self, request: Request) -> str:

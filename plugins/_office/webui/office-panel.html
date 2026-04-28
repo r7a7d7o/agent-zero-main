@@ -29,11 +29,11 @@
           <span
             class="office-health-pill"
             :class="`is-${$store.office.status?.state || 'unknown'}`"
-            :title="$store.office.status?.message || 'Office status'"
-            :aria-label="$store.office.status?.message || 'Office status'"
+            :title="$store.office.healthTitle()"
+            :aria-label="$store.office.healthTitle()"
           >
             <span class="office-health-dot"></span>
-            <span x-show="$store.office.status?.state !== 'healthy'" x-text="$store.office.status?.state || 'status'"></span>
+            <span x-show="$store.office.status?.state !== 'healthy'" x-text="$store.office.healthText()"></span>
           </span>
           <button type="button" class="office-icon-button" title="Save" @click="$store.office.save()" :disabled="!$store.office.session">
             <span class="material-symbols-outlined">save</span>
@@ -87,66 +87,143 @@
         </div>
 
         <div class="office-body">
-          <div class="office-bootstrap" x-show="!$store.office.session && (!$store.office.status || !$store.office.status.healthy)">
-            <div class="office-bootstrap-header">
-              <span class="material-symbols-outlined">description</span>
-              <div>
-                <strong x-text="$store.office.status?.state || 'Preparing Office'"></strong>
-                <span x-text="$store.office.status?.message || 'Collabora Online is being prepared in the background.'"></span>
-              </div>
+          <div class="office-bootstrap" x-show="!$store.office.session && (!$store.office.status || !$store.office.status.healthy)" style="display: none;">
+            <div class="office-setup-mark" :class="{ 'is-busy': $store.office.isSetupBusy(), 'is-alert': $store.office.isSetupBlocked() }">
+              <span class="material-symbols-outlined" :class="{ spinning: $store.office.isSetupBusy() }" x-text="$store.office.setupIcon()"></span>
             </div>
-            <div class="office-bootstrap-actions">
-              <button type="button" class="office-button" @click="$store.office.retry()">
+            <div class="office-setup-copy">
+              <span>Agent Zero Office</span>
+              <strong x-text="$store.office.setupTitle()"></strong>
+              <p x-text="$store.office.setupMessage()"></p>
+            </div>
+            <div class="office-setup-progress" :class="{ 'is-paused': !$store.office.isSetupBusy() }" aria-hidden="true">
+              <span></span>
+            </div>
+            <div class="office-bootstrap-actions" x-show="$store.office.showSetupActions()" style="display: none;">
+              <button type="button" class="office-button" @click="$store.office.retry()" x-show="$store.office.isSetupBlocked()" style="display: none;">
                 <span class="material-symbols-outlined">restart_alt</span>
                 <span>Retry</span>
               </button>
               <button type="button" class="office-button" @click="$store.office.refresh()">
                 <span class="material-symbols-outlined">sync</span>
-                <span>Status</span>
+                <span>Refresh</span>
               </button>
             </div>
-            <pre class="office-log" x-text="$store.office.logs?.bootstrap || $store.office.logs?.wrapper || ''"></pre>
           </div>
 
           <div class="office-start" x-show="!$store.office.session && $store.office.status?.healthy" style="display: none;">
-            <div class="office-start-actions">
-              <button type="button" class="office-create-tile" @click="$store.office.create('document')">
-                <span class="material-symbols-outlined">article</span>
-                <span>Document</span>
-              </button>
-              <button type="button" class="office-create-tile" @click="$store.office.create('spreadsheet')">
-                <span class="material-symbols-outlined">table_chart</span>
-                <span>Spreadsheet</span>
-              </button>
-              <button type="button" class="office-create-tile" @click="$store.office.create('presentation')">
-                <span class="material-symbols-outlined">co_present</span>
-                <span>Presentation</span>
-              </button>
-            </div>
-            <div class="office-recent" x-show="$store.office.openDocuments.length">
-              <div class="office-list-label">Open files</div>
-              <template x-for="doc in $store.office.openDocuments" :key="doc.file_id">
-                <button type="button" class="office-recent-row" :title="doc.path" @click="$store.office.openPath(doc.path)">
-                  <span class="material-symbols-outlined" x-text="$store.office.tabIcon(doc)"></span>
-                  <span class="office-recent-text">
-                    <span x-text="$store.office.openDocumentLabel(doc)"></span>
-                    <small x-text="$store.office.openDocumentMeta(doc)"></small>
-                  </span>
+            <section class="office-dashboard-section" aria-label="Create Office file">
+              <div class="office-dashboard-heading">Create</div>
+              <div class="office-template-grid">
+                <button type="button" class="office-create-tile" @click="$store.office.create('document')">
+                  <span class="material-symbols-outlined">article</span>
+                  <span>Document</span>
                 </button>
-              </template>
-            </div>
-            <div class="office-recent" x-show="$store.office.recent.length">
-              <div class="office-list-label">Recent files</div>
-              <template x-for="doc in $store.office.recent" :key="doc.file_id">
-                <button type="button" class="office-recent-row" :title="doc.path" @click="$store.office.openPath(doc.path)">
-                  <span class="material-symbols-outlined" x-text="$store.office.tabIcon(doc)"></span>
-                  <span class="office-recent-text">
-                    <span x-text="doc.basename"></span>
-                    <small x-text="String(doc.extension || '').toUpperCase()"></small>
-                  </span>
+                <button type="button" class="office-create-tile" @click="$store.office.create('spreadsheet')">
+                  <span class="material-symbols-outlined">table_chart</span>
+                  <span>Spreadsheet</span>
                 </button>
-              </template>
-            </div>
+                <button type="button" class="office-create-tile" @click="$store.office.create('presentation')">
+                  <span class="material-symbols-outlined">co_present</span>
+                  <span>Presentation</span>
+                </button>
+              </div>
+            </section>
+
+            <section class="office-dashboard-section" x-show="$store.office.openCards().length" aria-label="Open Office files" style="display: none;">
+              <div class="office-dashboard-heading">Open files</div>
+              <div class="office-card-grid">
+                <template x-for="doc in $store.office.openCards()" :key="doc.tab_id">
+                  <button type="button" class="office-document-card is-open" :title="doc.path" @click="$store.office.selectTab(doc.tab_id)">
+                    <span class="office-card-badge">Open</span>
+                    <div class="office-card-preview" :class="`is-${$store.office.previewKind(doc)}`">
+                      <template x-if="$store.office.previewKind(doc) === 'spreadsheet' && $store.office.hasPreview(doc)">
+                        <div class="office-sheet-preview">
+                          <template x-for="(row, rowIndex) in $store.office.previewRows(doc)" :key="rowIndex">
+                            <div class="office-sheet-row">
+                              <template x-for="(cell, cellIndex) in row" :key="cellIndex">
+                                <span x-text="cell"></span>
+                              </template>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+                      <template x-if="$store.office.previewKind(doc) === 'presentation' && $store.office.hasPreview(doc)">
+                        <div class="office-slide-preview">
+                          <template x-for="(slide, index) in $store.office.previewSlides(doc)" :key="index">
+                            <div class="office-slide-line">
+                              <strong x-text="slide.title"></strong>
+                              <span x-text="(slide.lines || []).join(' / ')"></span>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+                      <template x-if="$store.office.previewKind(doc) === 'document' && $store.office.hasPreview(doc)">
+                        <div class="office-page-preview">
+                          <template x-for="(line, index) in $store.office.previewLines(doc)" :key="index">
+                            <span x-text="line"></span>
+                          </template>
+                        </div>
+                      </template>
+                      <template x-if="!$store.office.hasPreview(doc)">
+                        <div class="office-preview-fallback">
+                          <span class="material-symbols-outlined" x-text="$store.office.tabIcon(doc)"></span>
+                        </div>
+                      </template>
+                    </div>
+                    <span class="office-card-title" x-text="$store.office.dashboardTitle(doc)"></span>
+                    <small x-text="$store.office.dashboardMeta(doc)"></small>
+                  </button>
+                </template>
+              </div>
+            </section>
+
+            <section class="office-dashboard-section" x-show="$store.office.recentCards().length" aria-label="Recent Office files" style="display: none;">
+              <div class="office-dashboard-heading">Recent files</div>
+              <div class="office-card-grid">
+                <template x-for="doc in $store.office.recentCards()" :key="doc.file_id">
+                  <button type="button" class="office-document-card" :title="doc.path" @click="$store.office.openPath(doc.path)">
+                    <div class="office-card-preview" :class="`is-${$store.office.previewKind(doc)}`">
+                      <template x-if="$store.office.previewKind(doc) === 'spreadsheet' && $store.office.hasPreview(doc)">
+                        <div class="office-sheet-preview">
+                          <template x-for="(row, rowIndex) in $store.office.previewRows(doc)" :key="rowIndex">
+                            <div class="office-sheet-row">
+                              <template x-for="(cell, cellIndex) in row" :key="cellIndex">
+                                <span x-text="cell"></span>
+                              </template>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+                      <template x-if="$store.office.previewKind(doc) === 'presentation' && $store.office.hasPreview(doc)">
+                        <div class="office-slide-preview">
+                          <template x-for="(slide, index) in $store.office.previewSlides(doc)" :key="index">
+                            <div class="office-slide-line">
+                              <strong x-text="slide.title"></strong>
+                              <span x-text="(slide.lines || []).join(' / ')"></span>
+                            </div>
+                          </template>
+                        </div>
+                      </template>
+                      <template x-if="$store.office.previewKind(doc) === 'document' && $store.office.hasPreview(doc)">
+                        <div class="office-page-preview">
+                          <template x-for="(line, index) in $store.office.previewLines(doc)" :key="index">
+                            <span x-text="line"></span>
+                          </template>
+                        </div>
+                      </template>
+                      <template x-if="!$store.office.hasPreview(doc)">
+                        <div class="office-preview-fallback">
+                          <span class="material-symbols-outlined" x-text="$store.office.tabIcon(doc)"></span>
+                        </div>
+                      </template>
+                    </div>
+                    <span class="office-card-title" x-text="$store.office.dashboardTitle(doc)"></span>
+                    <small x-text="$store.office.dashboardMeta(doc)"></small>
+                  </button>
+                </template>
+              </div>
+            </section>
           </div>
 
           <div class="office-frame-wrap" x-show="$store.office.session" style="display: none;">
@@ -401,7 +478,7 @@
     .office-icon-button,
     .office-health-pill,
     .office-create-tile,
-    .office-recent-row {
+    .office-document-card {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -469,7 +546,7 @@
     .office-button:hover:not(:disabled),
     .office-icon-button:hover:not(:disabled),
     .office-create-tile:hover,
-    .office-recent-row:hover {
+    .office-document-card:hover {
       background: color-mix(in srgb, var(--color-background-hover) 70%, transparent);
       border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
     }
@@ -505,64 +582,144 @@
       overflow: hidden;
     }
 
-    .office-bootstrap,
     .office-start {
       display: flex;
       flex: 1 1 auto;
       min-width: 0;
       min-height: 0;
       flex-direction: column;
-      gap: 14px;
+      gap: 22px;
       padding: 18px;
       overflow: auto;
     }
 
-    .office-bootstrap-header {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      gap: 10px;
-      align-items: start;
-      max-width: 720px;
-    }
-
-    .office-bootstrap-header > .material-symbols-outlined {
-      font-size: 24px;
-      color: color-mix(in srgb, var(--color-primary) 70%, var(--color-text));
-    }
-
-    .office-bootstrap-header div {
+    .office-bootstrap {
       display: flex;
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 0;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: clamp(24px, 7cqi, 56px);
+      overflow: auto;
+      text-align: center;
+    }
+
+    .office-setup-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 58px;
+      height: 58px;
+      border: 1px solid color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+      border-radius: 7px;
+      color: color-mix(in srgb, var(--color-primary) 70%, var(--color-text));
+      background: color-mix(in srgb, var(--color-panel) 78%, transparent);
+    }
+
+    .office-setup-mark.is-busy {
+      border-color: color-mix(in srgb, var(--color-primary) 42%, var(--color-border));
+    }
+
+    .office-setup-mark.is-alert {
+      border-color: color-mix(in srgb, #f05252 48%, var(--color-border));
+      color: #f05252;
+    }
+
+    .office-setup-mark .material-symbols-outlined {
+      font-size: 30px;
+      line-height: 1;
+    }
+
+    .office-setup-copy {
+      display: flex;
+      align-items: center;
       min-width: 0;
       flex-direction: column;
-      gap: 3px;
-      font-size: 0.9rem;
+      gap: 6px;
+      max-width: 460px;
       line-height: 1.35;
     }
 
-    .office-bootstrap-header span {
+    .office-setup-copy > span {
       color: var(--color-text-muted);
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .office-setup-copy > strong {
+      color: var(--color-text);
+      font-size: clamp(1.05rem, 4cqi, 1.35rem);
+      font-weight: 760;
+    }
+
+    .office-setup-copy > p {
+      margin: 0;
+      color: var(--color-text-muted);
+      font-size: 0.9rem;
+    }
+
+    .office-setup-progress {
+      position: relative;
+      width: min(260px, 72cqi);
+      height: 5px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-border) 45%, transparent);
+    }
+
+    .office-setup-progress > span {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 42%;
+      border-radius: inherit;
+      background: color-mix(in srgb, var(--color-primary) 72%, var(--color-text) 28%);
+      animation: office-setup-progress 1.45s ease-in-out infinite;
+    }
+
+    .office-setup-progress.is-paused > span {
+      width: 100%;
+      opacity: 0.42;
+      animation: none;
     }
 
     .office-bootstrap-actions,
-    .office-start-actions {
+    .office-template-grid {
       display: flex;
+      justify-content: center;
       flex-wrap: wrap;
       gap: 8px;
     }
 
-    .office-log {
-      min-height: 140px;
-      max-height: 260px;
-      overflow: auto;
-      margin: 0;
-      padding: 10px;
-      border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
-      border-radius: 7px;
-      background: color-mix(in srgb, var(--color-panel) 78%, transparent);
+    .office-dashboard-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 100%;
+      max-width: 1180px;
+    }
+
+    .office-dashboard-heading {
       color: var(--color-text-muted);
-      font-family: var(--font-family-code);
-      font-size: 0.72rem;
-      white-space: pre-wrap;
+      font-size: 0.76rem;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .office-template-grid {
+      justify-content: flex-start;
+    }
+
+    .office-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr));
+      gap: 10px;
+      width: 100%;
     }
 
     .office-create-tile {
@@ -577,45 +734,182 @@
       font-size: 28px;
     }
 
-    .office-recent {
+    .office-document-card {
+      position: relative;
+      display: grid;
+      grid-template-rows: auto auto auto;
+      align-content: start;
+      justify-content: stretch;
+      gap: 8px;
+      min-width: 0;
+      min-height: 196px;
+      padding: 10px;
+      text-align: left;
+      overflow: hidden;
+    }
+
+    .office-document-card.is-open {
+      border-color: color-mix(in srgb, var(--color-primary) 36%, var(--color-border));
+    }
+
+    .office-card-badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 2;
+      max-width: calc(100% - 16px);
+      overflow: hidden;
+      padding: 2px 6px;
+      border: 1px solid color-mix(in srgb, var(--color-primary) 42%, transparent);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-background) 82%, transparent);
+      color: var(--color-text);
+      font-size: 0.68rem;
+      font-weight: 700;
+      line-height: 1.2;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .office-card-preview {
+      position: relative;
+      display: grid;
+      align-items: stretch;
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      min-height: 112px;
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--color-background) 76%, #fff 4%);
+    }
+
+    .office-page-preview,
+    .office-sheet-preview,
+    .office-slide-preview,
+    .office-preview-fallback {
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .office-page-preview {
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      max-width: 720px;
+      gap: 5px;
+      padding: 12px 13px;
+      background:
+        linear-gradient(to bottom, transparent 0, transparent 21px, color-mix(in srgb, var(--color-border) 30%, transparent) 22px),
+        color-mix(in srgb, var(--color-panel) 72%, transparent);
+      background-size: 100% 22px;
+      color: var(--color-text);
     }
 
-    .office-list-label {
-      margin-top: 2px;
-      color: var(--color-text-muted);
-      font-size: 0.76rem;
-      font-weight: 650;
-      text-transform: uppercase;
-    }
-
-    .office-recent-row {
-      justify-content: flex-start;
-      min-height: 36px;
-      padding: 7px 9px;
-      text-align: left;
-    }
-
-    .office-recent-text {
-      display: grid;
+    .office-page-preview span,
+    .office-slide-line span,
+    .office-slide-line strong,
+    .office-sheet-row span {
       min-width: 0;
-      gap: 1px;
-      line-height: 1.2;
-    }
-
-    .office-recent-text > span,
-    .office-recent-text > small {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    .office-recent-text > small {
+    .office-page-preview span {
+      font-size: 0.7rem;
+      line-height: 1.25;
+    }
+
+    .office-sheet-preview {
+      min-width: 0;
+      padding: 8px;
+      background: color-mix(in srgb, var(--color-panel) 74%, transparent);
+    }
+
+    .office-sheet-row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      min-height: 20px;
+    }
+
+    .office-sheet-row + .office-sheet-row {
+      border-top: 1px solid color-mix(in srgb, var(--color-border) 34%, transparent);
+    }
+
+    .office-sheet-row span {
+      padding: 4px 5px;
+      border-right: 1px solid color-mix(in srgb, var(--color-border) 34%, transparent);
       color: var(--color-text-muted);
-      font-size: 0.72rem;
+      font-size: 0.66rem;
+      line-height: 1.1;
+    }
+
+    .office-sheet-row span:last-child {
+      border-right: 0;
+    }
+
+    .office-slide-preview {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 10px;
+      padding: 14px;
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--color-panel) 80%, transparent), color-mix(in srgb, var(--color-background) 84%, var(--color-primary) 10%));
+    }
+
+    .office-slide-line {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .office-slide-line strong {
+      color: var(--color-text);
+      font-size: 0.78rem;
+      font-weight: 760;
+      line-height: 1.15;
+    }
+
+    .office-slide-line span {
+      color: var(--color-text-muted);
+      font-size: 0.68rem;
+      line-height: 1.15;
+    }
+
+    .office-preview-fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: color-mix(in srgb, var(--color-primary) 64%, var(--color-text));
+      background: color-mix(in srgb, var(--color-panel) 76%, transparent);
+    }
+
+    .office-preview-fallback .material-symbols-outlined {
+      font-size: 36px;
+    }
+
+    .office-card-title {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--color-text);
+      font-size: 0.86rem;
+      font-weight: 720;
+      line-height: 1.2;
+    }
+
+    .office-document-card small {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      color: var(--color-text-muted);
+      font-size: 0.7rem;
+      line-height: 1.2;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .office-frame-wrap {
@@ -647,6 +941,19 @@
 
     @keyframes office-spin {
       to { transform: rotate(360deg); }
+    }
+
+    @keyframes office-setup-progress {
+      0% { transform: translateX(-110%); }
+      55% { transform: translateX(85%); }
+      100% { transform: translateX(250%); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .office-panel .spinning,
+      .office-setup-progress > span {
+        animation: none;
+      }
     }
 
     @media (max-width: 520px) {

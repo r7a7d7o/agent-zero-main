@@ -81,7 +81,9 @@ const model = {
       this.surfaces.push(normalized);
     }
     this.surfaces.sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
-    this.ensureActiveSurface();
+    if (!this._registering) {
+      this.ensureActiveSurface();
+    }
   },
 
   ensureActiveSurface() {
