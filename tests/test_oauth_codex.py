@@ -120,13 +120,16 @@ def test_extract_sse_text_deltas_reads_chat_completion_chunks():
 
 def test_collect_completed_response_falls_back_to_text_deltas():
     class FakeResponse:
+        encoding = "utf-8"
+
         def iter_content(self, chunk_size=8192, decode_unicode=True):
             del chunk_size, decode_unicode
-            yield 'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
-            yield 'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
-            yield "data: [DONE]\n\n"
+            yield b'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
+            yield b'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+            yield b'event: response.completed\ndata: {"response":{"output":[]}}\n\n'
+            yield b"data: [DONE]\n\n"
 
-    assert codex.collect_completed_response(FakeResponse()) == {"output_text": "Hello"}
+    assert codex.collect_completed_response(FakeResponse()) == {"output": [], "output_text": "Hello"}
 
 
 def test_provider_config_uses_container_local_agent_zero_origin():

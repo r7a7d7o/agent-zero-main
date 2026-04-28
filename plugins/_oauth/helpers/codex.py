@@ -450,13 +450,19 @@ def collect_completed_response(response: requests.Response) -> dict[str, Any]:
         if isinstance(candidate, dict):
             latest_response = candidate
 
-    if latest_response is not None:
-        return latest_response
     if text_pieces:
+        text = "".join(text_pieces)
+        if latest_response is not None:
+            completed = dict(latest_response)
+            if not response_text(completed):
+                completed["output_text"] = text
+            return completed
         result: dict[str, Any] = {"output_text": "".join(text_pieces)}
         if latest_usage:
             result["usage"] = latest_usage
         return result
+    if latest_response is not None:
+        return latest_response
     suffix = f" Last error: {json.dumps(latest_error)}" if latest_error else ""
     raise RuntimeError(f"No completed response found in Codex SSE stream.{suffix}")
 
@@ -466,6 +472,8 @@ def iter_sse_events(response: requests.Response) -> Iterable[dict[str, str]]:
     for chunk in response.iter_content(chunk_size=8192, decode_unicode=True):
         if not chunk:
             continue
+        if isinstance(chunk, bytes):
+            chunk = chunk.decode(response.encoding or "utf-8", errors="replace")
         buffer += chunk
         while "\n\n" in buffer or "\r\n\r\n" in buffer:
             sep = "\r\n\r\n" if "\r\n\r\n" in buffer else "\n\n"
@@ -518,7 +526,9 @@ def extract_sse_text_deltas(payload: dict[str, Any], event_type: str = "") -> li
 
     if (payload.get("type") or event_type) in {
         "response.output_text.delta",
+        "response.output_text.done",
         "response.text.delta",
+        "response.text.done",
     }:
         _append_text_value(pieces, payload.get("text"))
 
