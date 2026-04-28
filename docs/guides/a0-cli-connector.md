@@ -12,17 +12,12 @@ For now, use the install commands below.
 
 **macOS / Linux:**
 ```bash
-curl -LsSf https://raw.githubusercontent.com/agent0ai/a0-connector/main/install.sh | sh
+curl -LsSf https://cli.agent-zero.ai/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/agent0ai/a0-connector/main/install.ps1 | iex
-```
-
-**Manual fallback when uv is already installed or if URLs give 404:**
-```bash
-uv tool install git+https://github.com/agent0ai/a0-connector
+irm https://cli.agent-zero.ai/install.ps1 | iex
 ```
 
 Run these on the host machine, not inside the Agent Zero container.
