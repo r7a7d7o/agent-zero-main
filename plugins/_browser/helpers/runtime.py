@@ -36,6 +36,7 @@ CHROME_SINGLETON_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
 SCREENCAST_MAX_WIDTH = 4096
 SCREENCAST_MAX_HEIGHT = 4096
 VIEWPORT_SIZE_TOLERANCE = 4
+VIEWPORT_REMOUNT_PAUSE_SECONDS = 0.05
 
 _SPECIAL_SCHEME_RE = re.compile(r"^(?:about|blob|data|file|mailto|tel):", re.I)
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z\d+\-.]*://", re.I)
@@ -49,6 +50,18 @@ _TYPED_HOST_RE = re.compile(
     re.I,
 )
 _SAFE_CONTEXT_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
+
+
+def _nudged_viewport(viewport: dict[str, int]) -> dict[str, int]:
+    width = int(viewport["width"])
+    height = int(viewport["height"])
+    if width < 4096:
+        return {"width": width + 1, "height": height}
+    if width > 320:
+        return {"width": width - 1, "height": height}
+    if height < 4096:
+        return {"width": width, "height": height + 1}
+    return {"width": width, "height": height - 1}
 
 
 def normalize_url(value: str) -> str:
@@ -126,6 +139,29 @@ class _BrowserScreencast:
         self._expected_height = height
         with contextlib.suppress(Exception):
             await self.session.send("Page.enable")
+        await self._apply_cdp_viewport_with_remount({"width": width, "height": height})
+        await self.session.send(
+            "Page.startScreencast",
+            {
+                "format": "jpeg",
+                "quality": max(20, min(95, int(quality))),
+                "maxWidth": SCREENCAST_MAX_WIDTH,
+                "maxHeight": SCREENCAST_MAX_HEIGHT,
+                "everyNthFrame": max(1, int(every_nth_frame)),
+            },
+        )
+
+    async def _apply_cdp_viewport_with_remount(self, viewport: dict[str, int]) -> None:
+        await self._apply_cdp_viewport(viewport)
+        await asyncio.sleep(VIEWPORT_REMOUNT_PAUSE_SECONDS)
+        await self._apply_cdp_viewport(_nudged_viewport(viewport))
+        await asyncio.sleep(VIEWPORT_REMOUNT_PAUSE_SECONDS)
+        await self._apply_cdp_viewport(viewport)
+        await asyncio.sleep(VIEWPORT_REMOUNT_PAUSE_SECONDS)
+
+    async def _apply_cdp_viewport(self, viewport: dict[str, int]) -> None:
+        width = max(320, min(4096, int(viewport.get("width") or DEFAULT_VIEWPORT["width"])))
+        height = max(200, min(4096, int(viewport.get("height") or DEFAULT_VIEWPORT["height"])))
         await self.session.send(
             "Emulation.setDeviceMetricsOverride",
             {
@@ -144,16 +180,6 @@ class _BrowserScreencast:
                     "height": height,
                 },
             )
-        await self.session.send(
-            "Page.startScreencast",
-            {
-                "format": "jpeg",
-                "quality": max(20, min(95, int(quality))),
-                "maxWidth": SCREENCAST_MAX_WIDTH,
-                "maxHeight": SCREENCAST_MAX_HEIGHT,
-                "everyNthFrame": max(1, int(every_nth_frame)),
-            },
-        )
 
     async def next_frame(self, timeout: float = 1.0) -> dict[str, Any]:
         frame = await asyncio.wait_for(self.queue.get(), timeout=max(0.1, float(timeout)))
@@ -197,13 +223,19 @@ class _BrowserScreencast:
     async def _handle_frame(self, params: dict[str, Any]) -> None:
         try:
             data = params.get("data") or ""
-            if data and self._frame_matches_viewport(data):
+            if data:
+                metadata = dict(params.get("metadata") or {})
+                size = self._jpeg_size(data)
+                if size:
+                    metadata["jpegWidth"], metadata["jpegHeight"] = size
+                metadata["expectedWidth"] = self._expected_width
+                metadata["expectedHeight"] = self._expected_height
                 self._queue_latest(
                     {
                         "browser_id": self.browser_id,
                         "mime": self.mime,
                         "image": data,
-                        "metadata": params.get("metadata") or {},
+                        "metadata": metadata,
                     }
                 )
         finally:
@@ -219,20 +251,6 @@ class _BrowserScreencast:
         self._drop_queued_frames()
         with contextlib.suppress(asyncio.QueueFull):
             self.queue.put_nowait(frame)
-
-    def _frame_matches_viewport(self, data: str) -> bool:
-        if not self._expected_width or not self._expected_height:
-            return True
-        size = self._jpeg_size(data)
-        if not size:
-            return True
-        width, height = size
-        if (
-            abs(width - self._expected_width) <= VIEWPORT_SIZE_TOLERANCE
-            and abs(height - self._expected_height) <= VIEWPORT_SIZE_TOLERANCE
-        ):
-            return True
-        return False
 
     @staticmethod
     def _jpeg_size(data: str) -> tuple[int, int] | None:
@@ -709,6 +727,7 @@ class _BrowserRuntimeCore:
         browser_id: int | str | None,
         width: int,
         height: int,
+        restart_screencast: bool = False,
     ) -> dict[str, Any]:
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
@@ -724,12 +743,32 @@ class _BrowserRuntimeCore:
             or abs(int(current_viewport.get("height") or 0) - viewport["height"])
             > VIEWPORT_SIZE_TOLERANCE
         )
-        if changed:
-            await page.set_viewport_size(viewport)
+        should_remount_viewport = changed or restart_screencast
+        if should_remount_viewport:
             await self._stop_screencasts_for_browser(resolved_id)
+        if changed:
+            await self._apply_viewport_with_remount(page, viewport)
+        elif restart_screencast:
+            await self._remount_viewport(page, viewport)
+        if should_remount_viewport:
             await self._settle(page, short=True)
         self.last_interacted_browser_id = resolved_id
         return {"state": await self._state(resolved_id), "viewport": viewport}
+
+    async def _apply_viewport_with_remount(self, page: Any, viewport: dict[str, int]) -> None:
+        await page.set_viewport_size(viewport)
+        await asyncio.sleep(VIEWPORT_REMOUNT_PAUSE_SECONDS)
+        await self._remount_viewport(page, viewport)
+
+    async def _remount_viewport(self, page: Any, viewport: dict[str, int]) -> None:
+        nudged_viewport = self._nudged_viewport(viewport)
+        await page.set_viewport_size(nudged_viewport)
+        await asyncio.sleep(VIEWPORT_REMOUNT_PAUSE_SECONDS)
+        await page.set_viewport_size(viewport)
+
+    @staticmethod
+    def _nudged_viewport(viewport: dict[str, int]) -> dict[str, int]:
+        return _nudged_viewport(viewport)
 
     async def mouse(
         self,
@@ -838,15 +877,19 @@ class _BrowserRuntimeCore:
         return {"action": action or {}, "state": await self._state(resolved_id)}
 
     async def _goto(self, page: Any, url: str) -> None:
+        from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         except PlaywrightTimeoutError:
             PrintStyle.warning(f"Browser navigation timed out after DOM handoff: {url}")
+        except PlaywrightError as exc:
+            PrintStyle.warning(f"Browser navigation showed a native error page for {url}: {exc}")
         await self._settle(page)
 
     async def _settle(self, page: Any, short: bool = False) -> None:
+        from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
         try:
@@ -854,7 +897,7 @@ class _BrowserRuntimeCore:
                 "domcontentloaded",
                 timeout=1000 if short else 5000,
             )
-        except PlaywrightTimeoutError:
+        except (PlaywrightError, PlaywrightTimeoutError):
             pass
         await asyncio.sleep(0.1 if short else 0.35)
 

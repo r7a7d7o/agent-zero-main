@@ -1,6 +1,7 @@
 // Import the component loader and page utilities
 import { importComponent } from "/js/components.js";
 import { callJsExtensions } from "/js/extensions.js";
+import { store as rightCanvasStore } from "/components/canvas/right-canvas-store.js";
 
 // Modal functionality
 const modalStack = [];
@@ -193,12 +194,26 @@ function configureModalDockButton(modal, doc) {
   button.setAttribute("aria-label", metadata.title);
   button.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">${metadata.icon}</span>`;
   button.addEventListener("click", async () => {
-    const canvas = globalThis.Alpine?.store?.("rightCanvas")
-      || (await import("/components/canvas/right-canvas-store.js")).store;
-    await canvas?.dockSurface?.(metadata.surfaceId, {
-      modalPath: metadata.modalPath,
-      source: "modal",
-    });
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      await rightCanvasStore.dockSurface?.(metadata.surfaceId, {
+        modalPath: metadata.modalPath,
+        sourceModalPath: modal.path,
+        source: "modal",
+        closeSourceModal: async () => {
+          const closed = await closeModal(modal.path);
+          if (closed === false) return false;
+          if (document.contains(modal.element)) {
+            const fallbackClosed = await closeModal();
+            if (fallbackClosed === false) return false;
+          }
+          return !document.contains(modal.element);
+        },
+      });
+    } finally {
+      if (document.contains(button)) button.disabled = false;
+    }
   });
 
   modal.close?.insertAdjacentElement("beforebegin", button);

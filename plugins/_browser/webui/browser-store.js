@@ -1,8 +1,11 @@
 import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
 import { getNamespacedClient } from "/js/websocket.js";
+import { getContext, setContext } from "/index.js";
 import { store as chatInputStore } from "/components/chat/input/input-store.js";
 import { store as pluginSettingsStore } from "/components/plugins/plugin-settings-store.js";
+import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
+import { store as rightCanvasStore } from "/components/canvas/right-canvas-store.js";
 
 const websocket = getNamespacedClient("/ws");
 websocket.addHandlers(["ws_webui"]);
@@ -15,6 +18,7 @@ const VIEWPORT_SYNC_DEBOUNCE_MS = 220;
 const VIEWPORT_SYNC_SIZE_TOLERANCE = 4;
 const CANVAS_VIEWPORT_SETTLE_MS = 520;
 const SURFACE_VIEWPORT_STABLE_FRAMES = 4;
+const SURFACE_VIEWPORT_MAX_WAIT_MS = 1200;
 const FRAME_REJECT_SYNC_COOLDOWN_MS = 600;
 const ANNOTATION_DRAG_THRESHOLD = 6;
 const ANNOTATION_MAX_COMMENTS = 24;
@@ -126,7 +130,15 @@ const model = {
   _mode: "",
   _surfaceMounted: false,
   _surfaceSwitching: false,
+  _surfaceHandoff: false,
+  _surfaceHandoffTimer: null,
   _surfaceOpenedAt: 0,
+  _surfaceOpenSequence: 0,
+  _canvasSurfaceReadySequence: 0,
+  _canvasFirstFrameAcceptedSequence: 0,
+  _canvasFirstFrameNudgeSequence: 0,
+  _openPromise: null,
+  _openSignature: "",
   _connectSequence: 0,
   _viewerToken: "",
   _contextCreatePromise: null,
@@ -146,6 +158,8 @@ const model = {
   browserInstallExpected: false,
   defaultHomepage: "about:blank",
   autofocusActivePage: true,
+  _commandInFlightCount: 0,
+  _closingBrowserIds: {},
   _configLoadedAt: 0,
   _configRefreshPromise: null,
 
@@ -234,8 +248,7 @@ const model = {
 
   resolveContextId() {
     const urlContext = new URLSearchParams(globalThis.location?.search || "").get("ctxid");
-    const selectedChat = globalThis.Alpine?.store?.("chats")?.selected;
-    return globalThis.getContext?.() || urlContext || selectedChat || "";
+    return getContext() || urlContext || chatsStore.selected || "";
   },
 
   async ensureContextId() {
@@ -269,12 +282,8 @@ const model = {
       throw new Error(response?.error || "Could not create a chat for Browser.");
     }
 
-    if (typeof globalThis.setContext === "function") {
-      globalThis.setContext(contextId);
-    } else {
-      const chatsStore = globalThis.Alpine?.store?.("chats");
-      chatsStore?.setSelected?.(contextId);
-    }
+    setContext(contextId);
+    chatsStore.setSelected?.(contextId);
 
     return contextId;
   },
@@ -451,10 +460,47 @@ const model = {
   },
 
   async onOpen(element = null, options = {}) {
+    const requestedBrowserId = this.normalizeBrowserId(
+      options.requestedBrowserId ?? options.browserId ?? options.browser_id,
+    );
+    const nextMode = options?.mode === "modal" ? "modal" : "canvas";
+    if (nextMode === "canvas" && !this.isCanvasSurfaceVisible(element)) {
+      return;
+    }
+    const openSignature = this.surfaceOpenSignature(element, nextMode, requestedBrowserId);
+    if (this._openPromise && this._openSignature === openSignature) {
+      return await this._openPromise;
+    }
+    const promise = this.openSurface(element, {
+      ...options,
+      requestedBrowserId,
+      nextMode,
+    });
+    this._openPromise = promise;
+    this._openSignature = openSignature;
+    try {
+      return await promise;
+    } finally {
+      if (this._openPromise === promise) {
+        this._openPromise = null;
+        this._openSignature = "";
+      }
+    }
+  },
+
+  async openSurface(element = null, options = {}) {
     this.loading = true;
     this.error = "";
-    const requestedBrowserId = this.normalizeBrowserId(options.browserId ?? options.browser_id);
-    const nextMode = options?.mode === "modal" ? "modal" : "canvas";
+    const requestedBrowserId = this.normalizeBrowserId(
+      options.requestedBrowserId ?? options.browserId ?? options.browser_id,
+    );
+    const nextMode = options?.nextMode || (options?.mode === "modal" ? "modal" : "canvas");
+    if (nextMode === "canvas" && !this.isCanvasSurfaceVisible(element)) {
+      this.loading = false;
+      return;
+    }
+    const surfaceSequence = this._surfaceOpenSequence + 1;
+    this._surfaceOpenSequence = surfaceSequence;
     this.prepareSurfaceOpen(nextMode, requestedBrowserId);
     if (nextMode === "modal") {
       this.setupFloatingModal(element);
@@ -463,16 +509,95 @@ const model = {
     }
     try {
       await this.ensureContextId();
+      if (!this.isCurrentSurfaceOpen(surfaceSequence)) return;
       await this.refreshStatus();
-      const viewport = await this.waitForSurfaceViewport();
+      if (!this.isCurrentSurfaceOpen(surfaceSequence)) return;
+      const viewport = await this.waitForSurfaceViewport({ sequence: surfaceSequence });
+      if (!this.isCurrentSurfaceOpen(surfaceSequence)) return;
+      if (nextMode === "canvas" && !viewport) return;
       this.resetRenderedFrameIfViewportChanged(viewport, requestedBrowserId);
       await this.connectViewer({ browserId: requestedBrowserId, initialViewport: viewport });
-      await this.syncViewportAfterSurfaceOpen();
+      if (!this.isCurrentSurfaceOpen(surfaceSequence)) return;
+      await this.syncViewportAfterSurfaceOpen(surfaceSequence);
     } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error);
+      if (this.isCurrentSurfaceOpen(surfaceSequence)) {
+        this.error = error instanceof Error ? error.message : String(error);
+      }
     } finally {
-      this.loading = false;
+      if (this.isCurrentSurfaceOpen(surfaceSequence)) {
+        this.loading = false;
+        if (this._mode === "canvas") {
+          this._canvasSurfaceReadySequence = surfaceSequence;
+          this.scheduleCanvasWidthNudgeAfterFirstFrame();
+        }
+      }
     }
+  },
+
+  surfaceOpenSignature(element = null, mode = "", browserId = null) {
+    const root = element || globalThis.document?.querySelector(".browser-panel");
+    if (root && !root.__browserSurfaceOpenId) {
+      root.__browserSurfaceOpenId = makeViewerToken();
+    }
+    return [
+      mode || "",
+      this.normalizeBrowserId(browserId) || "",
+      root?.__browserSurfaceOpenId || "",
+    ].join(":");
+  },
+
+  isCurrentSurfaceOpen(sequence) {
+    return this._surfaceMounted && sequence === this._surfaceOpenSequence;
+  },
+
+  beginSurfaceHandoff() {
+    if (this._surfaceHandoffTimer) {
+      globalThis.clearTimeout(this._surfaceHandoffTimer);
+    }
+    this._surfaceHandoff = true;
+    this._surfaceHandoffTimer = globalThis.setTimeout(() => {
+      this._surfaceHandoff = false;
+      this._surfaceHandoffTimer = null;
+    }, 3000);
+  },
+
+  finishSurfaceHandoff() {
+    if (this._surfaceHandoffTimer) {
+      globalThis.clearTimeout(this._surfaceHandoffTimer);
+      this._surfaceHandoffTimer = null;
+    }
+    this._surfaceHandoff = false;
+  },
+
+  cancelSurfaceHandoff() {
+    if (this._surfaceHandoffTimer) {
+      globalThis.clearTimeout(this._surfaceHandoffTimer);
+      this._surfaceHandoffTimer = null;
+    }
+    this._surfaceHandoff = false;
+  },
+
+  releaseSurfaceBindings() {
+    this._floatingCleanup?.();
+    this._floatingCleanup = null;
+    this._stageResizeObserver?.disconnect?.();
+    this._stageResizeObserver = null;
+    this._stageElement = null;
+  },
+
+  isCanvasSurfaceVisible(element = null) {
+    const root = element
+      || globalThis.document?.querySelector?.(".browser-canvas-surface .browser-panel")
+      || globalThis.document?.querySelector?.(".browser-panel");
+    if (!root?.isConnected) return false;
+    const surface = root.closest?.(".browser-canvas-surface");
+    const stage = root.querySelector?.(".browser-stage") || root;
+    const surfaceStyle = surface ? globalThis.getComputedStyle?.(surface) : null;
+    const rootStyle = globalThis.getComputedStyle?.(root);
+    if (surfaceStyle?.display === "none" || surfaceStyle?.visibility === "hidden") return false;
+    if (rootStyle?.display === "none" || rootStyle?.visibility === "hidden") return false;
+    const rect = stage.getBoundingClientRect?.();
+    return Boolean(rect && Math.round(rect.width || 0) >= 80 && Math.round(rect.height || 0) >= 80);
   },
 
   prepareSurfaceOpen(nextMode, requestedBrowserId = null) {
@@ -517,11 +642,16 @@ const model = {
     this.switchingBrowserId = targetBrowserId;
   },
 
-  async waitForSurfaceViewport() {
+  async waitForSurfaceViewport(options = {}) {
+    const sequence = Number(options.sequence || 0);
+    const startedAt = Date.now();
     let lastKey = "";
     let stableCount = 0;
-    for (let index = 0; index < 24; index += 1) {
+    while (Date.now() - startedAt <= SURFACE_VIEWPORT_MAX_WAIT_MS) {
       await nextAnimationFrame();
+      if (sequence && !this.isCurrentSurfaceOpen(sequence)) {
+        return null;
+      }
       const viewport = this.surfaceViewportMeasurement();
       if (!viewport) continue;
       const key = `${viewport.rawWidth}x${viewport.rawHeight}`;
@@ -538,16 +668,29 @@ const model = {
         lastKey = key;
       }
     }
-    return this.currentViewportSize();
+    const fallbackViewport = this.currentViewportSize();
+    return fallbackViewport;
   },
 
-  async syncViewportAfterSurfaceOpen() {
+  async syncViewportAfterSurfaceOpen(sequence = this._surfaceOpenSequence) {
     if (!this.connected || !this.activeBrowserId) return;
-    await this.waitForSurfaceViewport();
-    await this.syncViewport(true);
+    await this.waitForSurfaceViewport({ sequence });
+    if (!this.isCurrentSurfaceOpen(sequence)) {
+      return;
+    }
+    await this.syncViewport(true, { restartStream: this._mode === "canvas" });
     if (this._mode !== "canvas") return;
-    globalThis.setTimeout?.(() => this.queueViewportSync(true), 240);
-    globalThis.setTimeout?.(() => this.queueViewportSync(true), 420);
+    this.scheduleViewportSyncForSurface(sequence, 240);
+    this.scheduleViewportSyncForSurface(sequence, 520);
+  },
+
+  scheduleViewportSyncForSurface(sequence, delayMs = 0) {
+    globalThis.setTimeout?.(() => {
+      if (!this.isCurrentSurfaceOpen(sequence) || this._mode !== "canvas") {
+        return;
+      }
+      this.queueViewportSync(true);
+    }, delayMs);
   },
 
   async connectViewer(options = {}) {
@@ -715,11 +858,12 @@ const model = {
     this._pendingFrameSrc = "";
     this._pendingFrameOptions = null;
     const sequence = this._frameRenderSequence + 1;
+    const surfaceSequence = this._surfaceOpenSequence;
     this._frameRenderSequence = sequence;
-    void this.renderDecodedFrame(frameSrc, options, sequence);
+    void this.renderDecodedFrame(frameSrc, options, sequence, surfaceSequence);
   },
 
-  async renderDecodedFrame(frameSrc, options = {}, sequence = 0) {
+  async renderDecodedFrame(frameSrc, options = {}, sequence = 0, surfaceSequence = this._surfaceOpenSequence) {
     if (!frameSrc) {
       if (sequence === this._frameRenderSequence) {
         this.frameSrc = "";
@@ -727,7 +871,9 @@ const model = {
       return;
     }
     const dimensions = await loadFrameDimensions(frameSrc);
-    if (sequence !== this._frameRenderSequence) return;
+    if (sequence !== this._frameRenderSequence || surfaceSequence !== this._surfaceOpenSequence) {
+      return;
+    }
     const viewport = this.currentViewportSize() || this._lastViewport;
     if (!this.frameMatchesViewport(dimensions, viewport)) {
       this.requestViewportSyncAfterRejectedFrame();
@@ -737,6 +883,56 @@ const model = {
     this._lastFrameDimensions = dimensions;
     this._lastFrameAt = Date.now();
     options?.onAccepted?.();
+    this._canvasFirstFrameAcceptedSequence = surfaceSequence;
+    this.scheduleCanvasWidthNudgeAfterFirstFrame();
+  },
+
+  scheduleCanvasWidthNudgeAfterFirstFrame() {
+    const surfaceSequence = this._surfaceOpenSequence;
+    if (this._mode !== "canvas" || !this.isCurrentSurfaceOpen(surfaceSequence) || !this.activeBrowserId) {
+      return;
+    }
+    if (this._canvasFirstFrameNudgeSequence === surfaceSequence) {
+      return;
+    }
+    if (
+      this._canvasSurfaceReadySequence !== surfaceSequence
+      || this._canvasFirstFrameAcceptedSequence !== surfaceSequence
+    ) {
+      return;
+    }
+    this._canvasFirstFrameNudgeSequence = surfaceSequence;
+
+    void (async () => {
+      await nextAnimationFrame();
+      await nextAnimationFrame();
+      if (!this.isCurrentSurfaceOpen(surfaceSequence) || this._mode !== "canvas") {
+        return;
+      }
+      this.forceRightCanvasWidthNudge();
+    })();
+  },
+
+  forceRightCanvasWidthNudge() {
+    const canvas = rightCanvasStore;
+    if (!canvas || canvas.isMobileMode || !canvas.isOpen || canvas.activeSurfaceId !== "browser") {
+      return;
+    }
+
+    const currentWidth = Number(canvas.width || 0);
+    if (!Number.isFinite(currentWidth) || currentWidth <= 0) {
+      return;
+    }
+    const maxWidth = Number(canvas.maxWidth?.() || currentWidth);
+    const minWidth = Number(canvas.minWidth || 420);
+    const direction = currentWidth < maxWidth ? 1 : -1;
+    const nudgedWidth = currentWidth + direction;
+    if (nudgedWidth < minWidth || nudgedWidth > maxWidth || nudgedWidth === currentWidth) {
+      return;
+    }
+
+    canvas.setWidth?.(nudgedWidth, { persist: false });
+    this.queueViewportSync(true);
   },
 
   frameMatchesViewport(dimensions = null, viewport = null) {
@@ -749,7 +945,9 @@ const model = {
 
   requestViewportSyncAfterRejectedFrame() {
     const now = Date.now();
-    if (now - this._lastFrameRejectSyncAt < FRAME_REJECT_SYNC_COOLDOWN_MS) return;
+    if (now - this._lastFrameRejectSyncAt < FRAME_REJECT_SYNC_COOLDOWN_MS) {
+      return;
+    }
     this._lastFrameRejectSyncAt = now;
     this.queueViewportSync(true);
   },
@@ -776,11 +974,22 @@ const model = {
     this._frameRenderSequence += 1;
   },
 
+  beginCommand() {
+    this._commandInFlightCount += 1;
+    this.commandInFlight = true;
+  },
+
+  finishCommand() {
+    this._commandInFlightCount = Math.max(0, this._commandInFlightCount - 1);
+    this.commandInFlight = this._commandInFlightCount > 0;
+  },
+
   async command(command, extra = {}) {
     this.error = "";
     this.annotationError = "";
-    this.commandInFlight = true;
+    this.beginCommand();
     const previousActiveBrowserId = this.activeBrowserId;
+    const commandName = String(command || "").toLowerCase();
     try {
       await this.ensureContextId();
       const response = await websocket.request(
@@ -813,19 +1022,33 @@ const model = {
         this.address = result.state?.currentUrl || result.currentUrl;
       }
       this.applySnapshot(data.snapshot);
-      if (["navigate", "back", "forward", "reload", "close"].includes(String(command || "").toLowerCase())) {
+      if (["navigate", "back", "forward", "reload", "close"].includes(commandName)) {
         this.clearAnnotationsForBrowser(previousActiveBrowserId);
         this.cancelAnnotationDraft();
       }
       const activeChanged = this.activeBrowserId && this.activeBrowserId !== previousActiveBrowserId;
-      if ((command === "open" || command === "close" || activeChanged) && this.contextId && this.activeBrowserId) {
+      if ((commandName === "open" || commandName === "close" || activeChanged) && this.contextId && this.activeBrowserId) {
         await this.connectViewer({ browserId: this.activeBrowserId });
-	      }
-	    } catch (error) {
+      } else if (["navigate", "back", "forward", "reload"].includes(commandName)) {
+        await this.restartCanvasStreamAfterPageChange();
+      }
+    } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
     } finally {
-      this.commandInFlight = false;
+      this.finishCommand();
     }
+  },
+
+  async restartCanvasStreamAfterPageChange() {
+    const surfaceSequence = this._surfaceOpenSequence;
+    if (this._mode !== "canvas" || !this.isCurrentSurfaceOpen(surfaceSequence) || !this.activeBrowserId) {
+      return;
+    }
+    await this.waitForSurfaceViewport({ sequence: surfaceSequence });
+    if (this._mode !== "canvas" || !this.isCurrentSurfaceOpen(surfaceSequence) || !this.activeBrowserId) {
+      return;
+    }
+    await this.syncViewport(true, { restartStream: true });
   },
 
   async go() {
@@ -884,6 +1107,35 @@ const model = {
 
   async openNewBrowser() {
     await this.command("open");
+  },
+
+  isClosingBrowser(id) {
+    const browserId = this.normalizeBrowserId(id);
+    return Boolean(browserId && this._closingBrowserIds[String(browserId)]);
+  },
+
+  markBrowserClosing(id, closing = true) {
+    const browserId = this.normalizeBrowserId(id);
+    if (!browserId) return;
+    const key = String(browserId);
+    const nextClosing = { ...this._closingBrowserIds };
+    if (closing) {
+      nextClosing[key] = true;
+    } else {
+      delete nextClosing[key];
+    }
+    this._closingBrowserIds = nextClosing;
+  },
+
+  async closeBrowser(id) {
+    const browserId = this.normalizeBrowserId(id);
+    if (!browserId || this.isClosingBrowser(browserId)) return;
+    this.markBrowserClosing(browserId, true);
+    try {
+      await this.command("close", { browser_id: browserId });
+    } finally {
+      this.markBrowserClosing(browserId, false);
+    }
   },
 
   isActiveBrowser(browser) {
@@ -1479,37 +1731,46 @@ const model = {
     }, force ? 0 : VIEWPORT_SYNC_DEBOUNCE_MS);
   },
 
-	  async syncViewport(force = false) {
-	    if (!this.contextId || !this.activeBrowserId) return;
-	    const viewport = this.currentViewportSize();
-	    if (!viewport) return;
-	    const key = `${this.activeBrowserId}:${viewport.width}x${viewport.height}`;
-	    if (
-	      this._lastViewportKey === key
-	      || (
-	        !force
-	        && this._lastViewport
-	        && this.sameBrowserId(this._lastViewport.browserId, this.activeBrowserId)
-	        && Math.abs(this._lastViewport.width - viewport.width) <= VIEWPORT_SYNC_SIZE_TOLERANCE
-	        && Math.abs(this._lastViewport.height - viewport.height) <= VIEWPORT_SYNC_SIZE_TOLERANCE
-	      )
-	    ) return;
-	    try {
-	      await websocket.emit("browser_viewer_input", {
-	        context_id: this.contextId,
-	        browser_id: this.activeBrowserId,
-	        viewer_id: this._viewerToken,
-	        input_type: "viewport",
-	        width: viewport.width,
-	        height: viewport.height,
-	      });
-	      this._lastViewportKey = key;
-	      this._lastViewport = {
-	        browserId: this.activeBrowserId,
-	        width: viewport.width,
-	        height: viewport.height,
-	      };
-	    } catch (error) {
+  async syncViewport(force = false, options = {}) {
+    const restartStream = Boolean(options.restartStream);
+    if (!this.contextId || !this.activeBrowserId) {
+      return;
+    }
+    const viewport = this.currentViewportSize();
+    if (!viewport) {
+      return;
+    }
+    const key = `${this.activeBrowserId}:${viewport.width}x${viewport.height}`;
+    if (
+      (!restartStream && this._lastViewportKey === key)
+      || (
+        !force
+        && !restartStream
+        && this._lastViewport
+        && this.sameBrowserId(this._lastViewport.browserId, this.activeBrowserId)
+        && Math.abs(this._lastViewport.width - viewport.width) <= VIEWPORT_SYNC_SIZE_TOLERANCE
+        && Math.abs(this._lastViewport.height - viewport.height) <= VIEWPORT_SYNC_SIZE_TOLERANCE
+      )
+    ) {
+      return;
+    }
+    try {
+      await websocket.emit("browser_viewer_input", {
+        context_id: this.contextId,
+        browser_id: this.activeBrowserId,
+        viewer_id: this._viewerToken,
+        input_type: "viewport",
+        width: viewport.width,
+        height: viewport.height,
+        restart_stream: restartStream,
+      });
+      this._lastViewportKey = key;
+      this._lastViewport = {
+        browserId: this.activeBrowserId,
+        width: viewport.width,
+        height: viewport.height,
+      };
+    } catch (error) {
       this._lastViewportKey = "";
       this._lastViewport = null;
       console.warn("Browser viewport sync failed", error);
@@ -1545,7 +1806,7 @@ const model = {
     await websocket.emit("browser_viewer_input", payload);
   },
 
-	  async sendWheel(event) {
+  async sendWheel(event) {
     if (!this.activeBrowserId || !event) return;
     const image = event.currentTarget?.querySelector?.(".browser-frame") || event.target?.closest?.(".browser-frame");
     const pointer = this.pointerCoordinatesFor(event, image);
@@ -1560,12 +1821,12 @@ const model = {
       delta_x: Number(event.deltaX || 0),
       delta_y: Number(event.deltaY || 0),
     };
-	    try {
-	      await websocket.emit("browser_viewer_input", payload);
-	    } catch (error) {
-	      this.error = error instanceof Error ? error.message : String(error);
-	    }
-	  },
+    try {
+      await websocket.emit("browser_viewer_input", payload);
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    }
+  },
 
   async sendKey(event) {
     if (this.annotating) return;
@@ -1585,12 +1846,22 @@ const model = {
   },
 
   async cleanup() {
+    if (this._surfaceHandoff) {
+      this.releaseSurfaceBindings();
+      this.extensionMenuOpen = false;
+      return;
+    }
+    this._surfaceOpenSequence += 1;
+    this._openPromise = null;
+    this._openSignature = "";
     this._connectSequence += 1;
     this._viewerToken = "";
     this.switchingBrowserId = null;
     this._surfaceMounted = false;
     this._surfaceSwitching = false;
     this.commandInFlight = false;
+    this._commandInFlightCount = 0;
+    this._closingBrowserIds = {};
     this.annotating = false;
     this.annotationBusy = false;
     this.annotationError = "";
@@ -1606,11 +1877,7 @@ const model = {
     this._frameOff = null;
     this._stateOff = null;
     this.resetRenderedFrame();
-    this._floatingCleanup?.();
-    this._floatingCleanup = null;
-    this._stageResizeObserver?.disconnect?.();
-    this._stageResizeObserver = null;
-    this._stageElement = null;
+    this.releaseSurfaceBindings();
     if (this._viewportSyncTimer) {
       globalThis.clearTimeout(this._viewportSyncTimer);
       this._viewportSyncTimer = null;
@@ -1681,11 +1948,17 @@ const model = {
       resizeObserver.observe(inner);
       if (stage) {
         this._stageResizeObserver?.disconnect?.();
-        this._stageResizeObserver = new ResizeObserver(() => this.queueViewportSync());
+        this._stageResizeObserver = new ResizeObserver(() => {
+          this.queueViewportSync();
+        });
         this._stageResizeObserver.observe(stage);
       }
     }
-    globalThis.requestAnimationFrame(() => this.queueViewportSync(true));
+    const surfaceSequence = this._surfaceOpenSequence;
+    globalThis.requestAnimationFrame(() => {
+      if (!this.isCurrentSurfaceOpen(surfaceSequence)) return;
+      this.queueViewportSync(true);
+    });
 
     const onPointerMove = (event) => {
       if (!drag) return;
@@ -1735,6 +2008,7 @@ const model = {
   },
 
   setupCanvasSurface(element = null) {
+    const surfaceSequence = this._surfaceOpenSequence;
     this._floatingCleanup?.();
     this._floatingCleanup = null;
     this._stageResizeObserver?.disconnect?.();
@@ -1742,10 +2016,15 @@ const model = {
     const stage = root?.querySelector?.(".browser-stage");
     this._stageElement = stage || null;
     if (stage && globalThis.ResizeObserver) {
-      this._stageResizeObserver = new ResizeObserver(() => this.queueViewportSync());
+      this._stageResizeObserver = new ResizeObserver(() => {
+        this.queueViewportSync();
+      });
       this._stageResizeObserver.observe(stage);
     }
-    globalThis.requestAnimationFrame?.(() => this.queueViewportSync(true));
+    globalThis.requestAnimationFrame?.(() => {
+      if (!this.isCurrentSurfaceOpen(surfaceSequence) || this._mode !== "canvas") return;
+      this.queueViewportSync(true);
+    });
   },
 
   get activeTitle() {

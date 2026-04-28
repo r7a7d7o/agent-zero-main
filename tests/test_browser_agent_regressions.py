@@ -370,7 +370,9 @@ def test_browser_viewer_creates_chat_when_no_context_is_selected():
     assert "async ensureContextId()" in js
     assert "async createChatContextForBrowser()" in js
     assert 'callJsonApi("/chat_create"' in js
-    assert "globalThis.setContext(contextId)" in js
+    assert 'import { getContext, setContext } from "/index.js";' in js
+    assert "setContext(contextId)" in js
+    assert "chatsStore.setSelected?.(contextId)" in js
     assert "await this.ensureContextId();" in js
     assert "No active chat context is selected." not in js
 
@@ -382,11 +384,206 @@ def test_browser_canvas_startup_waits_for_raw_viewport_settle():
 
     assert "const CANVAS_VIEWPORT_SETTLE_MS = 520;" in js
     assert "const SURFACE_VIEWPORT_STABLE_FRAMES = 4;" in js
+    assert "const SURFACE_VIEWPORT_MAX_WAIT_MS = 1200;" in js
     assert "surfaceViewportMeasurement()" in js
     assert "rawWidth" in js
     assert "rawHeight" in js
     assert "const key = `${viewport.rawWidth}x${viewport.rawHeight}`;" in js
     assert "Date.now() - this._surfaceOpenedAt >= CANVAS_VIEWPORT_SETTLE_MS" in js
+    assert "while (Date.now() - startedAt <= SURFACE_VIEWPORT_MAX_WAIT_MS)" in js
+    assert "this._openPromise && this._openSignature === openSignature" in js
+    assert "isCurrentSurfaceOpen(surfaceSequence)" in js
+    assert "isCanvasSurfaceVisible(element)" in js
+    assert "scheduleViewportSyncForSurface" in js
+
+
+def test_browser_canvas_surface_open_waits_for_visible_panel():
+    js = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_browser"
+        / "extensions"
+        / "webui"
+        / "right_canvas_register_surfaces"
+        / "register-browser.js"
+    ).read_text(encoding="utf-8")
+
+    assert "waitForVisibleCanvasPanel" in js
+    assert "isVisibleCanvasPanel(panel)" in js
+    assert 'panel.closest(".browser-canvas-surface")' in js
+    assert 'panel.querySelector(".browser-stage")' in js
+    assert "getBoundingClientRect" in js
+    assert "stableCount >= 2" in js
+    assert "forceCanvasWidthNudgeAfterBrowserMount" not in js
+
+
+def test_browser_canvas_nudges_width_after_first_accepted_frame():
+    js = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "_canvasSurfaceReadySequence" in js
+    assert "_canvasFirstFrameAcceptedSequence" in js
+    assert "_canvasFirstFrameNudgeSequence" in js
+    assert "scheduleCanvasWidthNudgeAfterFirstFrame()" in js
+    assert "this._canvasSurfaceReadySequence = surfaceSequence;" in js
+    assert "const surfaceSequence = this._surfaceOpenSequence;" in js
+    assert "this._canvasFirstFrameAcceptedSequence = surfaceSequence;" in js
+    assert "forceRightCanvasWidthNudge()" in js
+    assert "await nextAnimationFrame();" in js
+    assert "globalThis.Alpine" not in js
+    assert 'import { store as rightCanvasStore } from "/components/canvas/right-canvas-store.js";' in js
+    assert "const canvas = rightCanvasStore;" in js
+    assert 'canvas.activeSurfaceId !== "browser"' in js
+    assert "canvas.setWidth?.(nudgedWidth, { persist: false })" in js
+    assert "this.queueViewportSync(true)" in js
+    frame_assignment_index = js.index("this.frameSrc = frameSrc;")
+    frame_nudge_schedule_index = js.index(
+        "this.scheduleCanvasWidthNudgeAfterFirstFrame();",
+        frame_assignment_index,
+    )
+    assert frame_assignment_index < frame_nudge_schedule_index
+
+
+def test_browser_canvas_restarts_stream_after_page_navigation():
+    js = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "async restartCanvasStreamAfterPageChange()" in js
+    assert '["navigate", "back", "forward", "reload"].includes(commandName)' in js
+    assert "await this.restartCanvasStreamAfterPageChange();" in js
+    assert "await this.waitForSurfaceViewport({ sequence: surfaceSequence });" in js
+    assert "await this.syncViewport(true, { restartStream: true });" in js
+    reconnect_index = js.index("await this.connectViewer({ browserId: this.activeBrowserId });")
+    restart_index = js.index("await this.restartCanvasStreamAfterPageChange();")
+    assert reconnect_index < restart_index
+
+
+def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
+    button_html = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_browser"
+        / "extensions"
+        / "webui"
+        / "chat-input-bottom-actions-start"
+        / "browser-button.html"
+    ).read_text(encoding="utf-8")
+    tool_handler = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_browser"
+        / "extensions"
+        / "webui"
+        / "get_tool_message_handler"
+        / "browser-tool-handler.js"
+    ).read_text(encoding="utf-8")
+    after_loop_handler = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_browser"
+        / "extensions"
+        / "webui"
+        / "set_messages_after_loop"
+        / "auto-open-browser-results.js"
+    ).read_text(encoding="utf-8")
+    register_js = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_browser"
+        / "extensions"
+        / "webui"
+        / "right_canvas_register_surfaces"
+        / "register-browser.js"
+    ).read_text(encoding="utf-8")
+    browser_store = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js").read_text(
+        encoding="utf-8"
+    )
+    canvas_store = (PROJECT_ROOT / "webui" / "components" / "canvas" / "right-canvas-store.js").read_text(
+        encoding="utf-8"
+    )
+    modals_js = (PROJECT_ROOT / "webui" / "js" / "modals.js").read_text(encoding="utf-8")
+
+    assert "Open Browser" in button_html
+    assert "$store.rightCanvas ? $store.rightCanvas.open('browser')" in button_html
+    assert "window.ensureModalOpen ? window.ensureModalOpen('/plugins/_browser/webui/main.html')" in button_html
+    assert "$store.rightCanvas.toggle('browser')" not in button_html
+    assert 'defaultOpenMode: "modal"' not in register_js
+    assert "beginDockHandoff()" in register_js
+    assert "beginSurfaceHandoff" in register_js
+    assert "finishDockHandoff()" in register_js
+    assert "cancelDockHandoff()" in register_js
+    assert "defaultOpenMode" not in canvas_store
+    assert "await surface.beginDockHandoff?.(payload)" in canvas_store
+    assert "await this.closeDockSourceModal(payload, modalPath)" in canvas_store
+    assert "delete openPayload.closeSourceModal" in canvas_store
+    assert "await surface.finishDockHandoff?.({ ...openPayload, opened })" in canvas_store
+    assert "await surface.cancelDockHandoff?.(payload)" in canvas_store
+    assert "async closeDockSourceModal" in canvas_store
+
+    assert "sourceModalPath: modal.path" in modals_js
+    assert "closeSourceModal: async () =>" in modals_js
+    assert "const closed = await closeModal(modal.path)" in modals_js
+    assert "const fallbackClosed = await closeModal()" in modals_js
+    assert "button.disabled = true" in modals_js
+
+    assert "beginSurfaceHandoff()" in browser_store
+    assert "finishSurfaceHandoff()" in browser_store
+    assert "cancelSurfaceHandoff()" in browser_store
+    assert "releaseSurfaceBindings()" in browser_store
+    assert "this.releaseSurfaceBindings();" in browser_store
+
+    for js in (tool_handler, after_loop_handler):
+        assert "async function openBrowserCanvas" in js
+        assert "openBrowserModal" not in js
+        assert js.index('await rightCanvasStore.open("browser", payload);') < js.index("if (window.ensureModalOpen)")
+
+    assert "function autoOpenBrowserCanvas" in tool_handler
+
+    for js in (tool_handler, after_loop_handler, register_js, browser_store, modals_js):
+        assert "globalThis.Alpine" not in js
+        assert "Alpine?.store" not in js
+        assert "Alpine.store" not in js
+
+
+def test_browser_canvas_uses_plain_panel_without_debug_probe():
+    panel_html = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_browser"
+        / "extensions"
+        / "webui"
+        / "right-canvas-panels"
+        / "browser-panel.html"
+    ).read_text(encoding="utf-8")
+    browser_store = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js").read_text(
+        encoding="utf-8"
+    )
+    register_js = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_browser"
+        / "extensions"
+        / "webui"
+        / "right_canvas_register_surfaces"
+        / "register-browser.js"
+    ).read_text(encoding="utf-8")
+    canvas_store = (PROJECT_ROOT / "webui" / "components" / "canvas" / "right-canvas-store.js").read_text(
+        encoding="utf-8"
+    )
+    modals_js = (PROJECT_ROOT / "webui" / "js" / "modals.js").read_text(encoding="utf-8")
+
+    assert 'x-component path="/plugins/_browser/webui/browser-panel.html" mode="canvas"' in panel_html
+    assert "browserCanvasRemountKey" not in panel_html
+    assert "remountBrowserCanvasOnce" not in panel_html
+    assert "data-remount-slot" not in panel_html
+
+    for js in (browser_store, register_js, canvas_store, modals_js):
+        assert "__a0BrowserDebug" not in js
+        assert "browserDebug" not in js
+        assert "emitBrowserDebug" not in js
+        assert ".debug(" not in js
 
 
 def test_browser_ui_spinners_have_browser_local_animation():
@@ -436,6 +633,29 @@ def test_browser_viewer_uses_tabs_for_session_switching():
     assert "Using ${this.mainModelSummary}" in browser_store
 
 
+def test_browser_tabs_close_without_confirmation_or_busy_lock():
+    main_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-panel.html").read_text(
+        encoding="utf-8"
+    )
+    browser_store = (
+        PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js"
+    ).read_text(encoding="utf-8")
+    close_start = main_html.index('class="browser-tab-close"')
+    close_end = main_html.index("</button>", close_start)
+    close_markup = main_html[close_start:close_end]
+
+    assert '@click.stop="$store.browserPage.closeBrowser(browser.id)"' in main_html
+    assert "@pointerdown.stop" in close_markup
+    assert "$confirmClick" not in main_html
+    assert "isBusy()" not in close_markup
+    assert ':disabled="$store.browserPage.isClosingBrowser(browser.id)"' in close_markup
+    assert "--browser-tab-close-size: 32px;" in main_html
+    assert "async closeBrowser(id)" in browser_store
+    assert "isClosingBrowser(id)" in browser_store
+    assert "_closingBrowserIds" in browser_store
+    assert "_commandInFlightCount" in browser_store
+
+
 def test_browser_viewer_uses_cdp_screencast_transport():
     ws_browser = (PROJECT_ROOT / "plugins" / "_browser" / "api" / "ws_browser.py").read_text(
         encoding="utf-8"
@@ -469,13 +689,42 @@ def test_browser_viewer_uses_cdp_screencast_transport():
     assert "requestAnimationFrame" in browser_store
     assert "viewport_width: initialViewport?.width" in browser_store
     assert "viewport_height: initialViewport?.height" in browser_store
+    assert "restart_stream: restartStream" in browser_store
+    assert 'restart_screencast=bool(data.get("restart_stream"))' in ws_browser
+    assert "restart_screencast: bool = False" in runtime
+    assert "should_remount_viewport = changed or restart_screencast" in runtime
+    assert "VIEWPORT_REMOUNT_PAUSE_SECONDS = 0.05" in runtime
+    assert "await self._apply_cdp_viewport_with_remount" in runtime
+    assert "await self._apply_viewport_with_remount(page, viewport)" in runtime
+    assert "await self._remount_viewport(page, viewport)" in runtime
+    assert "await asyncio.sleep(VIEWPORT_REMOUNT_PAUSE_SECONDS)" in runtime
+    assert "def _nudged_viewport(viewport: dict[str, int])" in runtime
+    assert 'await this.syncViewport(true, { restartStream: this._mode === "canvas" });' in browser_store
     assert "this.frameState = data.state || null" not in browser_store
     assert "function loadFrameDimensions(src)" in browser_store
     assert "frameMatchesViewport(dimensions = null, viewport = null)" in browser_store
     assert "requestViewportSyncAfterRejectedFrame()" in browser_store
+    assert "FRAME_FALLBACK_SCREENSHOT_SECONDS" not in ws_browser
+    assert '"frame_source": "state"' in ws_browser
+    assert '"frame_source"] = "screencast"' in ws_browser
+    assert "fallback_screenshot" not in ws_browser
+    assert "canvas_wheel_screenshot" not in ws_browser
+    assert "surface_mode: this._mode" not in browser_store
     assert "overflow: hidden;" in main_html
     assert "object-fit: fill;" in main_html
     assert "image-rendering: auto;" in main_html
+
+
+def test_browser_navigation_errors_stay_inside_native_browser_page():
+    runtime = (
+        PROJECT_ROOT / "plugins" / "_browser" / "helpers" / "runtime.py"
+    ).read_text(encoding="utf-8")
+
+    assert "Error as PlaywrightError" in runtime
+    assert "except PlaywrightError as exc:" in runtime
+    assert "Browser navigation showed a native error page" in runtime
+    assert "await self._settle(page)" in runtime
+    assert "except (PlaywrightError, PlaywrightTimeoutError):" in runtime
 
 
 def test_browser_annotate_mode_ui_and_prompt_hooks():
@@ -562,14 +811,57 @@ async def test_browser_screencast_acknowledges_and_drops_stale_frames():
     assert frame["browser_id"] == 7
     assert frame["image"] == "second"
     assert frame["metadata"]["deviceWidth"] == 200
-    assert ("Emulation.setDeviceMetricsOverride", {
-        "width": 1118,
-        "height": 662,
-        "deviceScaleFactor": 1,
-        "mobile": False,
-        "dontSetVisibleSize": True,
-    }) in session.sent
-    assert ("Emulation.setVisibleSize", {"width": 1118, "height": 662}) in session.sent
+    assert frame["metadata"]["expectedWidth"] == 1118
+    assert frame["metadata"]["expectedHeight"] == 662
+    metrics_calls = [
+        params
+        for method, params in session.sent
+        if method == "Emulation.setDeviceMetricsOverride"
+    ]
+    visible_calls = [
+        params
+        for method, params in session.sent
+        if method == "Emulation.setVisibleSize"
+    ]
+    assert metrics_calls[:3] == [
+        {
+            "width": 1118,
+            "height": 662,
+            "deviceScaleFactor": 1,
+            "mobile": False,
+            "dontSetVisibleSize": True,
+        },
+        {
+            "width": 1119,
+            "height": 662,
+            "deviceScaleFactor": 1,
+            "mobile": False,
+            "dontSetVisibleSize": True,
+        },
+        {
+            "width": 1118,
+            "height": 662,
+            "deviceScaleFactor": 1,
+            "mobile": False,
+            "dontSetVisibleSize": True,
+        },
+    ]
+    assert visible_calls[:3] == [
+        {"width": 1118, "height": 662},
+        {"width": 1119, "height": 662},
+        {"width": 1118, "height": 662},
+    ]
+    start_index = next(
+        index
+        for index, (method, _params) in enumerate(session.sent)
+        if method == "Page.startScreencast"
+    )
+    cdp_viewport_indices = [
+        index
+        for index, (method, _params) in enumerate(session.sent)
+        if method.startswith("Emulation.")
+    ]
+    assert max(cdp_viewport_indices) < start_index
     assert ("Page.screencastFrameAck", {"sessionId": 1}) in session.sent
     assert ("Page.screencastFrameAck", {"sessionId": 2}) in session.sent
 
@@ -580,7 +872,7 @@ async def test_browser_screencast_acknowledges_and_drops_stale_frames():
 
 
 @pytest.mark.anyio
-async def test_browser_screencast_keeps_rejecting_wrong_viewport_frames():
+async def test_browser_screencast_passes_wrong_viewport_frames_to_frontend_validator():
     class FakeSession:
         def __init__(self):
             self.handlers = {}
@@ -610,7 +902,14 @@ async def test_browser_screencast_keeps_rejecting_wrong_viewport_frames():
         )
     await asyncio.sleep(0)
 
-    assert await screencast.pop_frame() is None
+    frame = await screencast.pop_frame()
+
+    assert frame is not None
+    assert frame["image"] == SMALL_JPEG_10X10
+    assert frame["metadata"]["jpegWidth"] == 10
+    assert frame["metadata"]["jpegHeight"] == 10
+    assert frame["metadata"]["expectedWidth"] == 1118
+    assert frame["metadata"]["expectedHeight"] == 662
     assert ("Page.screencastFrameAck", {"sessionId": 13}) in session.sent
 
     await screencast.stop()
@@ -819,6 +1118,7 @@ async def test_browser_viewer_viewport_input_dispatches_resize(monkeypatch):
             "input_type": "viewport",
             "width": 1280,
             "height": 720,
+            "restart_stream": True,
         },
         "sid-1",
     )
@@ -827,7 +1127,96 @@ async def test_browser_viewer_viewport_input_dispatches_resize(monkeypatch):
         "state": {"ok": True, "method": "set_viewport", "args": (7, 1280, 720)},
         "snapshot": None,
     }
-    assert calls == [("set_viewport", (7, 1280, 720), {})]
+    assert calls == [
+        ("set_viewport", (7, 1280, 720), {"restart_screencast": True})
+    ]
+
+
+@pytest.mark.anyio
+async def test_browser_runtime_remounts_same_viewport_when_restarting_screencast():
+    viewport_calls = []
+    stopped = []
+    settled = []
+
+    class FakePage:
+        viewport_size = {"width": 1280, "height": 720}
+
+        async def set_viewport_size(self, viewport):
+            viewport_calls.append(dict(viewport))
+
+    core = _BrowserRuntimeCore("ctx")
+    core.context = object()
+    core.pages[7] = browser_runtime_module.BrowserPage(id=7, page=FakePage())
+
+    async def fake_stop_screencasts(browser_id):
+        stopped.append(browser_id)
+
+    async def fake_settle(page, short=False):
+        settled.append(short)
+
+    async def fake_state(browser_id):
+        return {"id": browser_id}
+
+    core._stop_screencasts_for_browser = fake_stop_screencasts
+    core._settle = fake_settle
+    core._state = fake_state
+
+    result = await core.set_viewport(7, 1280, 720, restart_screencast=True)
+
+    assert result == {
+        "state": {"id": 7},
+        "viewport": {"width": 1280, "height": 720},
+    }
+    assert viewport_calls == [
+        {"width": 1281, "height": 720},
+        {"width": 1280, "height": 720},
+    ]
+    assert stopped == [7]
+    assert settled == [True]
+
+
+@pytest.mark.anyio
+async def test_browser_runtime_remounts_initial_changed_viewport():
+    calls = []
+    stopped = []
+    settled = []
+
+    class FakePage:
+        viewport_size = {"width": 1024, "height": 768}
+
+        async def set_viewport_size(self, viewport):
+            calls.append(("viewport", dict(viewport)))
+
+    core = _BrowserRuntimeCore("ctx")
+    core.context = object()
+    core.pages[7] = browser_runtime_module.BrowserPage(id=7, page=FakePage())
+
+    async def fake_stop_screencasts(browser_id):
+        stopped.append(browser_id)
+
+    async def fake_settle(page, short=False):
+        settled.append(short)
+
+    async def fake_state(browser_id):
+        return {"id": browser_id}
+
+    core._stop_screencasts_for_browser = fake_stop_screencasts
+    core._settle = fake_settle
+    core._state = fake_state
+
+    result = await core.set_viewport(7, 672, 789)
+
+    assert result == {
+        "state": {"id": 7},
+        "viewport": {"width": 672, "height": 789},
+    }
+    assert calls == [
+        ("viewport", {"width": 672, "height": 789}),
+        ("viewport", {"width": 673, "height": 789}),
+        ("viewport", {"width": 672, "height": 789}),
+    ]
+    assert stopped == [7]
+    assert settled == [True]
 
 
 @pytest.mark.anyio

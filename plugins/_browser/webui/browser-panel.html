@@ -27,8 +27,9 @@
 	                  <button type="button" class="browser-tab-close"
 	                    :title="'Close ' + $store.browserPage.browserTabLabel(browser)"
 	                    :aria-label="'Close ' + $store.browserPage.browserTabLabel(browser)"
-	                    :disabled="$store.browserPage.isBusy()"
-	                    @click.stop="$confirmClick($event, () => $store.browserPage.command('close', { browser_id: browser.id }))">
+	                    :disabled="$store.browserPage.isClosingBrowser(browser.id)"
+	                    @pointerdown.stop
+	                    @click.stop="$store.browserPage.closeBrowser(browser.id)">
                     <span class="material-symbols-outlined">close</span>
                   </button>
                 </div>
@@ -349,8 +350,8 @@
       --browser-tab-hover-border: color-mix(in srgb, var(--color-border) 78%, transparent);
       --browser-control-size: 34px;
       --browser-address-height: 34px;
-      --browser-tab-height: 34px;
-      --browser-tab-close-size: 28px;
+      --browser-tab-height: 36px;
+      --browser-tab-close-size: 32px;
       --browser-control-radius: 0.55rem;
       box-sizing: border-box;
       display: flex;
@@ -592,7 +593,7 @@
     }
 
     .browser-tab-close .material-symbols-outlined {
-      font-size: 0.82rem;
+      font-size: 1rem;
       line-height: 1;
     }
 

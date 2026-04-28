@@ -1,3 +1,6 @@
+import { store as rightCanvasStore } from "/components/canvas/right-canvas-store.js";
+import { store as browserStore } from "/plugins/_browser/webui/browser-store.js";
+
 const AUTO_OPEN_WINDOW_MS = 10 * 60 * 1000;
 const BROWSER_MODAL = "/plugins/_browser/webui/main.html";
 const autoOpenedBrowsers = new Set();
@@ -135,10 +138,8 @@ function hasOpened(key, persistedKey) {
 }
 
 async function openBrowserCanvas(payload = {}) {
-  const canvas = globalThis.Alpine?.store?.("rightCanvas")
-    || (await import("/components/canvas/right-canvas-store.js")).store;
-  if (canvas) {
-    await canvas.open("browser", payload);
+  if (rightCanvasStore?.open) {
+    await rightCanvasStore.open("browser", payload);
     return;
   }
 
@@ -146,15 +147,15 @@ async function openBrowserCanvas(payload = {}) {
     await window.ensureModalOpen(BROWSER_MODAL);
     return;
   }
-  await window.openModal?.(BROWSER_MODAL);
+  if (window.openModal) {
+    await window.openModal(BROWSER_MODAL);
+  }
 }
 
 async function browserAllowsToolAutofocus() {
   try {
-    const browser = globalThis.Alpine?.store?.("browserPage")
-      || (await import("/plugins/_browser/webui/browser-store.js")).store;
-    if (browser?.allowsToolAutofocus) {
-      return await browser.allowsToolAutofocus();
+    if (browserStore.allowsToolAutofocus) {
+      return await browserStore.allowsToolAutofocus();
     }
   } catch (error) {
     console.warn("Browser autofocus setting could not be checked", error);

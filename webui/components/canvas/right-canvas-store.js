@@ -98,7 +98,9 @@ const model = {
   async open(surfaceId = "", payload = {}) {
     const targetId = surfaceId || this.activeSurfaceId || this.panelSurfaces[0]?.id || "";
     const surface = this.getSurface(targetId);
-    if (!surface) return false;
+    if (!surface) {
+      return false;
+    }
     if (typeof surface.canOpen === "function" && surface.canOpen(payload) === false) {
       return false;
     }
@@ -140,12 +142,48 @@ const model = {
 
   async dockSurface(surfaceId, payload = {}) {
     const surface = this.getSurface(surfaceId);
-    if (!surface) return false;
-    const modalPath = payload.modalPath || surface.modalPath || "";
-    if (modalPath && globalThis.isModalOpen?.(modalPath)) {
-      await globalThis.closeModal?.(modalPath);
+    if (!surface) {
+      return false;
     }
-    return await this.open(surfaceId, { ...payload, source: "modal" });
+    const modalPath = payload.modalPath || surface.modalPath || "";
+    let handoffStarted = false;
+    try {
+      await surface.beginDockHandoff?.(payload);
+      handoffStarted = true;
+
+      const closed = await this.closeDockSourceModal(payload, modalPath);
+      if (closed === false) {
+        await surface.cancelDockHandoff?.(payload);
+        return false;
+      }
+
+      const openPayload = { ...payload, source: "modal" };
+      delete openPayload.closeSourceModal;
+      const opened = await this.open(surfaceId, openPayload);
+      await surface.finishDockHandoff?.({ ...openPayload, opened });
+      return opened;
+    } catch (error) {
+      if (handoffStarted) {
+        await surface.cancelDockHandoff?.(payload);
+      }
+      console.error(`Canvas surface ${surfaceId} failed to dock`, error);
+      return false;
+    }
+  },
+
+  async closeDockSourceModal(payload = {}, modalPath = "") {
+    if (typeof payload.closeSourceModal === "function") {
+      return (await payload.closeSourceModal()) !== false;
+    }
+
+    const sourceModalPath = payload.sourceModalPath || modalPath;
+    if (sourceModalPath && globalThis.isModalOpen?.(sourceModalPath)) {
+      return (await globalThis.closeModal?.(sourceModalPath)) !== false;
+    }
+    if (modalPath && modalPath !== sourceModalPath && globalThis.isModalOpen?.(modalPath)) {
+      return (await globalThis.closeModal?.(modalPath)) !== false;
+    }
+    return true;
   },
 
   async undockSurface(surfaceId = "", payload = {}) {

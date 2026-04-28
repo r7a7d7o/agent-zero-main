@@ -14,7 +14,6 @@ from plugins._browser.helpers.runtime import get_runtime
 FRAME_IDLE_POLL_SECONDS = 0.05
 FRAME_RETRY_DELAY_SECONDS = 0.5
 FRAME_STATE_REFRESH_SECONDS = 0.75
-FRAME_FALLBACK_SCREENSHOT_SECONDS = 1.2
 SCREENCAST_QUALITY = 92
 
 
@@ -195,6 +194,7 @@ class WsBrowser(WsHandler):
                     browser_id,
                     int(data.get("width") or 0),
                     int(data.get("height") or 0),
+                    restart_screencast=bool(data.get("restart_stream")),
                 )
             elif input_type == "wheel":
                 result = await runtime.call(
@@ -300,12 +300,11 @@ class WsBrowser(WsHandler):
                         "image": "",
                         "mime": "",
                         "state": state,
+                        "frame_source": "state",
                     },
                 )
 
                 last_state_refresh = 0.0
-                last_image_at = 0.0
-                stream_started_at = time.monotonic()
                 while True:
                     now = time.monotonic()
                     if now - last_state_refresh >= FRAME_STATE_REFRESH_SECONDS:
@@ -322,26 +321,6 @@ class WsBrowser(WsHandler):
                     except KeyError:
                         break
                     if frame is None:
-                        if (
-                            now - stream_started_at >= FRAME_FALLBACK_SCREENSHOT_SECONDS
-                            and (
-                                last_image_at == 0.0
-                                or now - last_image_at >= FRAME_FALLBACK_SCREENSHOT_SECONDS
-                            )
-                        ):
-                            with contextlib.suppress(Exception):
-                                frame = await runtime.call(
-                                    "screenshot",
-                                    active_id,
-                                    quality=SCREENCAST_QUALITY,
-                                )
-                                frame["context_id"] = context_id
-                                frame["viewer_id"] = viewer_id
-                                frame["browser_id"] = active_id
-                                frame["browsers"] = browsers
-                                frame["state"] = frame.get("state") or state
-                                await self.emit_to(sid, "browser_viewer_frame", frame)
-                                last_image_at = time.monotonic()
                         await asyncio.sleep(FRAME_IDLE_POLL_SECONDS)
                         continue
 
@@ -350,9 +329,8 @@ class WsBrowser(WsHandler):
                     frame["browser_id"] = active_id
                     frame["browsers"] = browsers
                     frame["state"] = state
+                    frame["frame_source"] = "screencast"
                     await self.emit_to(sid, "browser_viewer_frame", frame)
-                    if frame.get("image"):
-                        last_image_at = time.monotonic()
             except asyncio.CancelledError:
                 raise
             except Exception:
