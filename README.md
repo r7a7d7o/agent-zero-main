@@ -14,7 +14,8 @@ Agent Zero is a dynamic, organic agentic framework for running AI agents that ca
 
 [Introduction](#what-agent-zero-is) |
 [Space Agent](#agent-zero-and-space-agent) |
-[Quick Start](#quick-start) |
+[Quick Start](#how-to-install) |
+[LLM Plans](#use-your-openai-codex-plan) |
 [CLI Connector](#a0-cli-connector-use-agent-zero-on-your-host-machine) |
 [Features](#what-makes-agent-zero-different) |
 [Examples](#try-these-first) |
@@ -98,6 +99,16 @@ For web and mobile development, Annotate mode lets you click page elements or re
 
 The Browser also supports Chrome extensions installed from the Chrome Web Store directly inside the Agent Zero browser environment, so workflows can use the same kind of browser capabilities real users depend on.
 
+## Use Your OpenAI Codex Plan
+
+Agent Zero can now connect to your OpenAI Codex plan through the new OAuth flow. Sign in with your account, pick the Codex-backed provider, and let Agent Zero use the plan you already have.
+
+<img width="1184" height="604" alt="OAuth LLM plans in Agent Zero" src="docs/res/oauth_llm_plans-ok.png" />
+<br>
+
+Click "Connect", enter the device code in the OpenAI page. Choose your model after checking the list, and you're all set.
+
+This is the first step toward account-backed LLM plans in Agent Zero. More integrations are coming, including Gemini CLI, Claude Code based on extra-usage, and more.
 
 # A0 CLI Connector: Use Agent Zero on Your Host Machine
 
