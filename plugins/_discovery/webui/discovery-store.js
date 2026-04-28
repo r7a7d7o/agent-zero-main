@@ -116,8 +116,16 @@ const model = {
 
   // --- Computed ---
 
+  get topHeroCards() {
+    return this.cards.filter((card) => card.type === "hero" && card.placement !== "after-features");
+  },
+
+  get bottomHeroCards() {
+    return this.cards.filter((card) => card.type === "hero" && card.placement === "after-features");
+  },
+
   get heroCards() {
-    return this.cards.filter((card) => card.type === "hero");
+    return [...this.topHeroCards, ...this.bottomHeroCards];
   },
 
   get featureCards() {

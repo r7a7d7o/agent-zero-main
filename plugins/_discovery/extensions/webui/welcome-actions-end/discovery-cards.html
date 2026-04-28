@@ -10,7 +10,7 @@
              x-show="!($store.welcomeStore?.banners || []).some(b => b.id === 'missing-api-key') && ($store.discoveryStore.cards.length > 0 || $store.discoveryStore.hasDismissedCards)">
 
             <div class="discovery-section">
-                <template x-for="card in $store.discoveryStore.heroCards" :key="card.id">
+                <template x-for="card in $store.discoveryStore.topHeroCards" :key="card.id">
                     <article class="discovery-hero"
                              role="button"
                              tabindex="0"
@@ -88,6 +88,44 @@
                         </article>
                     </template>
                 </div>
+
+                <template x-for="card in $store.discoveryStore.bottomHeroCards" :key="card.id">
+                    <article class="discovery-hero"
+                             role="button"
+                             tabindex="0"
+                             @click="$store.discoveryStore.executeCta(card.cta_action)"
+                             @keydown.enter.prevent="$store.discoveryStore.executeCta(card.cta_action)"
+                             @keydown.space.prevent="$store.discoveryStore.executeCta(card.cta_action)">
+                        <button class="discovery-dismiss"
+                                type="button"
+                                x-show="card.dismissible"
+                                @click.stop="$store.discoveryStore.dismissCard(card.id)"
+                                :aria-label="`Dismiss ${card.title}`"
+                                title="Dismiss">
+                            <span class="material-symbols-outlined">close</span>
+                        </button>
+
+                        <div class="discovery-hero-content">
+                            <h3 class="discovery-hero-title" x-text="card.title"></h3>
+                            <p class="discovery-hero-desc" x-text="card.description"></p>
+                            <button class="btn btn-ok"
+                                    type="button"
+                                    @click.stop="$store.discoveryStore.executeCta(card.cta_action)">
+                                <span x-text="card.cta_text"></span>
+                                <span class="material-symbols-outlined">arrow_forward</span>
+                            </button>
+                        </div>
+
+                        <div class="discovery-hero-thumb">
+                            <template x-if="card.thumbnail">
+                                <img :src="card.thumbnail" :alt="card.title" loading="lazy">
+                            </template>
+                            <template x-if="!card.thumbnail && card.icon">
+                                <span class="material-symbols-outlined discovery-hero-icon" x-text="card.icon"></span>
+                            </template>
+                        </div>
+                    </article>
+                </template>
 
                 <div class="discovery-undismiss" x-show="$store.discoveryStore.hasDismissedCards">
                     <button type="button"
