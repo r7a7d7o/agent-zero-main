@@ -1,7 +1,7 @@
 (() => {
   const GLOBAL_KEY = "__spaceBrowserPageContent__";
   const DOM_HELPER_KEY = "__spaceBrowserDomHelper__";
-  const VERSION = "7";
+  const VERSION = "9";
   const BLOCK_TAGS = new Set([
     "ADDRESS",
     "ARTICLE",
@@ -2026,6 +2026,76 @@
     return entry;
   }
 
+  function computeStableSelector(el) {
+    if (!el || el.nodeType !== 1) return null;
+    const doc = el.ownerDocument || document;
+    if (el.id && /^[A-Za-z_][\w-]*$/.test(el.id)) {
+      const sel = "#" + (typeof CSS !== "undefined" && CSS.escape ? CSS.escape(el.id) : el.id);
+      try {
+        if (doc.querySelectorAll(sel).length === 1) return sel;
+      } catch (_) {}
+    }
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && node !== doc.documentElement) {
+      let part = node.tagName.toLowerCase();
+      if (node.id && /^[A-Za-z_][\w-]*$/.test(node.id)) {
+        const idSel = "#" + (typeof CSS !== "undefined" && CSS.escape ? CSS.escape(node.id) : node.id);
+        try {
+          if (doc.querySelectorAll(idSel).length === 1) {
+            parts.unshift(idSel);
+            break;
+          }
+        } catch (_) {}
+      }
+      const parent = node.parentElement;
+      if (parent) {
+        const sibs = parent.children;
+        let idx = 0;
+        let sameTag = 0;
+        for (let i = 0; i < sibs.length; i++) {
+          if (sibs[i].tagName === node.tagName) {
+            sameTag++;
+            if (sibs[i] === node) idx = sameTag;
+          }
+        }
+        if (sameTag > 1) part += ":nth-of-type(" + idx + ")";
+      }
+      parts.unshift(part);
+      node = parent;
+    }
+    const sel = parts.join(" > ");
+    if (!sel) return null;
+    try {
+      if (doc.querySelectorAll(sel).length === 1) return sel;
+    } catch (_) {}
+    return null;
+  }
+
+  function boundingBoxFor(referenceId) {
+    const entry = requireReferenceEntry(referenceId, {
+      actionLabel: "boundingBox",
+      requireConnected: false
+    });
+    if (entry.helperBacked || !entry.element) return null;
+    const el = entry.element;
+    if (typeof el.getBoundingClientRect !== "function") return null;
+    try {
+      el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    } catch (_) {}
+    const r = el.getBoundingClientRect();
+    const selector = computeStableSelector(el);
+    const hasBox = r && r.width > 0 && r.height > 0;
+    if (!hasBox && !selector) return null;
+    return {
+      x: hasBox ? r.left : 0,
+      y: hasBox ? r.top : 0,
+      width: hasBox ? r.width : 0,
+      height: hasBox ? r.height : 0,
+      selector: selector || null
+    };
+  }
+
   function refreshReferenceEntry(entry) {
     if (!entry || entry.helperBacked || !entry.element) {
       return entry;
@@ -3253,6 +3323,7 @@
     typeSubmit(referenceId, value) {
       return typeAndSubmit(referenceId, value);
     },
+    boundingBoxFor,
     version: VERSION
   };
 })();

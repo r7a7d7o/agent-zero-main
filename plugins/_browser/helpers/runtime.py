@@ -337,6 +337,9 @@ class BrowserRuntime:
 
 
 class _BrowserRuntimeCore:
+    _VALID_MODIFIERS = {"Control", "Shift", "Alt", "Meta"}
+    _POPUP_WAIT_SECONDS = 2.0
+
     def __init__(self, context_id: str):
         self.context_id = context_id
         self.safe_context_id = _safe_context_id(context_id)
@@ -348,6 +351,23 @@ class _BrowserRuntimeCore:
         self.last_interacted_browser_id: int | None = None
         self._content_helper_source: str | None = None
         self._start_lock: asyncio.Lock | None = None
+        self._registry_lock: asyncio.Lock | None = None
+        self._closing = False
+        self._pending_popups: list[asyncio.Future[int]] = []
+        self._background_popup_pages: set[int] = set()
+
+    def _ensure_registry_lock(self) -> asyncio.Lock:
+        if self._registry_lock is None:
+            self._registry_lock = asyncio.Lock()
+        return self._registry_lock
+
+    def _maybe_promote(self, resolved_id: int) -> None:
+        # Promote only if the target IS the current active tab or no tab is
+        # active yet. Cross-tab work on a backgrounded tab does not steal
+        # viewer focus.
+        current = self.last_interacted_browser_id
+        if current is None or current == resolved_id:
+            self.last_interacted_browser_id = int(resolved_id)
 
     @property
     def profile_dir(self) -> Path:
@@ -411,6 +431,7 @@ class _BrowserRuntimeCore:
             raise
         self.context.set_default_timeout(30000)
         self.context.set_default_navigation_timeout(30000)
+        self.context.on("page", self._on_new_page_sync)
         await self.context.add_init_script(self._shadow_dom_script())
         await self.context.add_init_script(path=str(CONTENT_HELPER_PATH))
 
@@ -421,7 +442,7 @@ class _BrowserRuntimeCore:
                 except Exception:
                     pass
                 continue
-            self._register_page(page)
+            await self._register_page(page)
 
     def _release_orphaned_profile_singleton(self) -> None:
         lock_path = self.profile_dir / "SingletonLock"
@@ -486,7 +507,7 @@ class _BrowserRuntimeCore:
     async def open(self, url: str = "") -> dict[str, Any]:
         await self.ensure_started()
         page = await self.context.new_page()
-        browser_page = self._register_page(page)
+        browser_page = await self._register_page(page)
         self.last_interacted_browser_id = browser_page.id
         target_url = self._initial_url(url)
         if target_url and target_url != "about:blank":
@@ -501,12 +522,148 @@ class _BrowserRuntimeCore:
             return raw_url
         return str(get_browser_config().get(DEFAULT_HOMEPAGE_KEY) or "about:blank").strip() or "about:blank"
 
-    async def list(self) -> dict[str, Any]:
+    async def list(self, include_content: bool = False) -> dict[str, Any]:
         await self.ensure_started()
+        ids = sorted(self.pages)
+        if not ids:
+            return {
+                "browsers": [],
+                "last_interacted_browser_id": self.last_interacted_browser_id,
+            }
+        states_task = asyncio.gather(*(self._state(bid) for bid in ids))
+        if include_content:
+            contents_task = asyncio.gather(
+                *(self.content(bid) for bid in ids),
+                return_exceptions=True,
+            )
+            states, contents = await asyncio.gather(states_task, contents_task)
+            out: list[dict[str, Any]] = []
+            for idx, bid in enumerate(ids):
+                entry = states[idx]
+                c = contents[idx]
+                if isinstance(c, Exception):
+                    entry["content_error"] = str(c)
+                else:
+                    entry["content"] = c
+                out.append(entry)
+        else:
+            out = await states_task
         return {
-            "browsers": [await self._state(browser_id) for browser_id in sorted(self.pages)],
+            "browsers": out,
             "last_interacted_browser_id": self.last_interacted_browser_id,
         }
+
+    async def multi(self, calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not isinstance(calls, list) or not calls:
+            raise ValueError("multi requires a non-empty list of calls")
+        groups: dict[Any, list[tuple[int, dict[str, Any]]]] = {}
+        for idx, call in enumerate(calls):
+            if not isinstance(call, dict):
+                raise ValueError(f"calls[{idx}] is not an object")
+            key = call.get("browser_id")
+            groups.setdefault(key, []).append((idx, call))
+
+        results: list[dict[str, Any] | None] = [None] * len(calls)
+
+        async def run_group(group: list[tuple[int, dict[str, Any]]]) -> None:
+            for idx, call in group:
+                try:
+                    out = await self._dispatch_call(call)
+                    results[idx] = {"ok": True, "result": out}
+                except Exception as exc:
+                    results[idx] = {"ok": False, "error": str(exc)}
+
+        await asyncio.gather(*(run_group(g) for g in groups.values()))
+        return [r if r is not None else {"ok": False, "error": "missing"} for r in results]
+
+    async def _dispatch_call(self, call: dict[str, Any]) -> Any:
+        action = str(call.get("action") or "").strip().lower().replace("-", "_")
+        bid = call.get("browser_id")
+        if action == "open":
+            return await self.open(call.get("url") or "")
+        if action == "list":
+            return await self.list(include_content=bool(call.get("include_content")))
+        if action == "state":
+            return await self.state(bid)
+        if action in {"set_active", "setactive", "activate", "focus"}:
+            return await self.set_active(bid)
+        if action == "navigate":
+            return await self.navigate(bid, call.get("url") or "")
+        if action == "back":
+            return await self.back(bid)
+        if action == "forward":
+            return await self.forward(bid)
+        if action == "reload":
+            return await self.reload(bid)
+        if action == "content":
+            payload = None
+            sels = call.get("selectors")
+            sel = call.get("selector")
+            if sels:
+                payload = {"selectors": sels}
+            elif sel:
+                payload = {"selector": sel}
+            return await self.content(bid, payload)
+        if action == "detail":
+            ref = call.get("ref")
+            if ref is None:
+                raise ValueError("detail requires ref")
+            return await self.detail(bid, ref)
+        if action == "click":
+            ref = call.get("ref")
+            if ref is None:
+                raise ValueError("click requires ref")
+            return await self.click(
+                bid, ref,
+                modifiers=call.get("modifiers"),
+                focus_popup=call.get("focus_popup"),
+            )
+        if action == "type":
+            ref = call.get("ref")
+            if ref is None:
+                raise ValueError("type requires ref")
+            return await self.type(bid, ref, call.get("text") or "")
+        if action == "submit":
+            ref = call.get("ref")
+            if ref is None:
+                raise ValueError("submit requires ref")
+            return await self.submit(bid, ref)
+        if action in {"type_submit", "typesubmit"}:
+            ref = call.get("ref")
+            if ref is None:
+                raise ValueError("type_submit requires ref")
+            return await self.type_submit(bid, ref, call.get("text") or "")
+        if action == "scroll":
+            ref = call.get("ref")
+            if ref is None:
+                raise ValueError("scroll requires ref")
+            return await self.scroll(bid, ref)
+        if action == "evaluate":
+            return await self.evaluate(bid, call.get("script") or "")
+        if action in {"key_chord", "keychord"}:
+            keys = call.get("keys") or []
+            if not keys:
+                raise ValueError("key_chord requires non-empty keys")
+            return await self.key_chord(bid, list(keys))
+        if action == "mouse":
+            return await self.mouse(
+                bid, call.get("event_type") or "click",
+                float(call.get("x") or 0), float(call.get("y") or 0),
+                button=call.get("button") or "left",
+                modifiers=call.get("modifiers"),
+            )
+        if action == "close":
+            return await self.close_browser(bid)
+        if action == "close_all":
+            return await self.close_all_browsers()
+        raise ValueError(f"unknown action: {action}")
+
+    async def set_active(self, browser_id: int | str | None) -> dict[str, Any]:
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        # Explicit focus change — bypass _maybe_promote.
+        self.last_interacted_browser_id = int(resolved_id)
+        return await self._state(resolved_id)
 
     async def state(self, browser_id: int | str | None = None) -> dict[str, Any]:
         await self.ensure_started()
@@ -517,7 +674,7 @@ class _BrowserRuntimeCore:
         resolved_id = self._resolve_browser_id(browser_id)
         page = self._page(resolved_id)
         await self._goto(page, normalize_url(url))
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return await self._state(resolved_id)
 
     async def back(self, browser_id: int | str | None = None) -> dict[str, Any]:
@@ -526,7 +683,7 @@ class _BrowserRuntimeCore:
         page = self._page(resolved_id)
         await page.go_back(wait_until="domcontentloaded", timeout=10000)
         await self._settle(page)
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return await self._state(resolved_id)
 
     async def forward(self, browser_id: int | str | None = None) -> dict[str, Any]:
@@ -535,7 +692,7 @@ class _BrowserRuntimeCore:
         page = self._page(resolved_id)
         await page.go_forward(wait_until="domcontentloaded", timeout=10000)
         await self._settle(page)
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return await self._state(resolved_id)
 
     async def reload(self, browser_id: int | str | None = None) -> dict[str, Any]:
@@ -544,7 +701,7 @@ class _BrowserRuntimeCore:
         page = self._page(resolved_id)
         await page.reload(wait_until="domcontentloaded", timeout=15000)
         await self._settle(page)
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return await self._state(resolved_id)
 
     async def content(
@@ -560,7 +717,7 @@ class _BrowserRuntimeCore:
             "(payload) => globalThis.__spaceBrowserPageContent__.capture(payload || null)",
             payload or None,
         )
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return result or {}
 
     async def detail(self, browser_id: int | str | None, reference_id: int | str) -> dict[str, Any]:
@@ -572,7 +729,7 @@ class _BrowserRuntimeCore:
             "(ref) => globalThis.__spaceBrowserPageContent__.detail(ref)",
             reference_id,
         )
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return result or {}
 
     async def annotation_target(
@@ -588,7 +745,7 @@ class _BrowserRuntimeCore:
             "(payload) => globalThis.__spaceBrowserPageContent__.annotate(payload || null)",
             payload or None,
         )
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return result or {}
 
     async def evaluate(self, browser_id: int | str | None, script: str) -> dict[str, Any]:
@@ -596,11 +753,139 @@ class _BrowserRuntimeCore:
         resolved_id = self._resolve_browser_id(browser_id)
         page = self._page(resolved_id)
         result = await page.evaluate(str(script or "undefined"))
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return {"result": result, "state": await self._state(resolved_id)}
 
-    async def click(self, browser_id: int | str | None, reference_id: int | str) -> dict[str, Any]:
+    async def click(
+        self,
+        browser_id: int | str | None,
+        reference_id: int | str,
+        modifiers: list[str] | None = None,
+        focus_popup: bool | None = None,
+    ) -> dict[str, Any]:
+        if modifiers:
+            return await self._modifier_click(browser_id, reference_id, modifiers, focus_popup)
         return await self._reference_action("click", browser_id, reference_id)
+
+    async def _modifier_click(
+        self,
+        browser_id: int | str | None,
+        reference_id: int | str,
+        modifiers: list[str],
+        focus_popup: bool | None,
+    ) -> dict[str, Any]:
+        bad = set(modifiers) - self._VALID_MODIFIERS
+        if bad:
+            raise ValueError(
+                f"unsupported modifiers: {sorted(bad)}; allowed: {sorted(self._VALID_MODIFIERS)}"
+            )
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        await self._ensure_content_helper(page)
+
+        box = await page.evaluate(
+            "(ref) => globalThis.__spaceBrowserPageContent__.boundingBoxFor(ref)",
+            reference_id,
+        )
+
+        background = focus_popup is False or (
+            focus_popup is None and bool({"Control", "Meta"} & set(modifiers))
+        )
+
+        loop = asyncio.get_running_loop()
+        waiter: asyncio.Future[int] = loop.create_future()
+        self._pending_popups.append(waiter)
+
+        warning: str | None = None
+        opened_id: int | None = None
+        try:
+            box_has_geometry = bool(box and box.get("width") and box.get("height"))
+            box_selector = box.get("selector") if box else None
+            if box_has_geometry:
+                cx = box["x"] + box["width"] / 2
+                cy = box["y"] + box["height"] / 2
+                # Mouse.click does not accept modifiers; hold them via keyboard.
+                pressed: list[str] = []
+                try:
+                    for mod in modifiers:
+                        await page.keyboard.down(mod)
+                        pressed.append(mod)
+                    await page.mouse.click(cx, cy)
+                finally:
+                    for mod in reversed(pressed):
+                        with contextlib.suppress(Exception):
+                            await page.keyboard.up(mod)
+                await self._settle(page, short=False)
+            elif box_selector:
+                try:
+                    await page.locator(box_selector).click(
+                        modifiers=list(modifiers), force=True, timeout=5000
+                    )
+                    await self._settle(page, short=False)
+                except Exception as exc:
+                    await self._reference_action("click", browser_id, reference_id)
+                    warning = f"modifiers ignored: locator click failed ({exc})"
+            else:
+                await self._reference_action("click", browser_id, reference_id)
+                warning = "modifiers ignored: target geometry unavailable"
+
+            try:
+                opened_id = await asyncio.wait_for(
+                    asyncio.shield(waiter), timeout=self._POPUP_WAIT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                opened_id = None
+            finally:
+                if waiter in self._pending_popups:
+                    self._pending_popups.remove(waiter)
+                if not waiter.done():
+                    waiter.cancel()
+
+            if opened_id is not None and background:
+                self._background_popup_pages.add(opened_id)
+                if self.last_interacted_browser_id == opened_id:
+                    # Force focus back to origin tab — popup hook had promoted.
+                    self.last_interacted_browser_id = int(resolved_id)
+        finally:
+            if waiter in self._pending_popups:
+                self._pending_popups.remove(waiter)
+
+        if background:
+            # Background-mode click: explicitly keep focus on origin.
+            self.last_interacted_browser_id = int(resolved_id)
+        return {
+            "action": {
+                "ref": reference_id,
+                "modifiers": list(modifiers),
+                "opened_browser_ids": [opened_id] if opened_id is not None else [],
+                **({"warning": warning} if warning else {}),
+            },
+            "state": await self._state(resolved_id),
+        }
+
+    async def key_chord(
+        self,
+        browser_id: int | str | None,
+        keys: list[str],
+    ) -> dict[str, Any]:
+        if not keys:
+            raise ValueError("key_chord requires at least one key")
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        pressed: list[str] = []
+        try:
+            for k in keys:
+                await page.keyboard.down(k)
+                pressed.append(k)
+        finally:
+            for k in reversed(pressed):
+                with contextlib.suppress(Exception):
+                    await page.keyboard.up(k)
+        await self._settle(page, short=True)
+        self._maybe_promote(resolved_id)
+        return await self._state(resolved_id)
 
     async def submit(self, browser_id: int | str | None, reference_id: int | str) -> dict[str, Any]:
         return await self._reference_action("submit", browser_id, reference_id)
@@ -693,7 +978,7 @@ class _BrowserRuntimeCore:
             self.screencasts.pop(stream_id, None)
             await screencast.stop()
             raise
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return {
             "stream_id": stream_id,
             "browser_id": resolved_id,
@@ -752,7 +1037,7 @@ class _BrowserRuntimeCore:
             await self._remount_viewport(page, viewport)
         if should_remount_viewport:
             await self._settle(page, short=True)
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return {"state": await self._state(resolved_id), "viewport": viewport}
 
     async def _apply_viewport_with_remount(self, page: Any, viewport: dict[str, int]) -> None:
@@ -777,21 +1062,40 @@ class _BrowserRuntimeCore:
         x: float,
         y: float,
         button: str = "left",
+        modifiers: list[str] | None = None,
     ) -> dict[str, Any]:
+        event_type_lower = str(event_type or "click").lower()
+        if modifiers:
+            if event_type_lower != "click":
+                raise ValueError("modifiers are only valid for event_type='click'")
+            bad = set(modifiers) - self._VALID_MODIFIERS
+            if bad:
+                raise ValueError(
+                    f"unsupported modifiers: {sorted(bad)}; allowed: {sorted(self._VALID_MODIFIERS)}"
+                )
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
         page = self._page(resolved_id)
-        event_type = str(event_type or "click").lower()
-        if event_type == "move":
+        if event_type_lower == "move":
             await page.mouse.move(float(x), float(y))
-        elif event_type == "down":
+        elif event_type_lower == "down":
             await page.mouse.down(button=button)
-        elif event_type == "up":
+        elif event_type_lower == "up":
             await page.mouse.up(button=button)
         else:
-            await page.mouse.click(float(x), float(y), button=button)
+            pressed: list[str] = []
+            try:
+                if modifiers:
+                    for mod in modifiers:
+                        await page.keyboard.down(mod)
+                        pressed.append(mod)
+                await page.mouse.click(float(x), float(y), button=button)
+            finally:
+                for mod in reversed(pressed):
+                    with contextlib.suppress(Exception):
+                        await page.keyboard.up(mod)
             await self._settle(page, short=True)
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return await self._state(resolved_id)
 
     async def wheel(
@@ -807,7 +1111,7 @@ class _BrowserRuntimeCore:
         page = self._page(resolved_id)
         await page.mouse.move(float(x), float(y))
         await page.mouse.wheel(float(delta_x), float(delta_y))
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return await self._state(resolved_id)
 
     async def keyboard(
@@ -825,10 +1129,16 @@ class _BrowserRuntimeCore:
         elif key:
             await page.keyboard.press(str(key))
         await self._settle(page, short=True)
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return await self._state(resolved_id)
 
     async def close(self, delete_profile: bool = False) -> None:
+        self._closing = True
+        for waiter in self._pending_popups:
+            if not waiter.done():
+                waiter.set_exception(RuntimeError("Browser runtime is closing."))
+        self._pending_popups.clear()
+        self._background_popup_pages.clear()
         await self._stop_all_screencasts()
         for browser_id in list(self.pages):
             try:
@@ -873,7 +1183,7 @@ class _BrowserRuntimeCore:
                 {"method": helper_method, "ref": reference_id, "text": text},
             )
         await self._settle(page, short=False)
-        self.last_interacted_browser_id = resolved_id
+        self._maybe_promote(resolved_id)
         return {"action": action or {}, "state": await self._state(resolved_id)}
 
     async def _goto(self, page: Any, url: str) -> None:
@@ -924,7 +1234,7 @@ class _BrowserRuntimeCore:
             "loading": False,
         }
 
-    def _register_page(self, page: Any) -> BrowserPage:
+    def _register_page_locked(self, page: Any) -> BrowserPage:
         existing = self._browser_id_for_page(page)
         if existing is not None:
             return self.pages[existing]
@@ -934,10 +1244,64 @@ class _BrowserRuntimeCore:
         self.pages[browser_id] = browser_page
 
         def on_close() -> None:
-            self.pages.pop(browser_id, None)
+            try:
+                asyncio.create_task(self._unregister_page_async(browser_id))
+            except RuntimeError:
+                # No running loop (e.g., during shutdown). Best-effort sync pop.
+                self.pages.pop(browser_id, None)
 
         page.on("close", on_close)
         return browser_page
+
+    async def _register_page(self, page: Any) -> BrowserPage:
+        lock = self._ensure_registry_lock()
+        async with lock:
+            return self._register_page_locked(page)
+
+    async def _unregister_page_async(self, browser_id: int) -> None:
+        try:
+            lock = self._ensure_registry_lock()
+            async with lock:
+                self.pages.pop(browser_id, None)
+                if self.last_interacted_browser_id == browser_id:
+                    self.last_interacted_browser_id = next(iter(sorted(self.pages)), None)
+                self._background_popup_pages.discard(browser_id)
+        except Exception as exc:
+            PrintStyle.warning(f"Page unregister failed: {exc}")
+
+    def _on_new_page_sync(self, page: Any) -> None:
+        if self._closing or self.context is None:
+            return
+        try:
+            asyncio.create_task(self._on_new_page_async(page))
+        except RuntimeError:
+            return
+
+    async def _on_new_page_async(self, page: Any) -> None:
+        try:
+            with contextlib.suppress(Exception):
+                await page.wait_for_load_state("domcontentloaded", timeout=2000)
+            if self._closing or page.is_closed():
+                return
+            lock = self._ensure_registry_lock()
+            async with lock:
+                if self._closing:
+                    return
+                if self._browser_id_for_page(page) is not None:
+                    return
+                browser_page = self._register_page_locked(page)
+                new_id = browser_page.id
+                while self._pending_popups:
+                    waiter = self._pending_popups.pop(0)
+                    if not waiter.done():
+                        waiter.set_result(new_id)
+                        break
+                if new_id not in self._background_popup_pages:
+                    self.last_interacted_browser_id = new_id
+                else:
+                    self._background_popup_pages.discard(new_id)
+        except Exception as exc:
+            PrintStyle.warning(f"Popup registration failed: {exc}")
 
     def _browser_id_for_page(self, page: Any) -> int | None:
         for browser_id, browser_page in self.pages.items():

@@ -86,11 +86,22 @@ function isFreshToolMessage(timestamp) {
   return Math.abs(Date.now() - messageMs) <= AUTO_OPEN_WINDOW_MS;
 }
 
+// Allowlist: only these actions cause the viewer to follow. Background work
+// (evaluate, click, type, key_chord, mouse, multi, ...) does not steal focus.
+const FOCUS_ACTIONS = new Set([
+  "open",
+  "navigate",
+  "set_active",
+  "setactive",
+  "activate",
+  "focus",
+]);
+
 function shouldAutoOpenBrowser(args, result) {
   if (!isFreshToolMessage(args?.timestamp)) return false;
   const action = String(args?.kvps?.action || "").trim().toLowerCase().replace("-", "_");
-  if (["list", "content", "detail", "close", "close_all"].includes(action)) return false;
-  return Boolean(browserIdFromResult(result, args?.kvps || {}) || action === "open" || action === "navigate");
+  if (!FOCUS_ACTIONS.has(action)) return false;
+  return Boolean(browserIdFromResult(result, args?.kvps || {}));
 }
 
 function autoOpenBrowserCanvas(args, result) {

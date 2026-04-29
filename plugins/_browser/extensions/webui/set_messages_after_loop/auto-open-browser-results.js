@@ -79,19 +79,23 @@ function parseMaybeJson(value) {
   }
 }
 
+// Actions that should bring the viewer to the targeted tab. Everything else
+// (read, click, type, evaluate, key_chord, mouse, multi, ...) leaves the
+// viewer where it is so cross-tab work doesn't steal user focus.
+const FOCUS_ACTIONS = new Set([
+  "open",
+  "navigate",
+  "set_active",
+  "setactive",
+  "activate",
+  "focus",
+]);
+
 function shouldAutoOpen(args = {}, payload = {}, result = {}) {
   if (!isFresh(args.timestamp, payload.last_modified || result.last_modified)) return false;
-
   const action = String(payload.action || "").trim().toLowerCase().replace("-", "_");
-  if (["list", "content", "detail", "close", "close_all"].includes(action)) return false;
-
-  return Boolean(
-    getBrowserId(payload, result)
-    || action === "open"
-    || action === "navigate"
-    || result.currentUrl
-    || result.state?.currentUrl,
-  );
+  if (!FOCUS_ACTIONS.has(action)) return false;
+  return Boolean(getBrowserId(payload, result) || result.currentUrl || result.state?.currentUrl);
 }
 
 function getBrowserId(payload = {}, result = {}) {
