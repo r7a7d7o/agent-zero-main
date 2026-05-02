@@ -21,8 +21,8 @@ class LocalInteractiveSession:
 
     async def close(self):
         if self.session:
-            self.session.kill()
-            # self.session.wait()
+            await self.session.close()
+            self.session = None
 
     async def send_command(self, command: str):
         if not self.session:

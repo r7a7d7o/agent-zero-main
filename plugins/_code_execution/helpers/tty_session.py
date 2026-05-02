@@ -23,6 +23,8 @@ class TTYSession:
         self.echo = echo  # ← store preference
         self._proc = None
         self._buf: asyncio.Queue = None  # type: ignore
+        self._pump_task = None
+        self._pty_master = None
 
     def __del__(self):
         # Simple cleanup on object destruction
@@ -46,22 +48,51 @@ class TTYSession:
             self._proc = await _spawn_posix_pty(
                 self.cmd, self.cwd, self.env, self.echo
             )  # ← pass echo
+            self._pty_master = getattr(self._proc, "_pty_master", None)
         self._pump_task = asyncio.create_task(self._pump_stdout())
 
     async def close(self):
         # Cancel the pump task if it exists
-        if hasattr(self, "_pump_task") and self._pump_task:
+        if self._pump_task:
             self._pump_task.cancel()
             try:
                 await self._pump_task
             except asyncio.CancelledError:
                 pass
+            except Exception:
+                pass
+
+        master = self._pty_master
+        if master is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.remove_reader(master)
+            except Exception:
+                pass
+
         # Terminate the process if it exists
         if self._proc:
-            self._proc.terminate()
-            await self._proc.wait()
+            try:
+                if getattr(self._proc, "returncode", None) is None:
+                    self._proc.terminate()
+            except ProcessLookupError:
+                pass
+            except Exception:
+                pass
+            try:
+                await self._proc.wait()
+            except Exception:
+                pass
+
+        if master is not None:
+            try:
+                os.close(master)
+            except OSError:
+                pass
+
         self._proc = None
         self._pump_task = None
+        self._pty_master = None
 
     async def send(self, data: str | bytes):
         if self._proc is None:
@@ -99,6 +130,18 @@ class TTYSession:
             except ProcessLookupError:
                 # Child already gone – treat as successfully killed
                 pass
+        master = self._pty_master
+        if master is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.remove_reader(master)
+            except Exception:
+                pass
+            try:
+                os.close(master)
+            except OSError:
+                pass
+            self._pty_master = None
 
     async def read(self, timeout=None):
         # Return any decoded text the child produced, or None on timeout
@@ -185,7 +228,14 @@ async def _spawn_posix_pty(cmd, cwd, env, echo):
             reader.feed_data(data)
         else:
             reader.feed_eof()
-            loop.remove_reader(master)
+            try:
+                loop.remove_reader(master)
+            except Exception:
+                pass
+            try:
+                os.close(master)
+            except OSError:
+                pass
 
     loop.add_reader(master, _on_data)
 
@@ -198,6 +248,7 @@ async def _spawn_posix_pty(cmd, cwd, env, echo):
 
     proc.stdin = _Stdin()  # type: ignore
     proc.stdout = reader
+    proc._pty_master = master  # type: ignore[attr-defined]
     return proc
 
 
