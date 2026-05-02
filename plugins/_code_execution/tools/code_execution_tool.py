@@ -194,12 +194,11 @@ class CodeExecution(Tool):
                 )
 
             except Exception as e:
-                if i == 1:
-                    PrintStyle.error(str(e))
-                    await self.prepare_state(cfg, reset=True, session=session)
+                PrintStyle.error(str(e))
+                await self.prepare_state(cfg, reset=True, session=session)
+                if i == 0:
                     continue
-                else:
-                    raise e
+                raise e
 
     def format_command_for_output(self, command: str):
         short_cmd = command[:250]

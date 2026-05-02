@@ -97,10 +97,20 @@ class TTYSession:
     async def send(self, data: str | bytes):
         if self._proc is None:
             raise RuntimeError("TTYSpawn is not started")
+        if self._pty_master is None and not _IS_WIN:
+            raise RuntimeError("TTYSpawn PTY is closed")
+        if getattr(self._proc, "returncode", None) is not None:
+            raise RuntimeError("TTYSpawn process has exited")
         if isinstance(data, str):
             data = data.encode(self.encoding)
-        self._proc.stdin.write(data)  # type: ignore
-        await self._proc.stdin.drain()  # type: ignore
+        try:
+            self._proc.stdin.write(data)  # type: ignore
+            await self._proc.stdin.drain()  # type: ignore
+        except OSError as e:
+            if e.errno in (errno.EBADF, errno.EIO, errno.EINVAL):
+                self._pty_master = None
+                raise RuntimeError("TTYSpawn PTY is closed") from e
+            raise
 
     async def sendline(self, line: str):
         await self.send(line + "\n")
