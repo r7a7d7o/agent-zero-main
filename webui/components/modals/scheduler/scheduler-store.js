@@ -277,11 +277,11 @@ async function callSchedulerEndpoint(endpoint, payload = {}, defaultError) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      return { ok: false, error: data?.error || defaultError || "Scheduler request failed" };
+      return { ok: false, error: data?.error || defaultError || "Task request failed" };
     }
     return { ok: true, data };
   } catch (error) {
-    return { ok: false, error: error?.message || defaultError || "Scheduler request failed" };
+    return { ok: false, error: error?.message || defaultError || "Task request failed" };
   }
 }
 
@@ -347,7 +347,7 @@ const notificationChannels = {
   error: "frontendError",
 };
 
-function pushNotification(type, message, title = "Scheduler", duration) {
+function pushNotification(type, message, title = "Tasks", duration) {
   const channel = notificationChannels[type];
   if (!channel || typeof notificationsStore[channel] !== "function") return;
   const ttl = duration ?? NOTIFICATION_DURATION[type] ?? 4;

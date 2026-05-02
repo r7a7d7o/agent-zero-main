@@ -88,9 +88,19 @@
           <span>Files</span>
         </button>
 
+        <button class="dropdown-item" @click="ensureModalOpen('settings/tunnel/remote-link.html'); $store.sidebar.menuClose()">
+          <span class="material-symbols-outlined">share</span>
+          <span>Remote Link</span>
+        </button>
+
+        <button class="dropdown-item" @click="open('https://space-agent.ai/', '_blank', 'noopener,noreferrer'); $store.sidebar.menuClose()">
+          <span class="material-symbols-outlined">rocket_launch</span>
+          <span>Space Agent</span>
+        </button>
+
         <button class="dropdown-item" @click="openModal('components/modals/scheduler/scheduler-modal.html'); $store.sidebar.menuClose()">
           <span class="material-symbols-outlined">schedule</span>
-          <span>Scheduler</span>
+          <span>Tasks</span>
         </button>
 
         <button class="dropdown-item" @click="openModal('settings/settings.html'); $store.sidebar.menuClose()">
@@ -99,27 +109,42 @@
         </button>
 
         <div class="dropdown-separator"></div>
-        <div class="dropdown-header">Chat Actions</div>
 
-        <button class="dropdown-item" @click="$store.chats.newChat(); $store.sidebar.menuClose()">
-          <span class="material-symbols-outlined">chat_add_on</span>
-          <span>New Chat</span>
+        <button
+          type="button"
+          class="dropdown-item quick-actions-accordion-toggle"
+          :class="{ 'is-open': $store.sidebar.isSectionOpen('chatActions') }"
+          :aria-expanded="$store.sidebar.isSectionOpen('chatActions').toString()"
+          @click="$store.sidebar.toggleSection('chatActions')"
+        >
+          <span class="quick-actions-accordion-label">
+            <span class="material-symbols-outlined">forum</span>
+            <span>Chat Actions</span>
+          </span>
+          <span class="material-symbols-outlined quick-actions-accordion-chevron">expand_more</span>
         </button>
 
-        <button class="dropdown-item" @click="$store.chats.loadChats(); $store.sidebar.menuClose()">
-          <span class="material-symbols-outlined">folder_open</span>
-          <span>Load Chat</span>
-        </button>
+        <div class="quick-actions-accordion-panel" x-show="$store.sidebar.isSectionOpen('chatActions')" style="display: none;">
+          <button class="dropdown-item" @click="$store.chats.newChat(); $store.sidebar.menuClose()">
+            <span class="material-symbols-outlined">chat_add_on</span>
+            <span>New Chat</span>
+          </button>
 
-        <button class="dropdown-item" x-show="$store.chats.selected" @click="$store.chats.saveChat(); $store.sidebar.menuClose()">
-          <span class="material-symbols-outlined">save</span>
-          <span>Save Chat</span>
-        </button>
+          <button class="dropdown-item" @click="$store.chats.loadChats(); $store.sidebar.menuClose()">
+            <span class="material-symbols-outlined">folder_open</span>
+            <span>Load Chat</span>
+          </button>
 
-        <button class="dropdown-item" x-show="$store.chats.selected" @click="$confirmClick($event, () => { $store.chats.resetChat(); $store.sidebar.menuClose() })">
-          <span class="material-symbols-outlined">delete_sweep</span>
-          <span>Clear Chat</span>
-        </button>
+          <button class="dropdown-item" x-show="$store.chats.selected" @click="$store.chats.saveChat(); $store.sidebar.menuClose()">
+            <span class="material-symbols-outlined">save</span>
+            <span>Save Chat</span>
+          </button>
+
+          <button class="dropdown-item" x-show="$store.chats.selected" @click="$confirmClick($event, () => { $store.chats.resetChat(); $store.sidebar.menuClose() })">
+            <span class="material-symbols-outlined">delete_sweep</span>
+            <span>Clear Chat</span>
+          </button>
+        </div>
 
         <div class="dropdown-separator"></div>
 
@@ -312,6 +337,30 @@
 
     .toggle-sidebar-button:active .material-symbols-outlined {
       transform: scaleY(0.8);
+    }
+
+    .quick-actions-accordion-toggle {
+      justify-content: space-between;
+    }
+
+    .quick-actions-accordion-label {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+      min-width: 0;
+    }
+
+    .quick-actions-accordion-chevron {
+      margin-left: auto;
+      transition: transform 0.15s ease;
+    }
+
+    .quick-actions-accordion-toggle.is-open .quick-actions-accordion-chevron {
+      transform: rotate(180deg);
+    }
+
+    .quick-actions-accordion-panel .dropdown-item {
+      padding-left: calc(var(--spacing-md) + 1.55rem);
     }
 
     /* --- Desktop Hover Expand --- */
