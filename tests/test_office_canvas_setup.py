@@ -265,6 +265,10 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert "metadata::xfce-exe-checksum" in desktop
     assert "DESKTOP_FOLDER_LINKS" in desktop
     assert "HIDDEN_XPRA_DESKTOP_ENTRIES" in desktop
+    assert "HIDDEN_XFCE_MENU_ENTRIES" in desktop
+    assert "last-show-hidden" in desktop
+    assert "exo-mail-reader.desktop" in desktop
+    assert "exo-web-browser.desktop" in desktop
     assert "libreoffice-gtk3" in install
     assert "libreofficekit" not in install
     assert "gir1.2-lokdocview" not in install

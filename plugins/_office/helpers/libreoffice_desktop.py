@@ -44,6 +44,10 @@ HIDDEN_XPRA_DESKTOP_ENTRIES = (
     "xpra-shadow.desktop",
     "xpra-start.desktop",
 )
+HIDDEN_XFCE_MENU_ENTRIES = (
+    ("exo-mail-reader.desktop", "Mail Reader"),
+    ("exo-web-browser.desktop", "Web Browser"),
+)
 DESKTOP_README_SOURCE = Path(__file__).resolve().parents[1] / "assets" / "desktop" / "README.md"
 DESKTOP_FOLDER_LINKS = (
     ("Projects", ("usr", "projects")),
@@ -516,6 +520,7 @@ class LibreOfficeDesktopManager:
 """,
             encoding="utf-8",
         )
+        _write_thunar_defaults(xfce_conf_dir / "thunar.xml")
         helpers_rc = config_dir / "xfce4" / "helpers.rc"
         helpers_rc.parent.mkdir(parents=True, exist_ok=True)
         helpers_rc.write_text(
@@ -529,6 +534,7 @@ class LibreOfficeDesktopManager:
             encoding="utf-8",
         )
         self._hide_xpra_desktop_entries(applications_dir)
+        self._hide_xfce_menu_entries(applications_dir)
 
         base_args = (
             soffice,
@@ -602,19 +608,11 @@ class LibreOfficeDesktopManager:
 
     def _hide_xpra_desktop_entries(self, applications_dir: Path) -> None:
         for filename in HIDDEN_XPRA_DESKTOP_ENTRIES:
-            (applications_dir / filename).write_text(
-                "\n".join(
-                    [
-                        "[Desktop Entry]",
-                        "Type=Application",
-                        "Name=Xpra",
-                        "NoDisplay=true",
-                        "Hidden=true",
-                        "",
-                    ],
-                ),
-                encoding="utf-8",
-            )
+            _write_hidden_application_entry(applications_dir / filename, "Xpra")
+
+    def _hide_xfce_menu_entries(self, applications_dir: Path) -> None:
+        for filename, name in HIDDEN_XFCE_MENU_ENTRIES:
+            _write_hidden_application_entry(applications_dir / filename, name)
 
     def _prepare_xfce_panel_config(self, session: DesktopSession) -> None:
         panel_xml = (
@@ -684,6 +682,7 @@ export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-XFCE}"
 mkdir -p "$HOME/Desktop" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
 if command -v xfconf-query >/dev/null 2>&1; then
+  xfconf-query -c thunar -p /last-show-hidden -n -t bool -s true >/dev/null 2>&1 || true
   xfconf-query -c xfce4-desktop -p /desktop-icons/style -n -t int -s 2 >/dev/null 2>&1 || true
   xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-home -n -t bool -s false >/dev/null 2>&1 || true
   xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-filesystem -n -t bool -s false >/dev/null 2>&1 || true
@@ -1322,6 +1321,57 @@ def _write_desktop_launcher(
         path.chmod(0o755)
     except OSError:
         pass
+
+
+def _write_hidden_application_entry(path: Path, name: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "[Desktop Entry]",
+                "Type=Application",
+                f"Name={name}",
+                "NoDisplay=true",
+                "Hidden=true",
+                "",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_thunar_defaults(path: Path) -> None:
+    root = _read_xfce_channel(path, "thunar")
+    if _find_xfce_property(root, "last-view") is None:
+        _xfce_property(root, "last-view", "string", "ThunarIconView")
+    _xfce_property(root, "last-show-hidden", "bool", "true")
+    _write_xfce_channel(path, root)
+
+
+def _read_xfce_channel(path: Path, channel_name: str) -> ET.Element:
+    if path.exists():
+        try:
+            root = ET.parse(path).getroot()
+            if root.tag == "channel" and root.get("name") == channel_name:
+                root.set("version", root.get("version") or "1.0")
+                return root
+        except (ET.ParseError, OSError):
+            pass
+    return ET.Element("channel", {"name": channel_name, "version": "1.0"})
+
+
+def _write_xfce_channel(path: Path, root: ET.Element) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tree = ET.ElementTree(root)
+    try:
+        ET.indent(tree, space="  ")
+    except AttributeError:
+        pass
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _find_xfce_property(parent: ET.Element, name: str) -> ET.Element | None:
+    return next((child for child in parent.findall("property") if child.get("name") == name), None)
 
 
 def _install_desktop_readme(desktop_dir: Path) -> None:

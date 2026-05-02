@@ -296,6 +296,28 @@ def test_markdown_session_rejects_office_binaries(office_state):
         manager.open(doc)
 
 
+def test_thunar_defaults_preserve_existing_profile_settings(tmp_path):
+    thunar_xml = tmp_path / "thunar.xml"
+    thunar_xml.write_text(
+        """<?xml version="1.1" encoding="UTF-8"?>
+<channel name="thunar" version="1.0">
+  <property name="last-view" type="string" value="ThunarDetailsView"/>
+  <property name="last-window-width" type="int" value="900"/>
+  <property name="last-show-hidden" type="bool" value="false"/>
+</channel>
+""",
+        encoding="utf-8",
+    )
+
+    libreoffice_desktop._write_thunar_defaults(thunar_xml)
+
+    root = ET.parse(thunar_xml).getroot()
+    values = {child.get("name"): child.get("value") for child in root.findall("property")}
+    assert values["last-view"] == "ThunarDetailsView"
+    assert values["last-window-width"] == "900"
+    assert values["last-show-hidden"] == "true"
+
+
 def test_official_libreoffice_desktop_status_and_url_contract(tmp_path, monkeypatch):
     xpra_html = tmp_path / "xpra" / "www"
     xpra_html.mkdir(parents=True)
@@ -451,6 +473,18 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     assert "desktop-icons" in desktop_profile_text
     assert "image-path" in desktop_profile_text
     assert "usr/downloads" in desktop_profile_text
+    thunar_profile = (
+        tmp_path
+        / "desktop"
+        / "profiles"
+        / payload["session_id"]
+        / ".config"
+        / "xfce4"
+        / "xfconf"
+        / "xfce-perchannel-xml"
+        / "thunar.xml"
+    ).read_text(encoding="utf-8")
+    assert 'name="last-show-hidden" type="bool" value="true"' in thunar_profile
     user_dirs = (
         tmp_path
         / "desktop"
@@ -501,6 +535,20 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     assert '"$HOME"/Desktop/*.desktop' in profile_script
     assert "agent-zero-settings.desktop" not in profile_script
     assert "metadata::xfce-exe-checksum" in profile_script
+    assert "xfconf-query -c thunar -p /last-show-hidden" in profile_script
+    for filename in ("exo-mail-reader.desktop", "exo-web-browser.desktop"):
+        entry = (
+            tmp_path
+            / "desktop"
+            / "profiles"
+            / payload["session_id"]
+            / ".local"
+            / "share"
+            / "applications"
+            / filename
+        ).read_text(encoding="utf-8")
+        assert "NoDisplay=true" in entry
+        assert "Hidden=true" in entry
     assert manager.proxy_for_token(payload["token"]) == ("127.0.0.1", libreoffice_desktop.XPRA_PORT_BASE)
     assert manager.close(payload["session_id"], save_first=False)["closed"] == 0
     assert manager.close(payload["session_id"], save_first=False)["persistent"] is True
