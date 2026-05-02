@@ -1,9 +1,19 @@
 from __future__ import annotations
 
 from helpers.extension import Extension
-from plugins._office.helpers.route_bootstrap import install_route_hooks
+from helpers.print_style import PrintStyle
+from plugins._office import hooks
+from plugins._office.helpers import libreoffice_desktop, libreoffice_desktop_routes
 
 
-class OfficeRoutesStartup(Extension):
+class OfficeStartupCleanup(Extension):
     def execute(self, **kwargs):
-        install_route_hooks()
+        libreoffice_desktop_routes.install_route_hooks()
+        result = hooks.cleanup_stale_runtime_state()
+        if result.get("errors"):
+            PrintStyle.warning("Office runtime preparation reported errors:", result["errors"])
+        elif result.get("installed") or result.get("removed"):
+            PrintStyle.info("Office runtime prepared:", result)
+        desktop = libreoffice_desktop.get_manager().ensure_system_desktop()
+        if not desktop.get("available"):
+            PrintStyle.warning("Office desktop startup was deferred:", desktop.get("error") or desktop)

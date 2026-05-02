@@ -14,7 +14,7 @@ from plugins._office.helpers import document_affordance
 def substantial_text(prefix: str = "Here is the material.") -> str:
     paragraph = (
         "This section gives concrete context, constraints, tradeoffs, and next steps "
-        "so the artifact has enough substance to be useful in a real collaboration. "
+        "so the artifact has enough substance to be useful in a real shared workflow. "
     )
     return f"{prefix}\n\n" + paragraph * 8
 
@@ -65,6 +65,7 @@ def test_convert_into_document_creates_document_artifact():
 
     assert decision is not None
     assert decision.kind == "document"
+    assert decision.fmt == "md"
     assert decision.reason == "explicit_handoff"
 
 
