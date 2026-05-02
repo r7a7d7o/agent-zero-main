@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import re
@@ -22,6 +24,7 @@ WEB_STORE_ID_RE = re.compile(r"(?<![a-p])([a-p]{32})(?![a-p])")
 CHROME_VERSION_RE = re.compile(r"(\d+(?:\.\d+){0,3})")
 CHROME_I18N_MESSAGE_RE = re.compile(r"__MSG_([A-Za-z0-9_@.-]+)__")
 DEFAULT_CHROME_PRODVERSION = "140.0.0.0"
+EXTENSION_ID_ALPHABET = "abcdefghijklmnop"
 CHROME_VERSION_COMMANDS = (
     ("google-chrome", "--version"),
     ("chromium", "--version"),
@@ -301,12 +304,17 @@ def _extension_entry(extension_dir: Path, enabled_paths: set[str]) -> dict[str, 
     manifest = _read_manifest(extension_dir)
     extension_path = str(extension_dir)
     can_delete = _is_managed_extension_dir(extension_dir)
+    extension_id = _extension_runtime_id(extension_dir, manifest)
+    source_id = _extension_source_id(extension_dir)
+    ui = _extension_ui(extension_id, manifest)
     name = (
         _manifest_label(extension_dir, manifest, "name")
         or _manifest_label(extension_dir, manifest, "short_name")
         or extension_dir.name
     )
     return {
+        "id": extension_id,
+        "source_id": source_id,
         "name": name,
         "raw_name": manifest.get("name") or "",
         "description": _manifest_label(extension_dir, manifest, "description"),
@@ -315,6 +323,10 @@ def _extension_entry(extension_dir: Path, enabled_paths: set[str]) -> dict[str, 
         "enabled": extension_path in enabled_paths,
         "managed": can_delete,
         "can_delete": can_delete,
+        "has_ui": bool(ui["open_url"]),
+        "open_url": ui["open_url"],
+        "open_label": ui["open_label"],
+        "ui": ui,
     }
 
 
@@ -333,6 +345,118 @@ def _read_manifest(extension_path: Path) -> dict[str, Any]:
         return json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _extension_runtime_id(extension_dir: Path, manifest: dict[str, Any]) -> str:
+    key_id = _extension_id_from_manifest_key(str(manifest.get("key") or ""))
+    if key_id:
+        return key_id
+    return _extension_id_from_path(extension_dir)
+
+
+def _extension_source_id(extension_dir: Path) -> str:
+    name = extension_dir.name
+    if not EXTENSION_ID_RE.fullmatch(name):
+        return ""
+    try:
+        if extension_dir.parent.name == "chrome-web-store":
+            return name
+    except OSError:
+        return ""
+    return ""
+
+
+def _extension_id_from_manifest_key(key: str) -> str:
+    raw_key = str(key or "").strip()
+    if not raw_key:
+        return ""
+    try:
+        padding = "=" * (-len(raw_key) % 4)
+        public_key = base64.b64decode(raw_key + padding, validate=True)
+    except Exception:
+        return ""
+    return _extension_id_from_hash_input(public_key)
+
+
+def _extension_id_from_path(extension_dir: Path) -> str:
+    return _extension_id_from_hash_input(str(extension_dir).encode("utf-8"))
+
+
+def _extension_id_from_hash_input(value: bytes) -> str:
+    digest = hashlib.sha256(value).hexdigest()[:32]
+    return "".join(EXTENSION_ID_ALPHABET[int(char, 16)] for char in digest)
+
+
+def _extension_ui(extension_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
+    targets = _extension_ui_targets(extension_id, manifest)
+    primary = targets[0] if targets else {}
+    return {
+        "open_url": primary.get("url", ""),
+        "open_label": primary.get("label", ""),
+        "targets": targets,
+    }
+
+
+def _extension_ui_targets(extension_id: str, manifest: dict[str, Any]) -> list[dict[str, str]]:
+    candidates: list[tuple[str, str, Any]] = [
+        ("options", "Options", _manifest_nested_value(manifest, "options_ui", "page")),
+        ("options", "Options", manifest.get("options_page")),
+        ("popup", "Popup", _manifest_nested_value(manifest, "action", "default_popup")),
+        ("popup", "Popup", _manifest_nested_value(manifest, "browser_action", "default_popup")),
+        ("popup", "Popup", _manifest_nested_value(manifest, "page_action", "default_popup")),
+        ("side_panel", "Side panel", _manifest_nested_value(manifest, "side_panel", "default_path")),
+        ("devtools", "DevTools", manifest.get("devtools_page")),
+    ]
+
+    chrome_url_overrides = manifest.get("chrome_url_overrides")
+    if isinstance(chrome_url_overrides, dict):
+        candidates.extend(
+            (
+                (f"chrome_url_override_{name}", _extension_override_label(name), page)
+                for name, page in chrome_url_overrides.items()
+            )
+        )
+
+    targets: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for kind, label, page in candidates:
+        url = _extension_page_url(extension_id, page)
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        targets.append(
+            {
+                "kind": kind,
+                "label": label,
+                "page": str(page or "").strip(),
+                "url": url,
+            }
+        )
+    return targets
+
+
+def _manifest_nested_value(manifest: dict[str, Any], key: str, nested_key: str) -> Any:
+    value = manifest.get(key)
+    if not isinstance(value, dict):
+        return ""
+    return value.get(nested_key)
+
+
+def _extension_override_label(name: str) -> str:
+    normalized = str(name or "").replace("_", " ").strip()
+    return normalized[:1].upper() + normalized[1:] if normalized else "Extension page"
+
+
+def _extension_page_url(extension_id: str, page: Any) -> str:
+    page_path = str(page or "").strip()
+    if not extension_id or not page_path:
+        return ""
+    if re.match(r"^[a-z][a-z0-9+.-]*:", page_path, flags=re.IGNORECASE):
+        return ""
+    page_path = page_path.lstrip("/")
+    if not page_path:
+        return ""
+    return f"chrome-extension://{extension_id}/{page_path}"
 
 
 def _manifest_label(extension_dir: Path, manifest: dict[str, Any], key: str) -> str:

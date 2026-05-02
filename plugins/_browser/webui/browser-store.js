@@ -526,6 +526,36 @@ const model = {
     return version ? `v${version}` : "Unpacked extension";
   },
 
+  extensionOpenUrl(extension) {
+    return String(extension?.open_url || extension?.ui?.open_url || "").trim();
+  },
+
+  extensionHasOpenUi(extension) {
+    return Boolean(this.extensionOpenUrl(extension));
+  },
+
+  extensionOpenTitle(extension) {
+    const label = String(extension?.open_label || extension?.ui?.open_label || "Extension UI").trim();
+    const name = String(extension?.name || "extension").trim();
+    if (!extension?.enabled) {
+      return `Enable ${name} before opening ${label}.`;
+    }
+    return `Open ${label} for ${name}`;
+  },
+
+  async openExtensionUi(extension) {
+    const url = this.extensionOpenUrl(extension);
+    if (!url) return;
+    this.extensionActionMessage = "";
+    this.extensionActionError = "";
+    if (!extension?.enabled) {
+      this.extensionActionError = `Enable ${extension?.name || "this extension"} before opening it.`;
+      return;
+    }
+    this.closeExtensionsMenu();
+    await this.command("open", { url });
+  },
+
   _prefillAgentPrompt(prompt) {
     chatInputStore.message = prompt;
     chatInputStore.adjustTextareaHeight?.();

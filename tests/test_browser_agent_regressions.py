@@ -344,6 +344,43 @@ def test_browser_extension_manager_uninstalls_only_managed_extensions(monkeypatc
     assert external_extension.exists()
 
 
+def test_browser_extension_manager_exposes_openable_manifest_ui(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        browser_extension_manager_module.files,
+        "get_abs_path",
+        lambda *parts: str(tmp_path.joinpath(*parts)),
+    )
+    extension_dir = get_extensions_root() / "local-options"
+    extension_dir.mkdir(parents=True)
+    (extension_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "manifest_version": 3,
+                "name": "Openable Extension",
+                "version": "1.0.0",
+                "options_ui": {"page": "options/index.html"},
+                "action": {"default_popup": "popup.html"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        browser_extension_manager_module,
+        "get_browser_config",
+        lambda: {"extension_paths": [str(extension_dir)]},
+    )
+
+    entry = browser_extension_manager_module.list_browser_extensions()[0]
+    expected_id = browser_extension_manager_module._extension_id_from_path(extension_dir)
+
+    assert entry["id"] == expected_id
+    assert entry["has_ui"] is True
+    assert entry["open_label"] == "Options"
+    assert entry["open_url"] == f"chrome-extension://{expected_id}/options/index.html"
+    assert entry["ui"]["targets"][1]["url"] == f"chrome-extension://{expected_id}/popup.html"
+
+
 def test_browser_extension_manager_parses_web_store_urls():
     extension_id = "a" * 32
 
@@ -402,6 +439,9 @@ def test_browser_extension_menu_exposes_agent_and_url_paths():
     assert "No extensions installed yet." not in html
     assert "Browser Extension Settings" not in html
     assert "<span>Settings</span>" in html
+    assert "extensionHasOpenUi(extension)" in html
+    assert "openExtensionUi(extension)" in html
+    assert "<span>Open</span>" in html
     assert "hasExtensionInstallUrl()" in html
     assert "malicious or buggy extensions" in html
     assert skill.exists()

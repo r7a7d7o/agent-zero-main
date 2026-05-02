@@ -117,19 +117,30 @@
                         x-show="$store.browserPage.extensionsListLoading">progress_activity</span>
                     </div>
                     <template x-for="extension in $store.browserPage.extensionsList" :key="extension.path">
-                      <label class="browser-extension-row" :title="extension.path">
+                      <div class="browser-extension-row" :title="extension.path">
                         <span class="browser-extension-row-text">
                           <span class="browser-extension-name" x-text="extension.name || 'Unnamed extension'"></span>
                           <span class="browser-extension-meta"
                             x-text="$store.browserPage.extensionVersionLabel(extension)"></span>
                         </span>
-                        <span class="browser-extension-toggle">
-                          <input type="checkbox" :checked="extension.enabled"
-                            :disabled="$store.browserPage.extensionToggleLoadingPath === extension.path"
-                            @change="$store.browserPage.setExtensionEnabled(extension, $event.target.checked, $event.target)" />
-                          <span class="browser-extension-switch"></span>
+                        <span class="browser-extension-row-actions">
+                          <button type="button" class="browser-extension-open"
+                            x-show="$store.browserPage.extensionHasOpenUi(extension)"
+                            :title="$store.browserPage.extensionOpenTitle(extension)"
+                            :aria-label="$store.browserPage.extensionOpenTitle(extension)"
+                            :disabled="!extension.enabled || $store.browserPage.isBusy()"
+                            @click.stop="$store.browserPage.openExtensionUi(extension)">
+                            <span class="material-symbols-outlined">open_in_new</span>
+                            <span>Open</span>
+                          </button>
+                          <label class="browser-extension-toggle">
+                            <input type="checkbox" :checked="extension.enabled"
+                              :disabled="$store.browserPage.extensionToggleLoadingPath === extension.path"
+                              @change="$store.browserPage.setExtensionEnabled(extension, $event.target.checked, $event.target)" />
+                            <span class="browser-extension-switch"></span>
+                          </label>
                         </span>
-                      </label>
+                      </div>
                     </template>
                   </div>
                   <button type="button" class="dropdown-item" @click="$store.browserPage.openExtensionsSettings()">
@@ -847,6 +858,44 @@
       font-size: 0.82rem;
       font-weight: 650;
       color: var(--color-text);
+    }
+
+    .browser-extension-row-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .browser-extension-open {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      min-width: 0;
+      min-height: 28px;
+      padding: 0 8px;
+      border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--color-panel) 70%, transparent);
+      color: var(--color-text);
+      font: inherit;
+      font-size: 0.76rem;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .browser-extension-open:hover:not(:disabled) {
+      border-color: color-mix(in srgb, var(--color-primary) 42%, var(--color-border));
+      background: color-mix(in srgb, var(--color-primary) 13%, var(--color-background));
+    }
+
+    .browser-extension-open:disabled {
+      cursor: not-allowed;
+      opacity: 0.52;
+    }
+
+    .browser-extension-open .material-symbols-outlined {
+      font-size: 15px;
     }
 
     .browser-extension-toggle {
