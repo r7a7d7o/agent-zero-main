@@ -536,7 +536,12 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     assert "agent-zero-settings.desktop" not in profile_script
     assert "metadata::xfce-exe-checksum" in profile_script
     assert "xfconf-query -c thunar -p /last-show-hidden" in profile_script
-    for filename in ("exo-mail-reader.desktop", "exo-web-browser.desktop"):
+    for filename in (
+        "exo-mail-reader.desktop",
+        "exo-web-browser.desktop",
+        "xfce4-mail-reader.desktop",
+        "xfce4-web-browser.desktop",
+    ):
         entry = (
             tmp_path
             / "desktop"

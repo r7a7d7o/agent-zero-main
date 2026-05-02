@@ -47,6 +47,8 @@ HIDDEN_XPRA_DESKTOP_ENTRIES = (
 HIDDEN_XFCE_MENU_ENTRIES = (
     ("exo-mail-reader.desktop", "Mail Reader"),
     ("exo-web-browser.desktop", "Web Browser"),
+    ("xfce4-mail-reader.desktop", "Mail Reader"),
+    ("xfce4-web-browser.desktop", "Web Browser"),
 )
 DESKTOP_README_SOURCE = Path(__file__).resolve().parents[1] / "assets" / "desktop" / "README.md"
 DESKTOP_FOLDER_LINKS = (

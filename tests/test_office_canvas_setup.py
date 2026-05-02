@@ -269,6 +269,8 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert "last-show-hidden" in desktop
     assert "exo-mail-reader.desktop" in desktop
     assert "exo-web-browser.desktop" in desktop
+    assert "xfce4-mail-reader.desktop" in desktop
+    assert "xfce4-web-browser.desktop" in desktop
     assert "libreoffice-gtk3" in install
     assert "libreofficekit" not in install
     assert "gir1.2-lokdocview" not in install
