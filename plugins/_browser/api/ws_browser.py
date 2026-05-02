@@ -38,6 +38,8 @@ class WsBrowser(WsHandler):
             return await self._subscribe(data, sid)
         if event == "browser_viewer_unsubscribe":
             return self._unsubscribe(data, sid)
+        if event == "browser_viewer_snapshot":
+            return await self._snapshot(data)
         if event == "browser_viewer_sessions":
             return await self._sessions(data)
         if event == "browser_viewer_command":
@@ -111,6 +113,49 @@ class WsBrowser(WsHandler):
     async def _sessions(self, data: dict[str, Any]) -> dict[str, Any]:
         return {
             "context_id": self._context_id(data),
+            "browsers": await self._all_browser_tabs(),
+            "all_browsers": True,
+        }
+
+    async def _snapshot(self, data: dict[str, Any]) -> dict[str, Any] | WsResult:
+        context_id = self._context_id(data)
+        if not context_id:
+            return self._error("MISSING_CONTEXT", "context_id is required", data)
+        if not AgentContext.get(context_id):
+            return self._error("CONTEXT_NOT_FOUND", f"Context '{context_id}' was not found", data)
+
+        runtime = await get_runtime(context_id, create=False)
+        if not runtime:
+            return {
+                "context_id": context_id,
+                "active_browser_context_id": context_id,
+                "active_browser_id": None,
+                "snapshot": None,
+                "browsers": await self._all_browser_tabs(),
+                "all_browsers": True,
+            }
+
+        listing = await runtime.call("list")
+        browsers = listing.get("browsers") or []
+        active_id = self._active_browser_id(listing, data.get("browser_id"))
+        snapshot = None
+        if active_id:
+            try:
+                quality = int(data.get("quality") or SCREENCAST_QUALITY)
+            except (TypeError, ValueError):
+                quality = SCREENCAST_QUALITY
+            with contextlib.suppress(Exception):
+                snapshot = await runtime.call(
+                    "screenshot",
+                    active_id,
+                    quality=quality,
+                )
+
+        return {
+            "context_id": context_id,
+            "active_browser_context_id": context_id,
+            "active_browser_id": active_id,
+            "snapshot": snapshot,
             "browsers": await self._all_browser_tabs(),
             "all_browsers": True,
         }
