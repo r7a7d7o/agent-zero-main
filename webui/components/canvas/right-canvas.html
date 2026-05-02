@@ -17,6 +17,7 @@
           'is-mobile': $store.rightCanvas.isMobileMode
         }"
         :style="$store.rightCanvas.widthStyle()"
+        x-show="$store.rightCanvas.shouldRender()"
         x-init="$store.rightCanvas.init($el)"
         x-effect="$store.rightCanvas.applyLayoutState()"
         aria-label="Universal Canvas"

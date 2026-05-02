@@ -9,131 +9,153 @@
     <template x-if="$store.office">
       <div class="office-shell">
         <div class="office-toolbar">
-          <button type="button" class="office-button" title="Open" @click="$store.office.openPrompt()">
-            <span class="material-symbols-outlined">folder_open</span>
-            <span>Open</span>
-          </button>
-          <button type="button" class="office-button" title="New document" @click="$store.office.create('document')">
-            <span class="material-symbols-outlined">note_add</span>
-            <span>Doc</span>
-          </button>
-          <button type="button" class="office-button" title="New spreadsheet" @click="$store.office.create('spreadsheet')">
-            <span class="material-symbols-outlined">table</span>
-            <span>Sheet</span>
-          </button>
-          <button type="button" class="office-button" title="New presentation" @click="$store.office.create('presentation')">
-            <span class="material-symbols-outlined">slideshow</span>
-            <span>Presentation</span>
-          </button>
+          <div class="office-tool-group">
+            <button type="button" class="office-icon-button office-command-button" aria-label="Open" @click="$store.office.openPrompt()">
+              <span class="material-symbols-outlined">folder_open</span>
+              <span class="office-button-label">Open</span>
+            </button>
+          </div>
+
+          <div class="office-tool-group">
+            <button type="button" class="office-icon-button office-command-button" aria-label="New Markdown" @click="$store.office.create('document', 'md')">
+              <span class="material-symbols-outlined">article</span>
+              <span class="office-button-label">Markdown</span>
+            </button>
+            <button type="button" class="office-icon-button office-command-button" aria-label="New DOCX" @click="$store.office.create('document', 'docx')">
+              <span class="material-symbols-outlined">description</span>
+              <span class="office-button-label">DOCX</span>
+            </button>
+            <button type="button" class="office-icon-button office-command-button" aria-label="New spreadsheet" @click="$store.office.create('spreadsheet', 'xlsx')">
+              <span class="material-symbols-outlined">table_chart</span>
+              <span class="office-button-label">Spreadsheet</span>
+            </button>
+            <button type="button" class="office-icon-button office-command-button" aria-label="New presentation" @click="$store.office.create('presentation', 'pptx')">
+              <span class="material-symbols-outlined">co_present</span>
+              <span class="office-button-label">Presentation</span>
+            </button>
+          </div>
+
+          <div class="office-tool-group" x-show="$store.office.session && !$store.office.hasOfficialOffice() && !$store.office.isPreviewOnly()" style="display: none;">
+            <button type="button" class="office-icon-button" title="Undo" aria-label="Undo" :disabled="!$store.office.canUndo()" @click="$store.office.undo()">
+              <span class="material-symbols-outlined">undo</span>
+            </button>
+            <button type="button" class="office-icon-button" title="Redo" aria-label="Redo" :disabled="!$store.office.canRedo()" @click="$store.office.redo()">
+              <span class="material-symbols-outlined">redo</span>
+            </button>
+          </div>
+
+          <div class="office-tool-group" x-show="$store.office.session && !$store.office.hasOfficialOffice() && !$store.office.isPreviewOnly()" style="display: none;">
+            <button type="button" class="office-icon-button" title="Bold" aria-label="Bold" @click="$store.office.format('bold')">
+              <span class="material-symbols-outlined">format_bold</span>
+            </button>
+            <button type="button" class="office-icon-button" title="Italic" aria-label="Italic" @click="$store.office.format('italic')">
+              <span class="material-symbols-outlined">format_italic</span>
+            </button>
+            <button type="button" class="office-icon-button" title="Underline" aria-label="Underline" @click="$store.office.format('underline')">
+              <span class="material-symbols-outlined">format_underlined</span>
+            </button>
+            <button type="button" class="office-icon-button" title="List" aria-label="List" @click="$store.office.format('list')">
+              <span class="material-symbols-outlined">format_list_bulleted</span>
+            </button>
+            <button type="button" class="office-icon-button" title="Numbered list" aria-label="Numbered list" @click="$store.office.format('numbered')">
+              <span class="material-symbols-outlined">format_list_numbered</span>
+            </button>
+            <button type="button" class="office-icon-button" title="Table" aria-label="Table" @click="$store.office.format('table')">
+              <span class="material-symbols-outlined">table</span>
+            </button>
+            <button type="button" class="office-icon-button" title="Align left" aria-label="Align left" @click="$store.office.format('alignLeft')">
+              <span class="material-symbols-outlined">format_align_left</span>
+            </button>
+            <button type="button" class="office-icon-button" title="Align center" aria-label="Align center" @click="$store.office.format('alignCenter')">
+              <span class="material-symbols-outlined">format_align_center</span>
+            </button>
+            <button type="button" class="office-icon-button" title="Align right" aria-label="Align right" @click="$store.office.format('alignRight')">
+              <span class="material-symbols-outlined">format_align_right</span>
+            </button>
+            <button type="button" class="office-icon-button" title="Source" aria-label="Source" :class="{ 'is-active': $store.office.sourceMode }" x-show="$store.office.isMarkdown()" @click="$store.office.toggleSource()">
+              <span class="material-symbols-outlined">code</span>
+            </button>
+          </div>
+
+          <div class="office-tool-group" x-show="$store.office.session && !$store.office.hasOfficialOffice()" style="display: none;">
+            <button type="button" class="office-icon-button" title="Zoom out" aria-label="Zoom out" @click="$store.office.zoomOut()">
+              <span class="material-symbols-outlined">zoom_out</span>
+            </button>
+            <span class="office-zoom" x-text="$store.office.zoomLabel()"></span>
+            <button type="button" class="office-icon-button" title="Zoom in" aria-label="Zoom in" @click="$store.office.zoomIn()">
+              <span class="material-symbols-outlined">zoom_in</span>
+            </button>
+          </div>
+
           <span class="office-toolbar-spacer"></span>
-          <span
-            class="office-health-pill"
-            :class="`is-${$store.office.status?.state || 'unknown'}`"
-            :title="$store.office.healthTitle()"
-            :aria-label="$store.office.healthTitle()"
-          >
-            <span class="office-health-dot"></span>
-            <span x-show="$store.office.status?.state !== 'healthy'" x-text="$store.office.healthText()"></span>
-          </span>
-          <button type="button" class="office-icon-button" title="Save" @click="$store.office.save()" :disabled="!$store.office.session">
-            <span class="material-symbols-outlined">save</span>
-          </button>
-          <button
-            type="button"
-            class="office-icon-button"
-            title="Close file"
-            aria-label="Close file"
-            :disabled="!$store.office.session"
-            @click="$confirmClick($event, () => $store.office.closeFile())"
-          >
-            <span class="material-symbols-outlined">close</span>
-          </button>
-          <button type="button" class="office-icon-button" title="Refresh status" @click="$store.office.refresh()">
-            <span class="material-symbols-outlined">refresh</span>
-          </button>
+
+          <div class="office-tool-group" x-show="$store.office.session && !$store.office.isDesktopSession()" style="display: none;">
+            <button type="button" class="office-icon-button office-command-button" aria-label="Export PDF" :disabled="$store.office.loading" @click="$store.office.exportPdf()">
+              <span class="material-symbols-outlined">picture_as_pdf</span>
+              <span class="office-button-label">Export PDF</span>
+            </button>
+            <button type="button" class="office-icon-button office-command-button" aria-label="Save" :class="{ 'is-primary': $store.office.dirty }" :disabled="$store.office.saving" @click="$store.office.save()">
+              <span class="material-symbols-outlined" :class="{ spinning: $store.office.saving }" x-text="$store.office.saving ? 'progress_activity' : 'save'"></span>
+              <span class="office-button-label">Save</span>
+            </button>
+            <button type="button" class="office-icon-button office-command-button" aria-label="Close" @click="$confirmClick($event, () => $store.office.closeFile())">
+              <span class="material-symbols-outlined">close</span>
+              <span class="office-button-label">Close</span>
+            </button>
+          </div>
         </div>
 
-        <div class="office-tabs" x-show="$store.office.tabs.length" role="tablist" aria-label="Open Office files" style="display: none;">
+        <div class="office-tabs" x-show="$store.office.tabs.length" role="tablist" aria-label="Open documents" style="display: none;">
           <template x-for="tab in $store.office.tabs" :key="tab.tab_id">
-            <div class="office-tab-shell" :class="{ 'is-active': $store.office.isActiveTab(tab) }">
-              <button
-                type="button"
-                class="office-tab"
-                role="tab"
-                :aria-selected="$store.office.isActiveTab(tab).toString()"
-                :title="$store.office.tabLabel(tab)"
-                @click="$store.office.selectTab(tab.tab_id)"
-              >
+            <div class="office-tab-shell" :class="{ 'is-active': $store.office.isActiveTab(tab), 'is-dirty': tab.dirty, 'is-system': $store.office.isDesktopSession(tab) }">
+              <button type="button" class="office-tab" role="tab" :aria-selected="$store.office.isActiveTab(tab).toString()" :title="$store.office.tabLabel(tab)" @click="$store.office.selectTab(tab.tab_id)">
                 <span class="material-symbols-outlined office-tab-icon" aria-hidden="true" x-text="$store.office.tabIcon(tab)"></span>
                 <span class="office-tab-title" x-text="$store.office.tabTitle(tab)"></span>
               </button>
-              <button
-                type="button"
-                class="office-tab-close"
-                :title="'Close ' + $store.office.tabLabel(tab)"
-                :aria-label="'Close ' + $store.office.tabLabel(tab)"
-                :disabled="$store.office.loading"
-                @click.stop="$confirmClick($event, () => $store.office.closeTab(tab.tab_id))"
-              >
+              <button type="button" class="office-tab-close" x-show="!$store.office.isDesktopSession(tab)" :title="'Close ' + $store.office.tabLabel(tab)" :aria-label="'Close ' + $store.office.tabLabel(tab)" :disabled="$store.office.loading" @click.stop="$confirmClick($event, () => $store.office.closeTab(tab.tab_id))">
                 <span class="material-symbols-outlined">close</span>
               </button>
             </div>
           </template>
         </div>
 
-        <div class="office-status-line" x-show="$store.office.message || $store.office.error || $store.office.loading" style="display: none;">
+        <div class="office-state-line" x-show="$store.office.message || $store.office.error || $store.office.loading" style="display: none;">
           <span class="material-symbols-outlined" :class="{ spinning: $store.office.loading }" x-text="$store.office.loading ? 'progress_activity' : ($store.office.error ? 'error' : 'check_circle')"></span>
-          <span x-text="$store.office.error || $store.office.message || 'Working...'"></span>
+          <span x-text="$store.office.error || $store.office.message || 'Working'"></span>
         </div>
 
         <div class="office-body">
-          <div class="office-bootstrap" x-show="!$store.office.session && (!$store.office.status || !$store.office.status.healthy)" style="display: none;">
-            <div class="office-setup-mark" :class="{ 'is-busy': $store.office.isSetupBusy(), 'is-alert': $store.office.isSetupBlocked() }">
-              <span class="material-symbols-outlined" :class="{ spinning: $store.office.isSetupBusy() }" x-text="$store.office.setupIcon()"></span>
-            </div>
-            <div class="office-setup-copy">
-              <span>Agent Zero Office</span>
-              <strong x-text="$store.office.setupTitle()"></strong>
-              <p x-text="$store.office.setupMessage()"></p>
-            </div>
-            <div class="office-setup-progress" :class="{ 'is-paused': !$store.office.isSetupBusy() }" aria-hidden="true">
-              <span></span>
-            </div>
-            <div class="office-bootstrap-actions" x-show="$store.office.showSetupActions()" style="display: none;">
-              <button type="button" class="office-button" @click="$store.office.retry()" x-show="$store.office.isSetupBlocked()" style="display: none;">
-                <span class="material-symbols-outlined">restart_alt</span>
-                <span>Retry</span>
-              </button>
-              <button type="button" class="office-button" @click="$store.office.refresh()">
-                <span class="material-symbols-outlined">sync</span>
-                <span>Refresh</span>
-              </button>
-            </div>
-          </div>
-
-          <div class="office-start" x-show="!$store.office.session && $store.office.status?.healthy" style="display: none;">
-            <section class="office-dashboard-section" aria-label="Create Office file">
-              <div class="office-dashboard-heading">Create</div>
+          <div class="office-start" x-show="!$store.office.session" style="display: none;">
+            <section class="office-dashboard-section" aria-label="Create">
+              <div class="office-dashboard-heading">New</div>
               <div class="office-template-grid">
-                <button type="button" class="office-create-tile" @click="$store.office.create('document')">
+                <button type="button" class="office-create-tile is-markdown" @click="$store.office.create('document', 'md')">
                   <span class="material-symbols-outlined">article</span>
-                  <span>Document</span>
+                  <strong>Markdown</strong>
+                  <small>.md</small>
                 </button>
-                <button type="button" class="office-create-tile" @click="$store.office.create('spreadsheet')">
+                <button type="button" class="office-create-tile is-docx" @click="$store.office.create('document', 'docx')">
+                  <span class="material-symbols-outlined">description</span>
+                  <strong>DOCX</strong>
+                  <small>.docx</small>
+                </button>
+                <button type="button" class="office-create-tile is-sheet" @click="$store.office.create('spreadsheet', 'xlsx')">
                   <span class="material-symbols-outlined">table_chart</span>
-                  <span>Spreadsheet</span>
+                  <strong>Sheet</strong>
+                  <small>.xlsx</small>
                 </button>
-                <button type="button" class="office-create-tile" @click="$store.office.create('presentation')">
+                <button type="button" class="office-create-tile is-deck" @click="$store.office.create('presentation', 'pptx')">
                   <span class="material-symbols-outlined">co_present</span>
-                  <span>Presentation</span>
+                  <strong>Deck</strong>
+                  <small>.pptx</small>
                 </button>
               </div>
             </section>
 
-            <section class="office-dashboard-section" x-show="$store.office.openCards().length" aria-label="Open Office files" style="display: none;">
-              <div class="office-dashboard-heading">Open files</div>
+            <section class="office-dashboard-section" x-show="$store.office.openCards().length" aria-label="Open" style="display: none;">
+              <div class="office-dashboard-heading">Open</div>
               <div class="office-card-grid">
-                <template x-for="doc in $store.office.openCards()" :key="doc.tab_id">
+                <template x-for="doc in $store.office.openCards()" :key="doc.tab_id || doc.file_id || doc.path">
                   <button type="button" class="office-document-card is-open" :title="doc.path" @click="$store.office.selectTab(doc.tab_id)">
                     <span class="office-card-badge">Open</span>
                     <div class="office-card-preview" :class="`is-${$store.office.previewKind(doc)}`">
@@ -141,34 +163,18 @@
                         <div class="office-sheet-preview">
                           <template x-for="(row, rowIndex) in $store.office.previewRows(doc)" :key="rowIndex">
                             <div class="office-sheet-row">
-                              <template x-for="(cell, cellIndex) in row" :key="cellIndex">
-                                <span x-text="cell"></span>
-                              </template>
+                              <template x-for="(cell, cellIndex) in row" :key="cellIndex"><span x-text="cell"></span></template>
                             </div>
                           </template>
                         </div>
                       </template>
-                      <template x-if="$store.office.previewKind(doc) === 'presentation' && $store.office.hasPreview(doc)">
-                        <div class="office-slide-preview">
-                          <template x-for="(slide, index) in $store.office.previewSlides(doc)" :key="index">
-                            <div class="office-slide-line">
-                              <strong x-text="slide.title"></strong>
-                              <span x-text="(slide.lines || []).join(' / ')"></span>
-                            </div>
-                          </template>
-                        </div>
-                      </template>
-                      <template x-if="$store.office.previewKind(doc) === 'document' && $store.office.hasPreview(doc)">
+                      <template x-if="$store.office.previewKind(doc) !== 'spreadsheet' && $store.office.hasPreview(doc)">
                         <div class="office-page-preview">
-                          <template x-for="(line, index) in $store.office.previewLines(doc)" :key="index">
-                            <span x-text="line"></span>
-                          </template>
+                          <template x-for="(line, index) in $store.office.previewLines(doc)" :key="index"><span x-text="line"></span></template>
                         </div>
                       </template>
                       <template x-if="!$store.office.hasPreview(doc)">
-                        <div class="office-preview-fallback">
-                          <span class="material-symbols-outlined" x-text="$store.office.tabIcon(doc)"></span>
-                        </div>
+                        <div class="office-preview-fallback"><span class="material-symbols-outlined" x-text="$store.office.tabIcon(doc)"></span></div>
                       </template>
                     </div>
                     <span class="office-card-title" x-text="$store.office.dashboardTitle(doc)"></span>
@@ -178,44 +184,28 @@
               </div>
             </section>
 
-            <section class="office-dashboard-section" x-show="$store.office.recentCards().length" aria-label="Recent Office files" style="display: none;">
-              <div class="office-dashboard-heading">Recent files</div>
+            <section class="office-dashboard-section" x-show="$store.office.recentCards().length" aria-label="Recent" style="display: none;">
+              <div class="office-dashboard-heading">Recent</div>
               <div class="office-card-grid">
-                <template x-for="doc in $store.office.recentCards()" :key="doc.file_id">
+                <template x-for="doc in $store.office.recentCards()" :key="doc.file_id || doc.path">
                   <button type="button" class="office-document-card" :title="doc.path" @click="$store.office.openPath(doc.path)">
                     <div class="office-card-preview" :class="`is-${$store.office.previewKind(doc)}`">
                       <template x-if="$store.office.previewKind(doc) === 'spreadsheet' && $store.office.hasPreview(doc)">
                         <div class="office-sheet-preview">
                           <template x-for="(row, rowIndex) in $store.office.previewRows(doc)" :key="rowIndex">
                             <div class="office-sheet-row">
-                              <template x-for="(cell, cellIndex) in row" :key="cellIndex">
-                                <span x-text="cell"></span>
-                              </template>
+                              <template x-for="(cell, cellIndex) in row" :key="cellIndex"><span x-text="cell"></span></template>
                             </div>
                           </template>
                         </div>
                       </template>
-                      <template x-if="$store.office.previewKind(doc) === 'presentation' && $store.office.hasPreview(doc)">
-                        <div class="office-slide-preview">
-                          <template x-for="(slide, index) in $store.office.previewSlides(doc)" :key="index">
-                            <div class="office-slide-line">
-                              <strong x-text="slide.title"></strong>
-                              <span x-text="(slide.lines || []).join(' / ')"></span>
-                            </div>
-                          </template>
-                        </div>
-                      </template>
-                      <template x-if="$store.office.previewKind(doc) === 'document' && $store.office.hasPreview(doc)">
+                      <template x-if="$store.office.previewKind(doc) !== 'spreadsheet' && $store.office.hasPreview(doc)">
                         <div class="office-page-preview">
-                          <template x-for="(line, index) in $store.office.previewLines(doc)" :key="index">
-                            <span x-text="line"></span>
-                          </template>
+                          <template x-for="(line, index) in $store.office.previewLines(doc)" :key="index"><span x-text="line"></span></template>
                         </div>
                       </template>
                       <template x-if="!$store.office.hasPreview(doc)">
-                        <div class="office-preview-fallback">
-                          <span class="material-symbols-outlined" x-text="$store.office.tabIcon(doc)"></span>
-                        </div>
+                        <div class="office-preview-fallback"><span class="material-symbols-outlined" x-text="$store.office.tabIcon(doc)"></span></div>
                       </template>
                     </div>
                     <span class="office-card-title" x-text="$store.office.dashboardTitle(doc)"></span>
@@ -226,12 +216,92 @@
             </section>
           </div>
 
-          <div class="office-frame-wrap" x-show="$store.office.session" style="display: none;">
-            <iframe
-              data-office-frame
-              allow="clipboard-read *; clipboard-write *; fullscreen *"
-              allowfullscreen
-            ></iframe>
+        <div class="office-editor-wrap" x-show="$store.office.session" style="display: none;">
+            <div class="office-editor-scroll" :class="{ 'is-desktop': $store.office.hasOfficialOffice() }" :style="`--office-zoom: ${$store.office.zoom}`" @click.self="$store.office.focusEditor()">
+              <template x-if="$store.office.hasOfficialOffice()">
+                <div class="office-desktop-wrap">
+                  <iframe
+                    class="office-desktop-frame"
+                    data-office-desktop-frame
+                    :src="$store.office.officialOfficeUrl()"
+                    aria-label="Desktop"
+                    allow="clipboard-read; clipboard-write; autoplay"
+                    @load="$store.office.onDesktopFrameLoaded($event)"
+                  ></iframe>
+                </div>
+              </template>
+
+              <textarea
+                class="office-source-editor"
+                data-office-source
+                aria-label="Markdown source"
+                x-show="$store.office.isMarkdown() && $store.office.sourceMode"
+                x-model="$store.office.editorText"
+                @input="$store.office.onSourceInput()"
+                @blur="$store.office.flushInput()"
+                spellcheck="true"
+                style="display: none;"
+              ></textarea>
+
+              <article
+                class="office-rich-editor"
+                x-show="$store.office.isMarkdown() && !$store.office.sourceMode"
+                x-init="$store.office.bindEditorElement($el, 'markdown')"
+                contenteditable="true"
+                tabindex="0"
+                role="textbox"
+                aria-label="Markdown document"
+                spellcheck="true"
+                @input="$store.office.onRichInput($el)"
+                @blur="$store.office.flushInput()"
+                style="display: none;"
+              ></article>
+
+              <div
+                class="office-docx-stage"
+                x-show="$store.office.isDocx() && !$store.office.hasOfficialOffice()"
+                style="display: none;"
+              >
+                <div
+                  class="office-docx-pages"
+                  :class="{ 'is-native': $store.office.hasNativeDocxTiles() }"
+                  x-init="$store.office.bindEditorElement($el, 'docx')"
+                  :contenteditable="$store.office.hasNativeDocxTiles() ? 'false' : 'true'"
+                  tabindex="0"
+                  role="textbox"
+                  aria-label="DOCX document"
+                  spellcheck="true"
+                  @click="$store.office.onNativeDocxClick($event)"
+                  @keydown="$store.office.onNativeDocxKeydown($event)"
+                  @input="$store.office.onDocxInput($el)"
+                  @blur="$store.office.flushInput()"
+                ></div>
+              </div>
+
+              <div class="office-preview-editor" x-show="$store.office.isPreviewOnly() && !$store.office.hasOfficialOffice()" style="display: none;">
+                <div class="office-card-preview is-large" :class="`is-${$store.office.previewKind($store.office.session || {})}`">
+                  <template x-if="$store.office.previewKind($store.office.session || {}) === 'spreadsheet' && $store.office.hasPreview($store.office.session || {})">
+                    <div class="office-sheet-preview">
+                      <template x-for="(row, rowIndex) in $store.office.previewRows($store.office.session || {})" :key="rowIndex">
+                        <div class="office-sheet-row">
+                          <template x-for="(cell, cellIndex) in row" :key="cellIndex"><span x-text="cell"></span></template>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-if="$store.office.previewKind($store.office.session || {}) === 'presentation'">
+                    <div class="office-slide-preview">
+                      <template x-for="(slide, index) in $store.office.previewSlides($store.office.session || {})" :key="index">
+                        <div class="office-slide-line">
+                          <strong x-text="slide.title"></strong>
+                          <span x-text="(slide.lines || []).join(' / ')"></span>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -249,6 +319,7 @@
       min-width: 0;
       min-height: 0;
       background: var(--color-background);
+      color: var(--color-text);
     }
 
     .office-panel {
@@ -257,216 +328,124 @@
 
     .modal-inner.office-modal {
       box-sizing: border-box;
-      container-type: inline-size;
-      width: min(82vw, 1180px);
-      height: min(88vh, 900px);
-      min-width: min(340px, calc(100vw - 16px));
-      min-height: min(500px, calc(100vh - 16px));
-      max-width: calc(100vw - 16px);
-      max-height: calc(100vh - 16px);
-      resize: both;
-      border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
-      border-radius: 7px;
-      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
-      background: color-mix(in srgb, var(--color-background) 94%, #000 6%);
+      width: min(1120px, calc(100vw - 32px));
+      height: min(820px, calc(100vh - 32px));
+      min-width: min(720px, calc(100vw - 16px));
+      min-height: min(520px, calc(100vh - 16px));
+      max-width: none;
+      max-height: none;
+      resize: none;
+      overflow: hidden;
+      will-change: width, height, left, top;
     }
 
-    .modal.modal-floating {
-      pointer-events: none;
-    }
-
-    .modal.modal-floating .modal-inner {
-      pointer-events: auto;
-    }
-
-    .modal-inner.office-modal .modal-header {
-      min-height: 34px;
-      padding: 0.35rem 0.75rem 0.35rem 1rem;
-      cursor: move;
+    .modal-inner.office-modal.is-resizing,
+    .modal-inner.office-modal.is-dragging {
       user-select: none;
-      background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
-      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
     }
-    
-    .modal-inner.office-modal .modal-close {
-      font-size: 1.35rem;
-      line-height: 1;
+
+    .modal-inner.office-modal.is-focus-mode {
+      border-radius: 6px;
     }
 
     .modal-inner.office-modal .modal-scroll {
       display: flex;
-      flex-direction: column;
       flex: 1 1 auto;
       min-height: 0;
+      max-height: none;
       overflow: hidden;
       padding: 0;
     }
 
-    .modal-inner.office-modal .modal-bd.office-modal-body {
-      box-sizing: border-box;
-      display: flex;
-      flex-direction: column;
-      flex: 1 1 auto;
-      width: 100%;
-      height: 100%;
-      min-height: 0;
-      padding: 0;
+    .modal-inner.office-modal .modal-header {
+      grid-template-columns: minmax(0, 1fr) auto auto auto;
     }
 
+    .office-modal-input-shield {
+      position: absolute;
+      inset: 42px 0 0 0;
+      z-index: 4;
+      display: none;
+      background: transparent;
+    }
+
+    .office-modal-resizer {
+      position: absolute;
+      z-index: 5;
+      display: block;
+      touch-action: none;
+    }
+
+    .office-modal-resizer.is-right {
+      top: 42px;
+      right: -4px;
+      bottom: 12px;
+      width: 10px;
+      cursor: ew-resize;
+    }
+
+    .office-modal-resizer.is-bottom {
+      right: 12px;
+      bottom: -4px;
+      left: 0;
+      height: 10px;
+      cursor: ns-resize;
+    }
+
+    .office-modal-resizer.is-corner {
+      right: 0;
+      bottom: 0;
+      width: 22px;
+      height: 22px;
+      cursor: nwse-resize;
+    }
+
+    .office-modal-resizer.is-corner::after {
+      content: "";
+      position: absolute;
+      right: 6px;
+      bottom: 6px;
+      width: 9px;
+      height: 9px;
+      border-right: 2px solid color-mix(in srgb, var(--color-text) 42%, transparent);
+      border-bottom: 2px solid color-mix(in srgb, var(--color-text) 42%, transparent);
+      border-radius: 1px;
+    }
+
+    .modal-inner.office-modal.is-focus-mode .office-modal-resizer {
+      display: none;
+    }
+
+    .modal-inner.office-modal .modal-bd.office-modal-body,
     .modal-inner.office-modal .modal-bd.office-modal-body > x-component,
-    .modal-inner.office-modal .modal-bd.office-modal-body > div[x-data] {
+    .modal-inner.office-modal .modal-bd.office-modal-body > x-component > .office-panel {
       display: flex;
       flex: 1 1 auto;
-      width: 100%;
-      height: 100%;
       min-height: 0;
-    }
-
-    .modal-inner.office-modal .modal-bd.office-modal-body > x-component > .office-panel {
-      flex: 1 1 auto;
       height: 100%;
-      min-height: 0;
+      padding: 0;
     }
 
     .office-toolbar {
       display: flex;
       align-items: center;
-      gap: 6px;
-      min-height: 44px;
-      padding: 7px 9px;
-      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 66%, transparent);
-      background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
-      overflow-x: auto;
-    }
-
-    .office-tabs {
-      --office-tab-height: 34px;
-      --office-tab-close-size: 27px;
-      display: flex;
-      align-items: end;
-      gap: 4px;
-      min-height: 39px;
-      min-width: 0;
-      padding: 5px 9px 0;
-      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
-      background: color-mix(in srgb, var(--color-background) 92%, #000 8%);
+      flex-wrap: nowrap;
+      gap: 10px;
+      min-height: 58px;
+      padding: 9px 12px;
       overflow-x: auto;
       overflow-y: hidden;
       scrollbar-width: thin;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border), transparent 20%);
+      background: color-mix(in srgb, var(--color-background), var(--color-panel) 48%);
     }
 
-    .office-tabs::-webkit-scrollbar {
-      height: 4px;
-    }
-
-    .office-tabs::-webkit-scrollbar-track {
-      background: transparent;
-    }
-
-    .office-tabs::-webkit-scrollbar-thumb {
-      background: color-mix(in srgb, var(--color-border) 76%, transparent);
-      border-radius: 999px;
-    }
-
-    .office-tab-shell {
-      flex: 0 1 220px;
-      position: relative;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) var(--office-tab-close-size);
+    .office-tool-group {
+      display: flex;
       align-items: center;
-      gap: 3px;
-      min-width: 132px;
-      max-width: 260px;
-      height: var(--office-tab-height);
-      padding: 0 6px 0 10px;
-      border: 1px solid transparent;
-      border-radius: 7px 7px 0 0;
-      opacity: 0.72;
-      transition: border-color 0.16s ease, opacity 0.16s ease, background-color 0.16s ease;
-    }
-
-    .office-tab-shell:hover,
-    .office-tab-shell:focus-within {
-      opacity: 0.94;
-      border-color: color-mix(in srgb, var(--color-border) 78%, transparent);
-    }
-
-    .office-tab-shell.is-active {
-      z-index: 2;
-      margin-bottom: -1px;
-      opacity: 1;
-      border-color: color-mix(in srgb, var(--color-border) 68%, transparent);
-      background: color-mix(in srgb, var(--color-panel) 72%, transparent);
-    }
-
-    .office-tab,
-    .office-tab-close {
-      appearance: none;
-      border: 0;
-      background: transparent;
-      color: inherit;
-      font: inherit;
-      cursor: pointer;
-    }
-
-    .office-tab {
-      display: inline-flex;
-      align-items: center;
-      justify-content: flex-start;
-      gap: 8px;
-      min-width: 0;
-      width: 100%;
-      height: 100%;
-      padding: 0;
-      text-align: left;
-    }
-
-    .office-tab-icon {
       flex: 0 0 auto;
-      color: color-mix(in srgb, var(--color-text) 72%, var(--color-primary) 28%);
-      font-size: 18px;
-      line-height: 1;
-    }
-
-    .office-tab-title {
+      gap: 6px;
       min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 0.84rem;
-      font-weight: 650;
-    }
-
-    .office-tab-close {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: var(--office-tab-close-size);
-      min-width: var(--office-tab-close-size);
-      height: var(--office-tab-close-size);
-      min-height: var(--office-tab-close-size);
-      padding: 0;
-      border-radius: 6px;
-      color: color-mix(in srgb, var(--color-text) 52%, var(--color-primary) 48%);
-      opacity: 0.74;
-    }
-
-    .office-tab-close:hover,
-    .office-tab-close.confirming {
-      opacity: 1;
-      background: color-mix(in srgb, var(--color-background-hover) 70%, transparent);
-      color: var(--color-text);
-    }
-
-    .office-tab-close:focus-visible,
-    .office-tab:focus-visible {
-      outline: 1px solid color-mix(in srgb, var(--color-primary) 70%, transparent);
-      outline-offset: 1px;
-    }
-
-    .office-tab-close .material-symbols-outlined {
-      font-size: 15px;
-      line-height: 1;
     }
 
     .office-toolbar-spacer {
@@ -474,468 +453,530 @@
       min-width: 8px;
     }
 
-    .office-button,
+    .office-toolbar-divider {
+      width: 1px;
+      height: 24px;
+      margin: 0 4px;
+      background: color-mix(in srgb, var(--color-border), transparent 15%);
+    }
+
     .office-icon-button,
-    .office-health-pill,
-    .office-create-tile,
-    .office-document-card {
+    .office-tab,
+    .office-tab-close {
+      border: 1px solid color-mix(in srgb, var(--color-border), transparent 12%);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--color-panel), var(--color-background) 16%);
+      color: inherit;
+      transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+    }
+
+    .office-icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      min-width: 40px;
+      padding: 0;
+    }
+
+    .office-command-button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 7px;
-      border: 1px solid color-mix(in srgb, var(--color-border) 64%, transparent);
-      border-radius: 7px;
-      background: color-mix(in srgb, var(--color-panel) 80%, transparent);
-      color: var(--color-text);
-      font: inherit;
-      cursor: pointer;
-    }
-
-    .office-button {
-      min-height: 32px;
-      padding: 5px 9px;
-      font-size: 0.8rem;
+      width: auto;
+      max-width: 152px;
+      padding: 0 11px;
       white-space: nowrap;
     }
 
-    .office-icon-button {
-      width: 32px;
-      height: 32px;
-      min-width: 32px;
-      padding: 0;
+    .office-command-button .office-button-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
     }
 
-    .office-health-pill {
-      min-height: 28px;
-      padding: 4px 8px;
-      cursor: default;
-      font-size: 0.75rem;
-      text-transform: capitalize;
-      white-space: nowrap;
-      color: var(--color-text-muted);
-      background: color-mix(in srgb, var(--color-panel) 64%, transparent);
+    .office-icon-button.is-primary {
+      border-color: color-mix(in srgb, #2c7be5, var(--color-border) 20%);
+      background: color-mix(in srgb, #2c7be5, var(--color-panel) 82%);
     }
 
-    .office-health-pill.is-healthy {
-      width: 28px;
-      min-width: 28px;
-      padding: 0;
-      gap: 0;
+    .office-icon-button.is-active {
+      border-color: color-mix(in srgb, #2ca58d, var(--color-border) 24%);
+      background: color-mix(in srgb, #2ca58d, var(--color-panel) 84%);
     }
 
-    .office-health-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 999px;
-      background: color-mix(in srgb, var(--color-text-muted) 70%, transparent);
-    }
-
-    .office-health-pill.is-healthy .office-health-dot {
-      background: #31c48d;
-    }
-
-    .office-health-pill.is-installing .office-health-dot {
-      background: #f6ad55;
-    }
-
-    .office-health-pill.is-degraded .office-health-dot,
-    .office-health-pill.is-failed .office-health-dot {
-      background: #f05252;
-    }
-
-    .office-button:hover:not(:disabled),
     .office-icon-button:hover:not(:disabled),
-    .office-create-tile:hover,
-    .office-document-card:hover {
-      background: color-mix(in srgb, var(--color-background-hover) 70%, transparent);
-      border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+    .office-tab:hover,
+    .office-tab-close:hover {
+      border-color: color-mix(in srgb, #2c7be5, var(--color-border) 45%);
+      background: color-mix(in srgb, var(--color-panel), #2c7be5 8%);
     }
 
-    .office-button:disabled,
     .office-icon-button:disabled {
-      cursor: not-allowed;
+      cursor: default;
       opacity: 0.42;
     }
 
-    .office-button .material-symbols-outlined,
-    .office-icon-button .material-symbols-outlined {
-      font-size: 18px;
+    .office-icon-button .material-symbols-outlined,
+    .office-tab-icon,
+    .office-create-tile .material-symbols-outlined {
+      font-size: 21px;
+      line-height: 1;
     }
 
-    .office-status-line {
+    .office-zoom {
+      min-width: 44px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--color-text-secondary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .office-tabs {
+      display: flex;
+      gap: 6px;
+      min-height: 42px;
+      padding: 7px 10px;
+      overflow-x: auto;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border), transparent 22%);
+      background: color-mix(in srgb, var(--color-panel), var(--color-background) 28%);
+    }
+
+    .office-tab-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 28px;
+      align-items: center;
+      min-width: 150px;
+      max-width: 240px;
+    }
+
+    .office-tab-shell.is-system {
+      grid-template-columns: minmax(0, 1fr);
+      min-width: 172px;
+    }
+
+    .office-tab,
+    .office-tab-close {
+      height: 28px;
+      min-height: 28px;
+      border-radius: 7px;
+    }
+
+    .office-tab {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+      padding: 0 8px;
+      text-align: left;
+    }
+
+    .office-tab-shell.is-system .office-tab {
+      border-radius: 7px;
+    }
+
+    .office-tab-close {
+      display: grid;
+      place-items: center;
+      border-left: 0;
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+      padding: 0;
+    }
+
+    .office-tab-close .material-symbols-outlined {
+      font-size: 17px;
+    }
+
+    .office-tab-shell.is-active .office-tab,
+    .office-tab-shell.is-active .office-tab-close {
+      border-color: color-mix(in srgb, #2c7be5, var(--color-border) 36%);
+      background: color-mix(in srgb, #2c7be5, var(--color-panel) 88%);
+    }
+
+    .office-tab-shell.is-dirty .office-tab-title::after {
+      content: " *";
+      color: #2ca58d;
+    }
+
+    .office-tab-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+      line-height: 1;
+    }
+
+    .office-state-line {
       display: flex;
       align-items: center;
       gap: 8px;
-      min-height: 32px;
-      padding: 5px 10px;
-      border-bottom: 1px solid color-mix(in srgb, var(--color-border) 44%, transparent);
-      font-size: 0.82rem;
-      color: var(--color-text);
+      min-height: 34px;
+      padding: 6px 12px;
+      border-bottom: 1px solid color-mix(in srgb, var(--color-border), transparent 28%);
+      color: var(--color-text-secondary);
+      font-size: 12px;
     }
 
     .office-body {
       position: relative;
       display: flex;
       flex: 1 1 auto;
-      min-width: 0;
       min-height: 0;
       overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(44, 123, 229, 0.05), transparent 38%),
+        linear-gradient(180deg, rgba(44, 165, 141, 0.04), transparent 46%),
+        #eef2f7;
+      color: #172033;
     }
 
     .office-start {
-      display: flex;
       flex: 1 1 auto;
       min-width: 0;
-      min-height: 0;
-      flex-direction: column;
-      gap: 22px;
-      padding: 18px;
       overflow: auto;
-    }
-
-    .office-bootstrap {
-      display: flex;
-      flex: 1 1 auto;
-      min-width: 0;
-      min-height: 0;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 16px;
-      padding: clamp(24px, 7cqi, 56px);
-      overflow: auto;
-      text-align: center;
-    }
-
-    .office-setup-mark {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 58px;
-      height: 58px;
-      border: 1px solid color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
-      border-radius: 7px;
-      color: color-mix(in srgb, var(--color-primary) 70%, var(--color-text));
-      background: color-mix(in srgb, var(--color-panel) 78%, transparent);
-    }
-
-    .office-setup-mark.is-busy {
-      border-color: color-mix(in srgb, var(--color-primary) 42%, var(--color-border));
-    }
-
-    .office-setup-mark.is-alert {
-      border-color: color-mix(in srgb, #f05252 48%, var(--color-border));
-      color: #f05252;
-    }
-
-    .office-setup-mark .material-symbols-outlined {
-      font-size: 30px;
-      line-height: 1;
-    }
-
-    .office-setup-copy {
-      display: flex;
-      align-items: center;
-      min-width: 0;
-      flex-direction: column;
-      gap: 6px;
-      max-width: 460px;
-      line-height: 1.35;
-    }
-
-    .office-setup-copy > span {
-      color: var(--color-text-muted);
-      font-size: 0.74rem;
-      font-weight: 700;
-      letter-spacing: 0;
-      text-transform: uppercase;
-    }
-
-    .office-setup-copy > strong {
-      color: var(--color-text);
-      font-size: clamp(1.05rem, 4cqi, 1.35rem);
-      font-weight: 760;
-    }
-
-    .office-setup-copy > p {
-      margin: 0;
-      color: var(--color-text-muted);
-      font-size: 0.9rem;
-    }
-
-    .office-setup-progress {
-      position: relative;
-      width: min(260px, 72cqi);
-      height: 5px;
-      overflow: hidden;
-      border-radius: 999px;
-      background: color-mix(in srgb, var(--color-border) 45%, transparent);
-    }
-
-    .office-setup-progress > span {
-      position: absolute;
-      inset: 0 auto 0 0;
-      width: 42%;
-      border-radius: inherit;
-      background: color-mix(in srgb, var(--color-primary) 72%, var(--color-text) 28%);
-      animation: office-setup-progress 1.45s ease-in-out infinite;
-    }
-
-    .office-setup-progress.is-paused > span {
-      width: 100%;
-      opacity: 0.42;
-      animation: none;
-    }
-
-    .office-bootstrap-actions,
-    .office-template-grid {
-      display: flex;
-      justify-content: center;
-      flex-wrap: wrap;
-      gap: 8px;
+      padding: 22px;
     }
 
     .office-dashboard-section {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      width: 100%;
-      max-width: 1180px;
+      margin: 0 0 22px;
     }
 
     .office-dashboard-heading {
-      color: var(--color-text-muted);
-      font-size: 0.76rem;
+      margin: 0 0 9px;
+      color: #536274;
+      font-size: 12px;
       font-weight: 700;
-      letter-spacing: 0;
       text-transform: uppercase;
     }
 
-    .office-template-grid {
-      justify-content: flex-start;
-    }
-
+    .office-template-grid,
     .office-card-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
       gap: 10px;
-      width: 100%;
     }
 
     .office-create-tile {
-      min-width: 132px;
-      min-height: 88px;
-      flex-direction: column;
-      padding: 12px;
-      font-weight: 650;
+      display: grid;
+      grid-template-rows: 34px auto auto;
+      align-items: center;
+      min-height: 122px;
+      padding: 14px;
+      border: 1px solid #d9dee7;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #172033;
+      box-shadow: 0 12px 30px rgba(35, 48, 68, 0.08);
+      text-align: left;
+      transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
     }
 
-    .office-create-tile .material-symbols-outlined {
-      font-size: 28px;
+    .office-create-tile:hover,
+    .office-document-card:hover {
+      border-color: #8db5ef;
+      box-shadow: 0 18px 42px rgba(35, 48, 68, 0.13);
+      transform: translateY(-1px);
     }
+
+    .office-create-tile strong,
+    .office-card-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+
+    .office-create-tile small,
+    .office-document-card small {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #536274;
+      font-size: 11px;
+    }
+
+    .office-create-tile.is-markdown .material-symbols-outlined { color: #2ca58d; }
+    .office-create-tile.is-docx .material-symbols-outlined { color: #2c7be5; }
+    .office-create-tile.is-sheet .material-symbols-outlined { color: #8f6f19; }
+    .office-create-tile.is-deck .material-symbols-outlined { color: #b84a62; }
 
     .office-document-card {
       position: relative;
       display: grid;
-      grid-template-rows: auto auto auto;
-      align-content: start;
-      justify-content: stretch;
-      gap: 8px;
-      min-width: 0;
-      min-height: 196px;
+      grid-template-rows: 118px 18px 16px;
+      gap: 7px;
+      min-height: 172px;
       padding: 10px;
+      border: 1px solid #d9dee7;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #172033;
+      box-shadow: 0 12px 30px rgba(35, 48, 68, 0.08);
       text-align: left;
-      overflow: hidden;
-    }
-
-    .office-document-card.is-open {
-      border-color: color-mix(in srgb, var(--color-primary) 36%, var(--color-border));
+      transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
     }
 
     .office-card-badge {
       position: absolute;
-      top: 8px;
-      right: 8px;
-      z-index: 2;
-      max-width: calc(100% - 16px);
-      overflow: hidden;
-      padding: 2px 6px;
-      border: 1px solid color-mix(in srgb, var(--color-primary) 42%, transparent);
+      top: 9px;
+      right: 9px;
+      z-index: 1;
       border-radius: 999px;
-      background: color-mix(in srgb, var(--color-background) 82%, transparent);
-      color: var(--color-text);
-      font-size: 0.68rem;
+      padding: 2px 7px;
+      background: color-mix(in srgb, #2ca58d, var(--color-panel) 20%);
+      color: white;
+      font-size: 10px;
       font-weight: 700;
-      line-height: 1.2;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
 
     .office-card-preview {
-      position: relative;
-      display: grid;
-      align-items: stretch;
-      width: 100%;
-      aspect-ratio: 16 / 10;
-      min-height: 112px;
+      min-width: 0;
+      min-height: 0;
       overflow: hidden;
-      border: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
+      border: 1px solid #d9dee7;
       border-radius: 6px;
-      background: color-mix(in srgb, var(--color-background) 76%, #fff 4%);
+      background: #f8fafc;
+      color: #172033;
+    }
+
+    .office-card-preview.is-large {
+      width: min(720px, 100%);
+      min-height: 340px;
+      border-color: #d2d8e3;
+      background: #ffffff;
+      box-shadow: 0 18px 44px rgba(35, 48, 68, 0.12);
     }
 
     .office-page-preview,
     .office-sheet-preview,
     .office-slide-preview,
     .office-preview-fallback {
-      min-width: 0;
-      min-height: 0;
-    }
-
-    .office-page-preview {
       display: flex;
       flex-direction: column;
       gap: 5px;
-      padding: 12px 13px;
-      background:
-        linear-gradient(to bottom, transparent 0, transparent 21px, color-mix(in srgb, var(--color-border) 30%, transparent) 22px),
-        color-mix(in srgb, var(--color-panel) 72%, transparent);
-      background-size: 100% 22px;
-      color: var(--color-text);
+      height: 100%;
+      padding: 10px;
+      font-size: 11px;
+      line-height: 1.35;
     }
 
     .office-page-preview span,
+    .office-sheet-row span,
     .office-slide-line span,
-    .office-slide-line strong,
-    .office-sheet-row span {
+    .office-slide-line strong {
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    .office-page-preview span {
-      font-size: 0.7rem;
-      line-height: 1.25;
-    }
-
-    .office-sheet-preview {
-      min-width: 0;
-      padding: 8px;
-      background: color-mix(in srgb, var(--color-panel) 74%, transparent);
-    }
-
     .office-sheet-row {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      min-height: 20px;
-    }
-
-    .office-sheet-row + .office-sheet-row {
-      border-top: 1px solid color-mix(in srgb, var(--color-border) 34%, transparent);
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 5px;
     }
 
     .office-sheet-row span {
-      padding: 4px 5px;
-      border-right: 1px solid color-mix(in srgb, var(--color-border) 34%, transparent);
-      color: var(--color-text-muted);
-      font-size: 0.66rem;
-      line-height: 1.1;
-    }
-
-    .office-sheet-row span:last-child {
-      border-right: 0;
-    }
-
-    .office-slide-preview {
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      gap: 10px;
-      padding: 14px;
-      background:
-        linear-gradient(135deg, color-mix(in srgb, var(--color-panel) 80%, transparent), color-mix(in srgb, var(--color-background) 84%, var(--color-primary) 10%));
-    }
-
-    .office-slide-line {
-      display: flex;
-      min-width: 0;
-      flex-direction: column;
-      gap: 3px;
-    }
-
-    .office-slide-line strong {
-      color: var(--color-text);
-      font-size: 0.78rem;
-      font-weight: 760;
-      line-height: 1.15;
-    }
-
-    .office-slide-line span {
-      color: var(--color-text-muted);
-      font-size: 0.68rem;
-      line-height: 1.15;
+      border-bottom: 1px solid #d9dee7;
+      padding-bottom: 2px;
     }
 
     .office-preview-fallback {
-      display: flex;
       align-items: center;
       justify-content: center;
-      color: color-mix(in srgb, var(--color-primary) 64%, var(--color-text));
-      background: color-mix(in srgb, var(--color-panel) 76%, transparent);
+      color: #64748b;
     }
 
     .office-preview-fallback .material-symbols-outlined {
       font-size: 36px;
     }
 
-    .office-card-title {
-      display: block;
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: var(--color-text);
-      font-size: 0.86rem;
-      font-weight: 720;
-      line-height: 1.2;
-    }
-
-    .office-document-card small {
-      display: block;
-      min-width: 0;
-      overflow: hidden;
-      color: var(--color-text-muted);
-      font-size: 0.7rem;
-      line-height: 1.2;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .office-frame-wrap {
+    .office-editor-wrap {
       display: flex;
-      position: absolute;
-      inset: 0;
       flex: 1 1 auto;
-      width: 100%;
-      height: 100%;
+      flex-direction: column;
       min-width: 0;
       min-height: 0;
-      background: #fff;
     }
 
-    .office-frame-wrap iframe {
+    .office-editor-scroll {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      padding: 30px 24px;
+    }
+
+    .office-editor-scroll.is-desktop {
+      display: flex;
+      overflow: hidden;
+      padding: 0;
+      background: #1f2329;
+    }
+
+    .office-desktop-wrap {
+      display: flex;
       flex: 1 1 auto;
       width: 100%;
       height: 100%;
       min-width: 0;
       min-height: 0;
+      aspect-ratio: auto;
+      background: #1f2329;
+    }
+
+    .office-desktop-frame {
+      flex: 1 1 auto;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      aspect-ratio: auto;
       border: 0;
-      background: #fff;
+      background: #20242a;
+    }
+
+    .office-rich-editor,
+    .office-source-editor,
+    .office-docx-stage,
+    .office-preview-editor {
+      transform: scale(var(--office-zoom));
+      transform-origin: top center;
+      margin: 0 auto;
+    }
+
+    .office-rich-editor {
+      box-sizing: border-box;
+      width: min(760px, 100%);
+      min-height: min(980px, calc(100vh - 170px));
+      padding: 54px 58px;
+      border: 1px solid #d2d8e3;
+      border-radius: 8px;
+      outline: none;
+      background: #ffffff;
+      box-shadow: 0 18px 44px rgba(35, 48, 68, 0.16);
+      color: #1f2937;
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .office-rich-editor:focus,
+    .office-source-editor:focus,
+    .office-docx-pages:focus-within .office-docx-page:first-child,
+    .office-docx-pages:focus .office-docx-page:first-child {
+      border-color: #8db5ef;
+      box-shadow:
+        0 18px 44px rgba(35, 48, 68, 0.16),
+        0 0 0 3px rgba(44, 123, 229, 0.16);
+    }
+
+    .office-rich-editor h1,
+    .office-rich-editor h2,
+    .office-rich-editor h3 {
+      line-height: 1.25;
+      margin: 0 0 0.65em;
+    }
+
+    .office-rich-editor p,
+    .office-rich-editor ul,
+    .office-rich-editor table {
+      margin: 0 0 1em;
+    }
+
+    .office-rich-editor table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .office-rich-editor td,
+    .office-rich-editor th {
+      border: 1px solid #d9dee7;
+      padding: 6px 8px;
+    }
+
+    .office-source-editor {
+      box-sizing: border-box;
+      width: min(920px, 100%);
+      min-height: min(980px, calc(100vh - 170px));
+      padding: 22px;
+      border: 1px solid #d2d8e3;
+      border-radius: 8px;
+      outline: none;
+      background: #ffffff;
+      color: #172033;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.65;
+      resize: none;
+    }
+
+    .office-docx-stage {
+      width: min(860px, 100%);
+      outline: none;
+    }
+
+    .office-docx-pages {
+      outline: none;
+    }
+
+    .office-docx-pages.is-native {
+      display: grid;
+      gap: 20px;
+      justify-items: center;
+    }
+
+    .office-docx-page {
+      box-sizing: border-box;
+      width: min(760px, 100%);
+      min-height: 980px;
+      margin: 0 auto 20px;
+      padding: 70px 74px;
+      border: 1px solid #d2d8e3;
+      border-radius: 6px;
+      background: #ffffff;
+      box-shadow: 0 18px 44px rgba(35, 48, 68, 0.16);
+      color: #1f2937;
+      font-family: "Liberation Serif", "Times New Roman", serif;
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    .office-docx-page.is-native-tile {
+      width: auto;
+      min-height: 0;
+      padding: 0;
+      overflow: hidden;
+      line-height: 0;
+    }
+
+    .office-docx-page.is-native-tile img {
+      display: block;
+      width: min(920px, 100%);
+      height: auto;
+      user-select: none;
+    }
+
+    .office-docx-page p {
+      margin: 0 0 0.85em;
+    }
+
+    .office-preview-editor {
+      display: grid;
+      place-items: start center;
+      width: min(860px, 100%);
+      min-height: 420px;
+      padding: 18px;
     }
 
     .office-panel .spinning {
-      display: inline-block;
       animation: office-spin 0.8s linear infinite;
     }
 
@@ -943,48 +984,26 @@
       to { transform: rotate(360deg); }
     }
 
-    @keyframes office-setup-progress {
-      0% { transform: translateX(-110%); }
-      55% { transform: translateX(85%); }
-      100% { transform: translateX(250%); }
-    }
+    @container (max-width: 680px) {
+      .office-toolbar {
+        gap: 6px;
+        padding-inline: 8px;
+      }
 
-    @media (prefers-reduced-motion: reduce) {
-      .office-panel .spinning,
-      .office-setup-progress > span {
-        animation: none;
+      .office-command-button {
+        max-width: 132px;
+        padding-inline: 9px;
       }
-    }
 
-    @media (max-width: 520px) {
-      .office-button span:last-child {
-        display: none;
+      .office-template-grid,
+      .office-card-grid {
+        grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
       }
-      .office-health-pill span:last-child {
-        display: none;
-      }
-      .office-tab-shell {
-        flex-basis: 152px;
-        min-width: 116px;
-      }
-      .office-create-tile {
-        min-width: 104px;
-      }
-    }
 
-    @container (max-width: 560px) {
-      .office-button span:last-child {
-        display: none;
-      }
-      .office-health-pill span:last-child {
-        display: none;
-      }
-      .office-tab-shell {
-        flex-basis: 152px;
-        min-width: 116px;
-      }
-      .office-create-tile {
-        min-width: 104px;
+      .office-rich-editor,
+      .office-docx-page {
+        min-height: 720px;
+        padding: 34px 28px;
       }
     }
   </style>

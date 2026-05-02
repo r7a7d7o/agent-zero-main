@@ -51,11 +51,6 @@ const model = {
       await callJsExtensions("right_canvas_register_surfaces", this);
       this._registering = false;
       this.ensureActiveSurface();
-      if (this.isOpen && this.activeSurfaceId) {
-        globalThis.requestAnimationFrame?.(() => {
-          void this.open(this.activeSurfaceId, this._lastPayloadBySurface[this.activeSurfaceId] || {});
-        });
-      }
     }
   },
 
@@ -103,6 +98,9 @@ const model = {
     if (!surface) {
       return false;
     }
+    if (this.isMobileMode && !surface.actionOnly) {
+      return false;
+    }
     if (typeof surface.canOpen === "function" && surface.canOpen(payload) === false) {
       return false;
     }
@@ -143,6 +141,9 @@ const model = {
   },
 
   async dockSurface(surfaceId, payload = {}) {
+    if (this.isMobileMode) {
+      return false;
+    }
     const surface = this.getSurface(surfaceId);
     if (!surface) {
       return false;
@@ -228,6 +229,9 @@ const model = {
   },
 
   async toggleCanvas() {
+    if (this.isMobileMode) {
+      return false;
+    }
     if (this.isOpen) {
       await this.close();
       return false;
@@ -256,6 +260,7 @@ const model = {
     if (this.isOverlayMode || this.isMobileMode || !this.isOpen) return;
     if (event.button !== 0) return;
     event.preventDefault();
+    this.dispatchResizeEvent("right-canvas-resize-start");
 
     const onPointerMove = (moveEvent) => {
       const nextWidth = viewportWidth() - moveEvent.clientX;
@@ -264,13 +269,29 @@ const model = {
     const onPointerUp = () => {
       globalThis.removeEventListener("pointermove", onPointerMove);
       globalThis.removeEventListener("pointerup", onPointerUp);
+      globalThis.removeEventListener("pointercancel", onPointerUp);
       document.body.classList.remove("right-canvas-resizing");
       this.persist();
+      this.dispatchResizeEvent("right-canvas-resize-end");
     };
 
     document.body.classList.add("right-canvas-resizing");
     globalThis.addEventListener("pointermove", onPointerMove);
     globalThis.addEventListener("pointerup", onPointerUp);
+    globalThis.addEventListener("pointercancel", onPointerUp);
+  },
+
+  dispatchResizeEvent(name) {
+    try {
+      globalThis.dispatchEvent(new CustomEvent(name, {
+        detail: {
+          width: this.width,
+          activeSurfaceId: this.activeSurfaceId,
+        },
+      }));
+    } catch {
+      // Resize events are an optimization hook for embedded surfaces.
+    }
   },
 
   persist() {
@@ -292,7 +313,7 @@ const model = {
     this.width = this.defaultWidth();
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-      this.isOpen = Boolean(saved.isOpen);
+      this.isOpen = false;
       this.activeSurfaceId = String(saved.activeSurfaceId || "");
       if (saved.width) this.width = Number(saved.width);
     } catch (error) {
@@ -303,14 +324,28 @@ const model = {
 
   updateLayoutMode() {
     const width = viewportWidth();
+    const wasMobileMode = this.isMobileMode;
     this.isOverlayMode = width < DESKTOP_BREAKPOINT;
     this.isMobileMode = width <= MOBILE_BREAKPOINT;
+    if (this.isMobileMode) {
+      const wasOpen = this.isOpen;
+      const surface = wasOpen ? this.currentSurface() : null;
+      const payload = this._lastPayloadBySurface[this.activeSurfaceId] || {};
+      this.isOpen = false;
+      if (surface && wasOpen) {
+        globalThis.setTimeout?.(() => {
+          surface.close?.({ ...payload, reason: "mobile" });
+        }, 0);
+      }
+    } else if (wasMobileMode && this.width <= MIN_WIDTH) {
+      this.width = this.defaultWidth();
+    }
   },
 
   applyLayoutState() {
     this.updateLayoutMode();
     document.documentElement.style.setProperty("--right-canvas-width", `${this.width}px`);
-    document.body.classList.toggle("right-canvas-open", this.isOpen);
+    document.body.classList.toggle("right-canvas-open", this.isOpen && !this.isMobileMode);
     document.body.classList.toggle("right-canvas-overlay-mode", this.isOverlayMode);
     document.body.classList.toggle("right-canvas-mobile-mode", this.isMobileMode);
   },
@@ -346,6 +381,10 @@ const model = {
 
   activeTitle() {
     return this.currentSurface()?.title || "Canvas";
+  },
+
+  shouldRender() {
+    return !this.isMobileMode;
   },
 };
 
