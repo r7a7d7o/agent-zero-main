@@ -37,6 +37,17 @@ async function openBrowserCanvas(payload = {}) {
   }
 }
 
+async function browserAllowsToolAutofocus() {
+  try {
+    if (browserStore.allowsToolAutofocus) {
+      return await browserStore.allowsToolAutofocus();
+    }
+  } catch (error) {
+    console.warn("Browser autofocus setting could not be checked", error);
+  }
+  return true;
+}
+
 function parseBrowserResult(content) {
   if (!content || typeof content !== "string") return {};
   try {
@@ -75,17 +86,6 @@ function isFreshToolMessage(timestamp) {
   return Math.abs(Date.now() - messageMs) <= AUTO_OPEN_WINDOW_MS;
 }
 
-async function browserAllowsToolAutofocus() {
-  try {
-    if (browserStore.allowsToolAutofocus) {
-      return await browserStore.allowsToolAutofocus();
-    }
-  } catch (error) {
-    console.warn("Browser autofocus setting could not be checked", error);
-  }
-  return true;
-}
-
 function isBrowserCanvasAlreadyOpen() {
   return Boolean(
     rightCanvasStore?.isOpen
@@ -94,12 +94,24 @@ function isBrowserCanvasAlreadyOpen() {
   );
 }
 
+// Allowlist: only these actions sync an already-open viewer to the target tab.
+// Background work (evaluate, click, type, key_chord, mouse, multi, ...) does
+// not steal focus.
+const FOCUS_ACTIONS = new Set([
+  "open",
+  "navigate",
+  "set_active",
+  "setactive",
+  "activate",
+  "focus",
+]);
+
 function shouldSyncOpenBrowserCanvas(args, result) {
   if (!isBrowserCanvasAlreadyOpen()) return false;
   if (!isFreshToolMessage(args?.timestamp)) return false;
   const action = String(args?.kvps?.action || "").trim().toLowerCase().replace("-", "_");
-  if (["list", "content", "detail", "close", "close_all"].includes(action)) return false;
-  return Boolean(browserIdFromResult(result, args?.kvps || {}) || action === "open" || action === "navigate");
+  if (!FOCUS_ACTIONS.has(action)) return false;
+  return Boolean(browserIdFromResult(result, args?.kvps || {}));
 }
 
 function syncOpenBrowserCanvas(args, result) {
