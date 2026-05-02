@@ -539,17 +539,40 @@ def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
     assert "releaseSurfaceBindings()" in browser_store
     assert "this.releaseSurfaceBindings();" in browser_store
 
-    for js in (tool_handler, after_loop_handler):
-        assert "async function openBrowserCanvas" in js
-        assert "openBrowserModal" not in js
-        assert js.index('await rightCanvasStore.open("browser", payload);') < js.index("if (window.ensureModalOpen)")
+    assert "async function openBrowserCanvas" in tool_handler
+    assert "openBrowserModal" not in tool_handler
+    assert tool_handler.index('await rightCanvasStore.open("browser", payload);') < tool_handler.index("if (window.ensureModalOpen)")
+    assert "function syncOpenBrowserCanvas" in tool_handler
+    assert "function autoOpenBrowserCanvas" not in tool_handler
+    assert "function shouldSyncOpenBrowserCanvas" in tool_handler
+    assert "function isBrowserCanvasAlreadyOpen" in tool_handler
 
-    assert "function autoOpenBrowserCanvas" in tool_handler
+    assert "async function syncOpenBrowserCanvas" in after_loop_handler
+    assert "syncBrowserResultsIntoOpenCanvas" in after_loop_handler
+    assert "openBrowserCanvas" not in after_loop_handler
+    assert "BROWSER_MODAL" not in after_loop_handler
+
+    for js in (tool_handler, after_loop_handler):
+        assert "syncedBrowserCanvases" in js
+        assert "autoOpenedBrowsers" not in js
+        assert 'rightCanvasStore?.activeSurfaceId === "browser"' in js
+        assert "const FOCUS_ACTIONS = new Set" in js
+        assert "FOCUS_ACTIONS.has(action)" in js
 
     for js in (tool_handler, after_loop_handler, register_js, browser_store, modals_js):
         assert "globalThis.Alpine" not in js
         assert "Alpine?.store" not in js
         assert "Alpine.store" not in js
+
+
+def test_browser_tool_does_not_auto_open_canvas_policy_is_documented():
+    prompt = (
+        PROJECT_ROOT / "plugins" / "_browser" / "prompts" / "agent.system.tool.browser.md"
+    ).read_text(encoding="utf-8")
+
+    assert "optional visible WebUI viewer" in prompt
+    assert "must not open the right canvas automatically" in prompt
+    assert "Use the tool headlessly unless the user opens the Browser canvas" in prompt
 
 
 def test_browser_canvas_uses_plain_panel_without_debug_probe():
@@ -785,6 +808,14 @@ def test_browser_runtime_and_content_helper_expose_annotation_target():
     assert "annotate," in helper
     assert "sanitizeAnnotationDom" in helper
     assert "password" in helper
+
+
+def test_browser_runtime_requires_current_content_helper_for_modifier_clicks():
+    runtime = (
+        PROJECT_ROOT / "plugins" / "_browser" / "helpers" / "runtime.py"
+    ).read_text(encoding="utf-8")
+
+    assert "__spaceBrowserPageContent__?.boundingBoxFor" in runtime
 
 
 @pytest.mark.anyio
@@ -1447,6 +1478,33 @@ async def test_browser_viewer_annotation_dispatches_runtime(monkeypatch):
         "viewer_id": "viewer-1",
     }
     assert calls == [("annotation_target", (4, payload), {})]
+
+
+def test_browser_runtime_normalizes_multi_group_ids_and_modifiers():
+    core = _BrowserRuntimeCore("ctx")
+
+    assert core._multi_group_key({"browser_id": 7}) == 7
+    assert core._multi_group_key({"browser_id": "7"}) == 7
+    assert core._multi_group_key({"browser_id": "browser-7"}) == 7
+    assert core._multi_group_key({"browser_id": ""}) is None
+    assert core._normalize_modifiers("Control") == ["Control"]
+    assert core._normalize_modifiers(["Control", " Shift "]) == ["Control", "Shift"]
+    assert core._normalize_modifiers([]) is None
+
+    with pytest.raises(ValueError):
+        core._normalize_modifiers("Ctrl")
+
+
+def test_browser_runtime_background_focus_restores_previous_active_tab():
+    core = _BrowserRuntimeCore("ctx")
+    core.pages[1] = browser_runtime_module.BrowserPage(id=1, page=object())
+    core.pages[2] = browser_runtime_module.BrowserPage(id=2, page=object())
+
+    assert core._background_focus_target(previous_focus=1, fallback_id=2) == 1
+
+    core.pages.pop(1)
+
+    assert core._background_focus_target(previous_focus=1, fallback_id=2) == 2
 
 
 def test_browser_cleanup_extensions_follow_extensible_path_layout():

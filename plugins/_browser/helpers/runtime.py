@@ -369,6 +369,49 @@ class _BrowserRuntimeCore:
         if current is None or current == resolved_id:
             self.last_interacted_browser_id = int(resolved_id)
 
+    def _background_focus_target(
+        self,
+        previous_focus: int | None,
+        fallback_id: int,
+    ) -> int | None:
+        if previous_focus in self.pages:
+            return int(previous_focus)
+        if fallback_id in self.pages:
+            return int(fallback_id)
+        return next(iter(sorted(self.pages)), None)
+
+    def _normalize_modifiers(self, modifiers: list[str] | str | None) -> list[str] | None:
+        if modifiers is None:
+            return None
+        if isinstance(modifiers, str):
+            raw = [modifiers]
+        elif isinstance(modifiers, list):
+            raw = modifiers
+        else:
+            raise ValueError("modifiers must be a string or list")
+        normalized = [str(modifier).strip() for modifier in raw if str(modifier).strip()]
+        if not normalized:
+            return None
+        bad = set(normalized) - self._VALID_MODIFIERS
+        if bad:
+            raise ValueError(
+                f"unsupported modifiers: {sorted(bad)}; allowed: {sorted(self._VALID_MODIFIERS)}"
+            )
+        return normalized
+
+    @staticmethod
+    def _multi_group_key(call: dict[str, Any]) -> Any:
+        value = call.get("browser_id")
+        if value is None or str(value).strip() == "":
+            return None
+        raw = str(value).strip()
+        if raw.startswith("browser-"):
+            raw = raw.split("-", 1)[1]
+        try:
+            return int(raw)
+        except ValueError:
+            return raw
+
     @property
     def profile_dir(self) -> Path:
         return Path(files.get_abs_path("tmp/browser/sessions", self.safe_context_id))
@@ -560,7 +603,7 @@ class _BrowserRuntimeCore:
         for idx, call in enumerate(calls):
             if not isinstance(call, dict):
                 raise ValueError(f"calls[{idx}] is not an object")
-            key = call.get("browser_id")
+            key = self._multi_group_key(call)
             groups.setdefault(key, []).append((idx, call))
 
         results: list[dict[str, Any] | None] = [None] * len(calls)
@@ -615,7 +658,7 @@ class _BrowserRuntimeCore:
                 raise ValueError("click requires ref")
             return await self.click(
                 bid, ref,
-                modifiers=call.get("modifiers"),
+                modifiers=self._normalize_modifiers(call.get("modifiers")),
                 focus_popup=call.get("focus_popup"),
             )
         if action == "type":
@@ -650,7 +693,7 @@ class _BrowserRuntimeCore:
                 bid, call.get("event_type") or "click",
                 float(call.get("x") or 0), float(call.get("y") or 0),
                 button=call.get("button") or "left",
-                modifiers=call.get("modifiers"),
+                modifiers=self._normalize_modifiers(call.get("modifiers")),
             )
         if action == "close":
             return await self.close_browser(bid)
@@ -760,9 +803,10 @@ class _BrowserRuntimeCore:
         self,
         browser_id: int | str | None,
         reference_id: int | str,
-        modifiers: list[str] | None = None,
+        modifiers: list[str] | str | None = None,
         focus_popup: bool | None = None,
     ) -> dict[str, Any]:
+        modifiers = self._normalize_modifiers(modifiers)
         if modifiers:
             return await self._modifier_click(browser_id, reference_id, modifiers, focus_popup)
         return await self._reference_action("click", browser_id, reference_id)
@@ -774,13 +818,9 @@ class _BrowserRuntimeCore:
         modifiers: list[str],
         focus_popup: bool | None,
     ) -> dict[str, Any]:
-        bad = set(modifiers) - self._VALID_MODIFIERS
-        if bad:
-            raise ValueError(
-                f"unsupported modifiers: {sorted(bad)}; allowed: {sorted(self._VALID_MODIFIERS)}"
-            )
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
+        previous_focus = self.last_interacted_browser_id
         page = self._page(resolved_id)
         await self._ensure_content_helper(page)
 
@@ -843,17 +883,24 @@ class _BrowserRuntimeCore:
                     waiter.cancel()
 
             if opened_id is not None and background:
-                self._background_popup_pages.add(opened_id)
                 if self.last_interacted_browser_id == opened_id:
-                    # Force focus back to origin tab — popup hook had promoted.
-                    self.last_interacted_browser_id = int(resolved_id)
+                    # Force focus back to the tab that was active before the
+                    # background click; the popup hook may have promoted.
+                    self.last_interacted_browser_id = self._background_focus_target(
+                        previous_focus,
+                        resolved_id,
+                    )
         finally:
             if waiter in self._pending_popups:
                 self._pending_popups.remove(waiter)
 
         if background:
-            # Background-mode click: explicitly keep focus on origin.
-            self.last_interacted_browser_id = int(resolved_id)
+            # Background-mode click: preserve the pre-click focus even when
+            # the clicked tab itself was not active.
+            self.last_interacted_browser_id = self._background_focus_target(
+                previous_focus,
+                resolved_id,
+            )
         return {
             "action": {
                 "ref": reference_id,
@@ -1062,17 +1109,13 @@ class _BrowserRuntimeCore:
         x: float,
         y: float,
         button: str = "left",
-        modifiers: list[str] | None = None,
+        modifiers: list[str] | str | None = None,
     ) -> dict[str, Any]:
         event_type_lower = str(event_type or "click").lower()
+        modifiers = self._normalize_modifiers(modifiers)
         if modifiers:
             if event_type_lower != "click":
                 raise ValueError("modifiers are only valid for event_type='click'")
-            bad = set(modifiers) - self._VALID_MODIFIERS
-            if bad:
-                raise ValueError(
-                    f"unsupported modifiers: {sorted(bad)}; allowed: {sorted(self._VALID_MODIFIERS)}"
-                )
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
         page = self._page(resolved_id)
@@ -1342,7 +1385,7 @@ class _BrowserRuntimeCore:
 
     async def _ensure_content_helper(self, page: Any) -> None:
         has_helper = await page.evaluate(
-            "() => Boolean(globalThis.__spaceBrowserPageContent__?.capture && globalThis.__spaceBrowserPageContent__?.annotate)"
+            "() => Boolean(globalThis.__spaceBrowserPageContent__?.capture && globalThis.__spaceBrowserPageContent__?.annotate && globalThis.__spaceBrowserPageContent__?.boundingBoxFor)"
         )
         if has_helper:
             return
