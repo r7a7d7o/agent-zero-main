@@ -40,6 +40,30 @@ install_xpra_repo() {
 
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates wget
+  configure_xpra_repo "$uri" "$suite" "$arch"
+  apt-get update
+
+  if ! DEBIAN_FRONTEND=noninteractive apt-get install -s --no-install-recommends xpra xpra-x11 xpra-html5 >/tmp/xpra-install-check.log 2>&1; then
+    if [ "$arch" != "amd64" ]; then
+      echo "xpra packages are not installable from ${uri} ${suite} for ${arch}; falling back to https://xpra.org trixie"
+      configure_xpra_repo "https://xpra.org" "trixie" "$arch"
+      apt-get update
+      if ! DEBIAN_FRONTEND=noninteractive apt-get install -s --no-install-recommends xpra xpra-x11 xpra-html5 >/tmp/xpra-install-check.log 2>&1; then
+        cat /tmp/xpra-install-check.log
+        exit 1
+      fi
+    else
+      cat /tmp/xpra-install-check.log
+      exit 1
+    fi
+  fi
+}
+
+configure_xpra_repo() {
+  local uri="$1"
+  local suite="$2"
+  local arch="$3"
+
   wget -O /usr/share/keyrings/xpra.asc https://xpra.org/xpra.asc
   cat >/etc/apt/sources.list.d/xpra.sources <<EOF
 Types: deb
