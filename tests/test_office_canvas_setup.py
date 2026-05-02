@@ -321,7 +321,11 @@ def test_right_canvas_requires_explicit_open_and_is_absent_on_mobile():
     assert "body.right-canvas-mobile-mode .right-canvas" in canvas_css
     assert "display: none !important" in canvas_css
     assert "autoOpenOfficeCanvas" not in handler
-    assert "requestAnimationFrame" not in after_loop
+    assert "isOfficeCanvasAlreadyOpen" in after_loop
+    assert 'canvas?.isOpen && canvas?.activeSurfaceId === "office"' in after_loop
+    assert "office.openSession?.(" in after_loop
+    assert 'source: "tool-result-sync"' in after_loop
+    assert 'rightCanvas.open' not in after_loop
 
 
 def test_office_skills_preserve_markdown_first_and_opt_in_desktop_policy():

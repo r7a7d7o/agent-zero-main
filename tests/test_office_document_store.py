@@ -112,7 +112,21 @@ def test_xlsx_and_pptx_creation_and_direct_edits_still_work(office_state):
     assert rows[1][1] == 12500
     assert rows[2][0] == "Research"
 
-    deck = document_store.create_document("presentation", "Roadmap", "pptx", "Initial")
+    deck = document_store.create_document(
+        "presentation",
+        "Roadmap",
+        "pptx",
+        "Roadmap\nLaunch sequence\n\n---\n\nNext\nPolish rollout",
+    )
+    created_deck_read = artifact_editor.read_artifact(deck)
+    with zipfile.ZipFile(deck["path"]) as archive:
+        created_slide_names = [name for name in archive.namelist() if name.startswith("ppt/slides/slide") and name.endswith(".xml")]
+
+    assert created_deck_read["slide_count"] == 2
+    assert created_deck_read["slides"][0]["title"] == "Roadmap"
+    assert created_deck_read["slides"][1]["title"] == "Next"
+    assert len(created_slide_names) == 2
+
     updated_deck, deck_payload = artifact_editor.edit_artifact(
         deck,
         operation="set_slides",

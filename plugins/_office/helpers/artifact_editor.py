@@ -10,7 +10,7 @@ from typing import Any
 from xml.sax.saxutils import escape
 import xml.etree.ElementTree as ET
 
-from plugins._office.helpers import document_store
+from plugins._office.helpers import document_store, pptx_writer
 
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -1205,25 +1205,7 @@ def _slide_from_mapping(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _pptx_from_slides(slides: list[dict[str, Any]]) -> bytes:
-    if not slides:
-        slides = [{"title": "Presentation", "bullets": []}]
-
-    files: dict[str, str | bytes] = {
-        "[Content_Types].xml": _pptx_content_types(len(slides)),
-        "_rels/.rels": (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            f'<Relationships xmlns="{REL_NS}">'
-            '<Relationship Id="rId1" '
-            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
-            'Target="ppt/presentation.xml"/>'
-            "</Relationships>"
-        ),
-        "ppt/_rels/presentation.xml.rels": _pptx_presentation_rels(len(slides)),
-        "ppt/presentation.xml": _pptx_presentation_xml(len(slides)),
-    }
-    for index, slide in enumerate(slides, start=1):
-        files[f"ppt/slides/slide{index}.xml"] = _pptx_slide_xml(slide)
-    return _zip_map(files)
+    return pptx_writer.pptx_from_slides(slides)
 
 
 def _pptx_content_types(count: int) -> str:
