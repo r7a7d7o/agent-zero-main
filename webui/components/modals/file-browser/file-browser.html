@@ -96,6 +96,16 @@
                             <button
                               type="button"
                               class="dropdown-item"
+                              x-show="file.is_dir"
+                              @click="$store.fileBrowser.downloadFile(file)"
+                            >
+                              <span class="material-symbols-outlined">folder_zip</span>
+                              <span>Download ZIP</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              class="dropdown-item"
                               @click="$store.fileBrowser.openRenameModal(file)"
                             >
                               <span class="material-symbols-outlined">drive_file_rename_outline</span>
