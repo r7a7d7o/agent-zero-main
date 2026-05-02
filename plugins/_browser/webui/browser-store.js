@@ -2,6 +2,7 @@ import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
 import { getNamespacedClient } from "/js/websocket.js";
 import { getContext, setContext } from "/index.js";
+import { copyToClipboard } from "/components/messages/action-buttons/simple-action-buttons.js";
 import { store as chatInputStore } from "/components/chat/input/input-store.js";
 import { store as pluginSettingsStore } from "/components/plugins/plugin-settings-store.js";
 import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
@@ -24,6 +25,8 @@ const ANNOTATION_DRAG_THRESHOLD = 6;
 const ANNOTATION_MAX_COMMENTS = 24;
 const ANNOTATION_DOM_LIMIT = 1200;
 const ANNOTATION_TRAY_MARGIN = 10;
+const BROWSER_VISUAL_SHORTCUT_KEYS = new Set(["a", "c", "insert", "v", "x", "y", "z"]);
+const LOCAL_EDITABLE_SELECTOR = "input, textarea, select, [contenteditable]";
 
 function makeViewerToken() {
   return globalThis.crypto?.randomUUID?.()
@@ -52,6 +55,21 @@ function normalizeBool(value, fallback = true) {
   if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
   if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
   return fallback;
+}
+
+function elementFromTarget(target) {
+  if (!target) return null;
+  if (target.nodeType === 1) return target;
+  return target.parentElement || null;
+}
+
+function isLocalEditableTarget(target) {
+  const element = elementFromTarget(target);
+  const editable = element?.closest?.(LOCAL_EDITABLE_SELECTOR);
+  if (!editable) return false;
+  if (editable.matches?.("input, textarea, select")) return true;
+  const value = String(editable.getAttribute?.("contenteditable") || "").trim().toLowerCase();
+  return ["", "true", "plaintext-only"].includes(value);
 }
 
 function nextAnimationFrame() {
@@ -169,6 +187,7 @@ const model = {
   _closingBrowserIds: {},
   _configLoadedAt: 0,
   _configRefreshPromise: null,
+  _clipboardFallbackText: "",
 
   async refreshStatus() {
     this.status = await callJsonApi("/plugins/_browser/status", {});
@@ -1546,7 +1565,76 @@ const model = {
       return;
     }
 
+    if (this.handleVisualBrowserShortcut(event)) {
+      return;
+    }
+
     void this.sendKey(event);
+  },
+
+  handleVisualBrowserShortcut(event) {
+    const shortcut = this.visualBrowserShortcut(event);
+    if (!shortcut) return false;
+    event.preventDefault();
+    event.stopPropagation?.();
+
+    if (shortcut.action === "paste") {
+      void this.pasteHostClipboardToBrowser();
+      return true;
+    }
+    if (shortcut.action === "copy" || shortcut.action === "cut") {
+      void this.copyBrowserClipboardToHost(shortcut.action);
+      return true;
+    }
+    if (shortcut.key) {
+      void this.sendShortcut(shortcut.key);
+      return true;
+    }
+    return false;
+  },
+
+  visualBrowserShortcut(event) {
+    if (!this.shouldHandleVisualBrowserShortcut(event)) return null;
+    const key = String(event?.key || "").toLowerCase();
+    const primary = Boolean(event?.ctrlKey || event?.metaKey);
+    const shift = Boolean(event?.shiftKey);
+
+    if (!primary && shift && key === "insert") {
+      return { action: "paste" };
+    }
+    if (!primary || event?.altKey) return null;
+
+    if (key === "v") return { action: "paste" };
+    if (!shift && (key === "c" || key === "insert")) return { action: "copy" };
+    if (!shift && key === "x") return { action: "cut" };
+    if (!shift && key === "a") return { key: "Control+A" };
+    if (key === "z") return { key: shift ? "Control+Shift+Z" : "Control+Z" };
+    if (!shift && key === "y") return { key: "Control+Y" };
+    return null;
+  },
+
+  shouldHandleVisualBrowserShortcut(event) {
+    if (!this._surfaceMounted || !this.activeBrowserId || this.annotating) return false;
+    if (isLocalEditableTarget(event?.target)) return false;
+    const key = String(event?.key || "").toLowerCase();
+    if (!BROWSER_VISUAL_SHORTCUT_KEYS.has(key)) return false;
+    return Boolean(this.visualBrowserStageForEvent(event));
+  },
+
+  visualBrowserStageForEvent(event) {
+    const element = elementFromTarget(event?.target);
+    const blockingUi = element?.closest?.(
+      ".browser-toolbar, .browser-meta, .browser-extension-dropdown, .browser-annotation-popover, .browser-annotation-tray, button, a",
+    );
+    if (blockingUi) return null;
+
+    const stage = element?.closest?.(".browser-stage");
+    if (stage?.closest?.(".browser-panel")) return stage;
+
+    const activeElement = globalThis.document?.activeElement;
+    const activeStage = activeElement?.closest?.(".browser-stage");
+    if (activeStage?.closest?.(".browser-panel")) return activeStage;
+    return null;
   },
 
   handleStageWheel(event) {
@@ -2182,6 +2270,83 @@ const model = {
       key: printable ? "" : event.key,
       text: printable ? event.key : "",
     });
+  },
+
+  async sendShortcut(key) {
+    const contextId = this.normalizeContextId(this.activeBrowserContextId || this.contextId);
+    if (!contextId || !this.activeBrowserId || !key) return;
+    await websocket.emit("browser_viewer_input", {
+      context_id: contextId,
+      browser_id: this.activeBrowserId,
+      viewer_id: this._viewerToken,
+      input_type: "keyboard",
+      key,
+      text: "",
+    });
+  },
+
+  async pasteHostClipboardToBrowser() {
+    try {
+      const text = await this.readHostClipboardText();
+      if (!text) return;
+      await this.sendClipboard("paste", text);
+    } catch (error) {
+      this.error = "Browser paste needs clipboard permission in this tab.";
+      globalThis.justToast?.(this.error, "warning", 2200, "browser-clipboard");
+      console.warn("Browser clipboard paste failed", error);
+    }
+  },
+
+  async copyBrowserClipboardToHost(action = "copy") {
+    try {
+      const clipboard = await this.sendClipboard(action);
+      const text = String(clipboard?.text || clipboard?.clipboard_text || "");
+      if (!text) return;
+      await copyToClipboard(text);
+      this._clipboardFallbackText = text;
+      const message = action === "cut" ? "Cut from Browser" : "Copied from Browser";
+      globalThis.justToast?.(message, "success", 1200, "browser-clipboard");
+    } catch (error) {
+      this.error = action === "cut"
+        ? "Browser cut failed."
+        : "Browser copy failed.";
+      globalThis.justToast?.(this.error, "warning", 1800, "browser-clipboard");
+      console.warn("Browser clipboard copy failed", error);
+    }
+  },
+
+  async readHostClipboardText() {
+    const clipboard = globalThis.navigator?.clipboard;
+    if (clipboard?.readText && globalThis.isSecureContext) {
+      try {
+        return await clipboard.readText();
+      } catch (error) {
+        if (this._clipboardFallbackText) return this._clipboardFallbackText;
+        throw error;
+      }
+    }
+    return this._clipboardFallbackText || "";
+  },
+
+  async sendClipboard(action = "copy", text = "") {
+    const contextId = this.normalizeContextId(this.activeBrowserContextId || this.contextId);
+    if (!contextId || !this.activeBrowserId) return {};
+    const response = await websocket.request(
+      "browser_viewer_input",
+      {
+        context_id: contextId,
+        browser_id: this.activeBrowserId,
+        viewer_id: this._viewerToken,
+        input_type: "clipboard",
+        action,
+        text,
+      },
+      { timeoutMs: 10000 },
+    );
+    const data = firstOk(response);
+    this.applyActiveFrameState(data.state);
+    this.applySnapshot(data.snapshot);
+    return data.clipboard || {};
   },
 
   async cleanup() {

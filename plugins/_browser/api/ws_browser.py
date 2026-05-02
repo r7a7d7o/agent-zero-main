@@ -249,6 +249,13 @@ class WsBrowser(WsHandler):
                     key=str(data.get("key") or ""),
                     text=str(data.get("text") or ""),
                 )
+            elif input_type == "clipboard":
+                result = await runtime.call(
+                    "clipboard",
+                    browser_id,
+                    action=str(data.get("action") or ""),
+                    text=str(data.get("text") or ""),
+                )
             elif input_type == "viewport":
                 result = await runtime.call(
                     "set_viewport",
@@ -270,6 +277,15 @@ class WsBrowser(WsHandler):
                 return self._error("UNKNOWN_INPUT", f"Unknown browser input: {input_type}", data)
         except Exception as exc:
             return self._error("INPUT_FAILED", str(exc), data)
+
+        if input_type == "clipboard":
+            response = {
+                "state": result.get("state") if isinstance(result, dict) else result,
+                "snapshot": None,
+            }
+            if isinstance(result, dict):
+                response["clipboard"] = result.get("clipboard")
+            return response
 
         return {
             "state": result,

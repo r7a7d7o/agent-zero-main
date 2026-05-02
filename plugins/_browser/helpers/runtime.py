@@ -37,6 +37,243 @@ SCREENCAST_MAX_WIDTH = 4096
 SCREENCAST_MAX_HEIGHT = 4096
 VIEWPORT_SIZE_TOLERANCE = 4
 VIEWPORT_REMOUNT_PAUSE_SECONDS = 0.05
+CLIPBOARD_BRIDGE_SCRIPT = r"""
+(payload) => {
+  const action = String(payload?.action || "").trim().toLowerCase();
+  const text = String(payload?.text || "");
+  const result = {
+    action,
+    text: "",
+    changed: false,
+    default_prevented: false,
+    handled: false,
+    method: "dom",
+  };
+  const textInputTypes = new Set([
+    "",
+    "email",
+    "number",
+    "password",
+    "search",
+    "tel",
+    "text",
+    "url",
+  ]);
+
+  function deepestActiveElement() {
+    let active = document.activeElement || document.body || document.documentElement;
+    while (active?.shadowRoot?.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    return active || document.body || document.documentElement;
+  }
+
+  function editableTarget(element) {
+    if (!element) return null;
+    if (isTextControl(element) || element.isContentEditable) return element;
+    const closest = element.closest?.("input, textarea, [contenteditable]");
+    if (closest && (isTextControl(closest) || closest.isContentEditable)) return closest;
+    return element;
+  }
+
+  function isTextControl(element) {
+    if (!element) return false;
+    const tagName = String(element.tagName || "").toLowerCase();
+    if (tagName === "textarea") {
+      return !element.disabled && !element.readOnly;
+    }
+    if (tagName !== "input") return false;
+    const type = String(element.type || "text").toLowerCase();
+    return textInputTypes.has(type) && !element.disabled && !element.readOnly;
+  }
+
+  function selectedText(element) {
+    if (isTextControl(element)) {
+      try {
+        const start = Number(element.selectionStart);
+        const end = Number(element.selectionEnd);
+        if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+          return String(element.value || "").slice(start, end);
+        }
+      } catch {}
+      return "";
+    }
+    const selection = globalThis.getSelection?.();
+    return selection ? String(selection.toString() || "") : "";
+  }
+
+  function makeClipboardData(seedText = "") {
+    let transfer = null;
+    try {
+      transfer = new DataTransfer();
+    } catch {}
+    if (transfer && seedText) {
+      transfer.setData("text/plain", seedText);
+      transfer.setData("text", seedText);
+    }
+    return transfer;
+  }
+
+  function clipboardDataText(transfer) {
+    if (!transfer) return "";
+    return String(transfer.getData("text/plain") || transfer.getData("text") || "");
+  }
+
+  function makeClipboardEvent(type, transfer) {
+    let event = null;
+    try {
+      event = new ClipboardEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: transfer,
+      });
+    } catch {}
+    if (!event) {
+      event = new Event(type, { bubbles: true, cancelable: true });
+    }
+    if (transfer && !event.clipboardData) {
+      try {
+        Object.defineProperty(event, "clipboardData", { value: transfer });
+      } catch {}
+    }
+    return event;
+  }
+
+  function dispatchClipboardEvent(target, type, seedText = "") {
+    const transfer = makeClipboardData(seedText);
+    const event = makeClipboardEvent(type, transfer);
+    (target || document.body || document.documentElement).dispatchEvent(event);
+    return {
+      defaultPrevented: Boolean(event.defaultPrevented),
+      text: clipboardDataText(event.clipboardData || transfer),
+    };
+  }
+
+  function dispatchInputEvent(element, type, inputType, data = null) {
+    let event = null;
+    try {
+      event = new InputEvent(type, {
+        bubbles: true,
+        cancelable: type === "beforeinput",
+        inputType,
+        data,
+      });
+    } catch {}
+    if (!event) {
+      event = new Event(type, {
+        bubbles: true,
+        cancelable: type === "beforeinput",
+      });
+    }
+    return element.dispatchEvent(event);
+  }
+
+  function insertIntoTextControl(element, value) {
+    if (!isTextControl(element)) return false;
+    let start = 0;
+    let end = 0;
+    try {
+      start = Number(element.selectionStart);
+      end = Number(element.selectionEnd);
+    } catch {
+      return false;
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+    if (!dispatchInputEvent(element, "beforeinput", "insertFromPaste", value)) {
+      return false;
+    }
+    element.setRangeText(value, start, end, "end");
+    dispatchInputEvent(element, "input", "insertFromPaste", value);
+    return true;
+  }
+
+  function insertIntoContentEditable(element, value) {
+    if (!element?.isContentEditable) return false;
+    if (!dispatchInputEvent(element, "beforeinput", "insertFromPaste", value)) {
+      return false;
+    }
+    const selection = globalThis.getSelection?.();
+    if (!selection || selection.rangeCount === 0) return false;
+    try {
+      if (document.queryCommandSupported?.("insertText") && document.execCommand("insertText", false, value)) {
+        return true;
+      }
+    } catch {}
+    const range = selection.getRangeAt(0);
+    range.deleteContents();
+    const node = document.createTextNode(value);
+    range.insertNode(node);
+    range.setStartAfter(node);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    dispatchInputEvent(element, "input", "insertFromPaste", value);
+    return true;
+  }
+
+  function insertText(element, value) {
+    return insertIntoTextControl(element, value) || insertIntoContentEditable(element, value);
+  }
+
+  function removeSelectedText(element) {
+    if (isTextControl(element)) {
+      let start = 0;
+      let end = 0;
+      try {
+        start = Number(element.selectionStart);
+        end = Number(element.selectionEnd);
+      } catch {
+        return false;
+      }
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return false;
+      if (!dispatchInputEvent(element, "beforeinput", "deleteByCut", null)) {
+        return false;
+      }
+      element.setRangeText("", start, end, "start");
+      dispatchInputEvent(element, "input", "deleteByCut", null);
+      return true;
+    }
+    if (!element?.isContentEditable) return false;
+    const selection = globalThis.getSelection?.();
+    if (!selection || selection.rangeCount === 0 || !String(selection.toString() || "")) {
+      return false;
+    }
+    if (!dispatchInputEvent(element, "beforeinput", "deleteByCut", null)) {
+      return false;
+    }
+    selection.deleteFromDocument();
+    dispatchInputEvent(element, "input", "deleteByCut", null);
+    return true;
+  }
+
+  const target = editableTarget(deepestActiveElement());
+  if (action === "paste") {
+    const event = dispatchClipboardEvent(target, "paste", text);
+    result.default_prevented = event.defaultPrevented;
+    result.handled = true;
+    result.text = text;
+    if (!event.defaultPrevented) {
+      result.changed = insertText(target, text);
+    }
+    return result;
+  }
+
+  if (action === "copy" || action === "cut") {
+    const selectionText = selectedText(target);
+    const event = dispatchClipboardEvent(target, action, selectionText);
+    result.default_prevented = event.defaultPrevented;
+    result.text = event.text || selectionText;
+    result.handled = Boolean(result.text || event.defaultPrevented);
+    if (action === "cut" && result.text && !event.defaultPrevented) {
+      result.changed = removeSelectedText(target);
+    }
+    return result;
+  }
+
+  result.error = `Unsupported clipboard action: ${action}`;
+  return result;
+}
+"""
 
 _SPECIAL_SCHEME_RE = re.compile(r"^(?:about|blob|data|file|mailto|tel):", re.I)
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z\d+\-.]*://", re.I)
@@ -956,6 +1193,61 @@ class _BrowserRuntimeCore:
     ) -> dict[str, Any]:
         return await self._reference_action("typeSubmit", browser_id, reference_id, text)
 
+    async def clipboard(
+        self,
+        browser_id: int | str | None,
+        *,
+        action: str,
+        text: str = "",
+    ) -> dict[str, Any]:
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action not in {"copy", "cut", "paste"}:
+            raise ValueError(f"Unsupported clipboard action: {normalized_action}")
+
+        clipboard_result: dict[str, Any]
+        try:
+            clipboard_result = await page.evaluate(
+                CLIPBOARD_BRIDGE_SCRIPT,
+                {
+                    "action": normalized_action,
+                    "text": str(text or ""),
+                },
+            ) or {}
+        except Exception as exc:
+            clipboard_result = {
+                "action": normalized_action,
+                "text": "",
+                "changed": False,
+                "default_prevented": False,
+                "handled": False,
+                "error": str(exc),
+            }
+
+        if (
+            normalized_action == "paste"
+            and text
+            and not clipboard_result.get("changed")
+            and not clipboard_result.get("default_prevented")
+        ):
+            if await self._insert_clipboard_text(page, str(text)):
+                clipboard_result["changed"] = True
+                clipboard_result["method"] = "keyboard.insert_text"
+        elif normalized_action in {"copy", "cut"} and not clipboard_result.get("text"):
+            with contextlib.suppress(Exception):
+                shortcut = "Control+C" if normalized_action == "copy" else "Control+X"
+                await page.keyboard.press(shortcut)
+                clipboard_result["keyboard_shortcut"] = True
+
+        await self._settle(page, short=True)
+        self._maybe_promote(resolved_id)
+        return {
+            "state": await self._state(resolved_id),
+            "clipboard": clipboard_result,
+        }
+
     async def close_browser(self, browser_id: int | str | None = None) -> dict[str, Any]:
         await self.ensure_started()
         resolved_id = self._resolve_browser_id(browser_id)
@@ -1174,6 +1466,16 @@ class _BrowserRuntimeCore:
         await self._settle(page, short=True)
         self._maybe_promote(resolved_id)
         return await self._state(resolved_id)
+
+    async def _insert_clipboard_text(self, page: Any, text: str) -> bool:
+        if not text:
+            return False
+        insert_text = getattr(page.keyboard, "insert_text", None)
+        if callable(insert_text):
+            await insert_text(str(text))
+        else:
+            await page.keyboard.type(str(text))
+        return True
 
     async def close(self, delete_profile: bool = False) -> None:
         self._closing = True

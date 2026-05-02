@@ -869,6 +869,41 @@ def test_browser_annotate_mode_ui_and_prompt_hooks():
     assert "value=\\\"[redacted]\\\"" in browser_store
 
 
+def test_browser_visual_mode_bridges_clipboard_shortcuts():
+    browser_store = (
+        PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js"
+    ).read_text(encoding="utf-8")
+    runtime = (
+        PROJECT_ROOT / "plugins" / "_browser" / "helpers" / "runtime.py"
+    ).read_text(encoding="utf-8")
+    ws_browser = (
+        PROJECT_ROOT / "plugins" / "_browser" / "api" / "ws_browser.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'import { copyToClipboard } from "/components/messages/action-buttons/simple-action-buttons.js";' in browser_store
+    assert "BROWSER_VISUAL_SHORTCUT_KEYS" in browser_store
+    assert "handleVisualBrowserShortcut(event)" in browser_store
+    assert "visualBrowserStageForEvent(event)" in browser_store
+    assert "isLocalEditableTarget(event?.target)" in browser_store
+    assert 'return { action: "paste" };' in browser_store
+    assert 'return { action: "copy" };' in browser_store
+    assert 'return { action: "cut" };' in browser_store
+    assert 'return { key: "Control+A" };' in browser_store
+    assert 'return { key: shift ? "Control+Shift+Z" : "Control+Z" };' in browser_store
+    assert 'input_type: "clipboard"' in browser_store
+    assert "pasteHostClipboardToBrowser()" in browser_store
+    assert "copyBrowserClipboardToHost" in browser_store
+    assert "Browser paste needs clipboard permission in this tab." in browser_store
+
+    assert "CLIPBOARD_BRIDGE_SCRIPT" in runtime
+    assert "async def clipboard" in runtime
+    assert "insertFromPaste" in runtime
+    assert "deleteByCut" in runtime
+    assert "keyboard.insert_text" in runtime
+    assert 'input_type == "clipboard"' in ws_browser
+    assert 'runtime.call(\n                    "clipboard"' in ws_browser
+
+
 def test_browser_runtime_and_content_helper_expose_annotation_target():
     runtime = (
         PROJECT_ROOT / "plugins" / "_browser" / "helpers" / "runtime.py"
@@ -1459,6 +1494,100 @@ async def test_browser_runtime_remounts_initial_changed_viewport():
 
 
 @pytest.mark.anyio
+async def test_browser_runtime_clipboard_paste_uses_dom_bridge():
+    eval_payloads = []
+    settled = []
+
+    class FakeKeyboard:
+        def __init__(self):
+            self.inserted = []
+
+        async def insert_text(self, text):
+            self.inserted.append(text)
+
+    class FakePage:
+        url = "about:blank"
+
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
+
+        async def evaluate(self, script, payload=None):
+            if payload is not None:
+                eval_payloads.append((script, payload))
+                return {
+                    "action": "paste",
+                    "text": payload["text"],
+                    "changed": True,
+                    "default_prevented": False,
+                }
+            return 1
+
+        async def title(self):
+            return "Blank"
+
+    page = FakePage()
+    core = _BrowserRuntimeCore("ctx")
+    core.context = object()
+    core.pages[7] = browser_runtime_module.BrowserPage(id=7, page=page)
+
+    async def fake_settle(_page, short=False):
+        settled.append(short)
+
+    core._settle = fake_settle
+
+    result = await core.clipboard(7, action="paste", text="hello")
+
+    assert result["state"]["id"] == 7
+    assert result["clipboard"]["changed"] is True
+    assert result["clipboard"]["text"] == "hello"
+    assert eval_payloads[0][1] == {"action": "paste", "text": "hello"}
+    assert "insertFromPaste" in eval_payloads[0][0]
+    assert page.keyboard.inserted == []
+    assert settled == [True]
+
+
+@pytest.mark.anyio
+async def test_browser_runtime_clipboard_paste_falls_back_to_keyboard_insert_text():
+    class FakeKeyboard:
+        def __init__(self):
+            self.inserted = []
+
+        async def insert_text(self, text):
+            self.inserted.append(text)
+
+    class FakePage:
+        url = "about:blank"
+
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
+
+        async def evaluate(self, script, payload=None):
+            if payload is not None:
+                return {
+                    "action": "paste",
+                    "text": payload["text"],
+                    "changed": False,
+                    "default_prevented": False,
+                }
+            return 1
+
+        async def title(self):
+            return "Blank"
+
+    page = FakePage()
+    core = _BrowserRuntimeCore("ctx")
+    core.context = object()
+    core.pages[7] = browser_runtime_module.BrowserPage(id=7, page=page)
+    core._settle = lambda _page, short=False: asyncio.sleep(0)
+
+    result = await core.clipboard(7, action="paste", text="hello")
+
+    assert result["clipboard"]["changed"] is True
+    assert result["clipboard"]["method"] == "keyboard.insert_text"
+    assert page.keyboard.inserted == ["hello"]
+
+
+@pytest.mark.anyio
 async def test_browser_viewer_wheel_input_dispatches_scroll(monkeypatch):
     calls = []
 
@@ -1499,6 +1628,54 @@ async def test_browser_viewer_wheel_input_dispatches_scroll(monkeypatch):
         "snapshot": None,
     }
     assert calls == [("wheel", (3, 320.0, 480.0, 0.0, 640.0), {})]
+
+
+@pytest.mark.anyio
+async def test_browser_viewer_clipboard_input_dispatches_runtime(monkeypatch):
+    calls = []
+    clipboard = {"action": "paste", "text": "hello", "changed": True}
+
+    class FakeRuntime:
+        async def call(self, method, *args, **kwargs):
+            calls.append((method, args, kwargs))
+            return {
+                "state": {"id": args[0], "currentUrl": "about:blank"},
+                "clipboard": clipboard,
+            }
+
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx"
+        assert create is False
+        return FakeRuntime()
+
+    monkeypatch.setattr(ws_browser_module, "get_runtime", fake_get_runtime)
+
+    handler = ws_browser_module.WsBrowser(
+        SimpleNamespace(),
+        threading.RLock(),
+        manager=None,
+    )
+
+    result = await handler.process(
+        "browser_viewer_input",
+        {
+            "context_id": "ctx",
+            "browser_id": 3,
+            "input_type": "clipboard",
+            "action": "paste",
+            "text": "hello",
+        },
+        "sid-1",
+    )
+
+    assert result == {
+        "state": {"id": 3, "currentUrl": "about:blank"},
+        "clipboard": clipboard,
+        "snapshot": None,
+    }
+    assert calls == [
+        ("clipboard", (3,), {"action": "paste", "text": "hello"})
+    ]
 
 
 @pytest.mark.anyio
