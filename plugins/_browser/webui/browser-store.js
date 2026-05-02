@@ -1242,6 +1242,27 @@ const model = {
     }
   },
 
+  async openUrlIntent(url = "", options = {}) {
+    if (this._openPromise) {
+      try {
+        await this._openPromise;
+      } catch {}
+    }
+    if (!this._surfaceMounted) return false;
+    const targetUrl = String(url || "").trim();
+    if (targetUrl) {
+      await this.command("open", {
+        url: targetUrl,
+        source: options?.source || "desktop-url",
+      });
+      return true;
+    }
+    if (!this.activeBrowserId) {
+      await this.command("open");
+    }
+    return true;
+  },
+
   onAddressFocus() {
     this.addressFocused = true;
   },

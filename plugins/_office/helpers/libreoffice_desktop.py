@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import fcntl
 import hashlib
 import json
 import os
@@ -57,6 +58,9 @@ DESKTOP_FOLDER_LINKS = (
     ("Agents", ("usr", "agents")),
     ("Downloads", ("usr", "downloads")),
 )
+URL_INTENT_MAX_ITEMS = 50
+URL_INTENT_MAX_LENGTH = 8192
+URL_HANDLER_DESKTOP_ID = "agent-zero-browser.desktop"
 OOR_NS = "http://openoffice.org/2001/registry"
 XS_NS = "http://www.w3.org/2001/XMLSchema"
 XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
@@ -186,11 +190,34 @@ class LibreOfficeDesktopManager:
         session = self.get(session_id) if session_id else self._find_by_file_id(file_id)
         if not session:
             return {"ok": False, "error": "LibreOffice desktop session not found."}
+        if not _url_bridge_script_path(session).exists():
+            try:
+                self._prepare_desktop_url_bridge(session)
+                self._refresh_xfce_desktop(session)
+            except Exception:
+                pass
+        url_intents = self.claim_url_intents(session.session_id)
         doc = self._document_for_save(session, file_id)
         if not doc:
-            return {"ok": True, "session_id": session.session_id, "desktop": session.public()}
+            return {
+                "ok": True,
+                "session_id": session.session_id,
+                "desktop": session.public(),
+                "url_intents": url_intents,
+            }
         updated = document_store.register_document(doc["path"])
-        return {"ok": True, "session_id": session.session_id, "document": _public_doc(updated)}
+        return {
+            "ok": True,
+            "session_id": session.session_id,
+            "document": _public_doc(updated),
+            "url_intents": url_intents,
+        }
+
+    def claim_url_intents(self, session_id: str = SYSTEM_SESSION_ID) -> list[dict[str, Any]]:
+        session = self.get(session_id) or self.get(SYSTEM_SESSION_ID)
+        if not session:
+            return []
+        return _claim_url_intents(session)
 
     def retarget_document(self, file_id: str, doc: dict[str, Any]) -> dict[str, Any]:
         session = self._find_by_file_id(file_id)
@@ -329,6 +356,8 @@ class LibreOfficeDesktopManager:
     def _ensure_system_desktop_locked(self) -> DesktopSession:
         existing = self._sessions.get(SYSTEM_SESSION_ID)
         if existing and existing.alive():
+            self._prepare_desktop_url_bridge(existing)
+            self._refresh_xfce_desktop(existing)
             return existing
 
         status = collect_desktop_status()
@@ -523,20 +552,9 @@ class LibreOfficeDesktopManager:
             encoding="utf-8",
         )
         _write_thunar_defaults(xfce_conf_dir / "thunar.xml")
-        helpers_rc = config_dir / "xfce4" / "helpers.rc"
-        helpers_rc.parent.mkdir(parents=True, exist_ok=True)
-        helpers_rc.write_text(
-            "\n".join(
-                [
-                    "TerminalEmulator=xfce4-terminal",
-                    "FileManager=thunar",
-                    "",
-                ],
-            ),
-            encoding="utf-8",
-        )
         self._hide_xpra_desktop_entries(applications_dir)
         self._hide_xfce_menu_entries(applications_dir)
+        self._prepare_desktop_url_bridge(session)
 
         base_args = (
             soffice,
@@ -607,6 +625,55 @@ class LibreOfficeDesktopManager:
         self._trust_desktop_launchers(session, desktop_dir)
         self._prepare_xfce_panel_config(session)
         self._prepare_xfce_profile_autostart(session)
+
+    def _prepare_desktop_url_bridge(self, session: DesktopSession) -> None:
+        desktop_dir = session.profile_dir / "Desktop"
+        config_dir = session.profile_dir / ".config"
+        data_dir = session.profile_dir / ".local" / "share"
+        applications_dir = data_dir / "applications"
+        desktop_dir.mkdir(parents=True, exist_ok=True)
+        config_dir.mkdir(parents=True, exist_ok=True)
+        applications_dir.mkdir(parents=True, exist_ok=True)
+
+        browser_bridge = _write_url_bridge_script(session)
+        helpers_rc = config_dir / "xfce4" / "helpers.rc"
+        helpers_rc.parent.mkdir(parents=True, exist_ok=True)
+        helpers_rc.write_text(
+            "\n".join(
+                [
+                    "TerminalEmulator=xfce4-terminal",
+                    "FileManager=thunar",
+                    "WebBrowser=agent-zero-browser",
+                    "",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        _write_xfce_browser_helper(
+            config_dir / "xfce4" / "helpers" / "agent-zero-browser.desktop",
+            browser_bridge,
+        )
+        _write_mimeapps_defaults(config_dir / "mimeapps.list", URL_HANDLER_DESKTOP_ID)
+        _write_mimeapps_defaults(data_dir / "applications" / "mimeapps.list", URL_HANDLER_DESKTOP_ID)
+        _write_desktop_launcher(
+            applications_dir / URL_HANDLER_DESKTOP_ID,
+            name="Agent Zero Browser",
+            exec_line=_desktop_exec(browser_bridge, "%U"),
+            icon="web-browser",
+            categories="Network;WebBrowser;",
+            try_exec=str(browser_bridge),
+            mime_types=_url_handler_mime_types(),
+            no_display=True,
+        )
+        _write_desktop_launcher(
+            desktop_dir / "Browser.desktop",
+            name="Browser",
+            exec_line=_desktop_exec(browser_bridge),
+            icon="web-browser",
+            categories="Network;WebBrowser;",
+            try_exec=str(browser_bridge),
+        )
+        self._trust_desktop_launchers(session, desktop_dir)
 
     def _hide_xpra_desktop_entries(self, applications_dir: Path) -> None:
         for filename in HIDDEN_XPRA_DESKTOP_ENTRIES:
@@ -908,6 +975,9 @@ fi
             "HOME": str(session.profile_dir),
             "LANG": os.environ.get("LANG") or "C.UTF-8",
         }
+        browser_bridge = _url_bridge_script_path(session)
+        if browser_bridge.exists():
+            env["BROWSER"] = str(browser_bridge)
         env.setdefault("XDG_RUNTIME_DIR", str(STATE_DIR / "xdg-runtime"))
         runtime_dir = Path(env["XDG_RUNTIME_DIR"])
         runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -1187,6 +1257,161 @@ def _ensure_desktop_folder_link(desktop_dir: Path, label: str, target: Path) -> 
         return
 
 
+def _url_bridge_dir(session: DesktopSession) -> Path:
+    return session.profile_dir / ".agent-zero"
+
+
+def _url_bridge_script_path(session: DesktopSession) -> Path:
+    return _url_bridge_dir(session) / "open-url"
+
+
+def _url_bridge_queue_path(session: DesktopSession) -> Path:
+    return _url_bridge_dir(session) / "browser-url-intents.jsonl"
+
+
+def _url_bridge_lock_path(session: DesktopSession) -> Path:
+    return _url_bridge_dir(session) / "browser-url-intents.lock"
+
+
+def _write_url_bridge_script(session: DesktopSession) -> Path:
+    bridge_dir = _url_bridge_dir(session)
+    bridge_dir.mkdir(parents=True, exist_ok=True)
+    script = _url_bridge_script_path(session)
+    queue = _url_bridge_queue_path(session)
+    lock = _url_bridge_lock_path(session)
+    script.write_text(
+        f"""#!/usr/bin/env python3
+import fcntl
+import json
+import os
+import sys
+import time
+
+QUEUE_PATH = {str(queue)!r}
+LOCK_PATH = {str(lock)!r}
+MAX_URL_LENGTH = {URL_INTENT_MAX_LENGTH}
+
+
+def main():
+    urls = [str(arg or "").strip()[:MAX_URL_LENGTH] for arg in sys.argv[1:] if str(arg or "").strip()]
+    if not urls:
+        urls = [""]
+    os.makedirs(os.path.dirname(QUEUE_PATH), exist_ok=True)
+    with open(LOCK_PATH, "a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        with open(QUEUE_PATH, "a", encoding="utf-8") as queue_file:
+            for url in urls:
+                queue_file.write(json.dumps({{
+                    "url": url,
+                    "created_at": time.time(),
+                    "source": "desktop",
+                }}, ensure_ascii=True) + "\\n")
+            queue_file.flush()
+            os.fsync(queue_file.fileno())
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+if __name__ == "__main__":
+    main()
+""",
+        encoding="utf-8",
+    )
+    try:
+        script.chmod(0o755)
+    except OSError:
+        pass
+    return script
+
+
+def _claim_url_intents(session: DesktopSession) -> list[dict[str, Any]]:
+    queue = _url_bridge_queue_path(session)
+    lock = _url_bridge_lock_path(session)
+    if not queue.exists():
+        return []
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(lock, "a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                raw = queue.read_text(encoding="utf-8")
+                queue.write_text("", encoding="utf-8")
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+    except OSError:
+        return []
+
+    intents: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        url = str(payload.get("url") or "").strip()
+        if len(url) > URL_INTENT_MAX_LENGTH:
+            url = url[:URL_INTENT_MAX_LENGTH]
+        created_at = payload.get("created_at")
+        try:
+            created_at = float(created_at)
+        except (TypeError, ValueError):
+            created_at = time.time()
+        intents.append(
+            {
+                "url": url,
+                "created_at": created_at,
+                "source": str(payload.get("source") or "desktop"),
+            },
+        )
+        if len(intents) >= URL_INTENT_MAX_ITEMS:
+            break
+    return intents
+
+
+def _url_handler_mime_types() -> tuple[str, ...]:
+    return (
+        "x-scheme-handler/http",
+        "x-scheme-handler/https",
+        "text/html",
+        "application/xhtml+xml",
+    )
+
+
+def _write_mimeapps_defaults(path: Path, desktop_id: str) -> None:
+    associations = ";".join([desktop_id, ""])
+    lines = [
+        "[Default Applications]",
+        *(f"{mime_type}={desktop_id}" for mime_type in _url_handler_mime_types()),
+        "",
+        "[Added Associations]",
+        *(f"{mime_type}={associations}" for mime_type in _url_handler_mime_types()),
+        "",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_xfce_browser_helper(path: Path, bridge_script: Path) -> None:
+    command = _desktop_exec(bridge_script)
+    command_with_parameter = _desktop_exec(bridge_script, "%s")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "[Desktop Entry]",
+                "NoDisplay=true",
+                "Version=1.0",
+                "Type=X-XFCE-Helper",
+                "X-XFCE-Category=WebBrowser",
+                f"X-XFCE-Commands={command}",
+                f"X-XFCE-CommandsWithParameter={command_with_parameter}",
+                "Icon=web-browser",
+                "Name=Agent Zero Browser",
+                "",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+
 def _remove_path_if_owned(path: Path) -> None:
     try:
         if path.is_symlink() or path.is_file():
@@ -1293,6 +1518,8 @@ def _write_desktop_launcher(
     categories: str,
     try_exec: str = "",
     working_dir: str | Path | None = None,
+    mime_types: tuple[str, ...] = (),
+    no_display: bool = False,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -1306,6 +1533,10 @@ def _write_desktop_launcher(
         lines.append(f"TryExec={try_exec}")
     if working_dir:
         lines.append(f"Path={working_dir}")
+    if mime_types:
+        lines.append(f"MimeType={';'.join(mime_types)};")
+    if no_display:
+        lines.append("NoDisplay=true")
     lines.extend(
         [
             f"Icon={icon}",

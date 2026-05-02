@@ -18,6 +18,14 @@ the old and the new system. */
   display: block;
 }
 
+.modal.modal-floating {
+  pointer-events: none;
+}
+
+.modal.modal-floating .modal-inner {
+  pointer-events: auto;
+}
+
 .modal-inner {
   display: flex;
   flex-direction: column;

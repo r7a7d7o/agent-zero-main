@@ -2,6 +2,8 @@ import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
 import { getNamespacedClient } from "/js/websocket.js";
 import { store as fileBrowserStore } from "/components/modals/file-browser/file-browser-store.js";
+import { store as rightCanvasStore } from "/components/canvas/right-canvas-store.js";
+import { store as browserStore } from "/plugins/_browser/webui/browser-store.js";
 
 const officeSocket = getNamespacedClient("/ws");
 officeSocket.addHandlers(["ws_webui"]);
@@ -13,6 +15,9 @@ const DESKTOP_RESIZE_DELAY_MS = 80;
 const XPRA_DESKTOP_PRIME_INTERVAL_MS = 220;
 const XPRA_DESKTOP_PRIME_ATTEMPTS = 120;
 const SYSTEM_DESKTOP_FILE_ID = "system-desktop";
+const BROWSER_MODAL_PATH = "/plugins/_browser/webui/main.html";
+const OFFICE_MODAL_PATH = "/plugins/_office/webui/main.html";
+const URL_INTENT_PANEL_TIMEOUT_MS = 5000;
 const MAX_HISTORY = 80;
 
 function currentContextId() {
@@ -57,6 +62,46 @@ function isEditableInputTarget(target) {
   if (editable.tagName !== "INPUT") return true;
   const type = String(editable.getAttribute("type") || "text").toLowerCase();
   return !["button", "checkbox", "color", "file", "image", "radio", "range", "reset", "submit"].includes(type);
+}
+
+function normalizeModalPath(path = "") {
+  return String(path || "").replace(/^\/+/, "");
+}
+
+function isModalPathOpen(path = "") {
+  const normalized = normalizeModalPath(path);
+  return Boolean(
+    globalThis.isModalOpen?.(path)
+    || globalThis.isModalOpen?.(`/${normalized}`)
+    || globalThis.isModalOpen?.(normalized)
+  );
+}
+
+function waitForElementByPredicate(predicate, timeoutMs = URL_INTENT_PANEL_TIMEOUT_MS) {
+  const found = predicate();
+  if (found) return Promise.resolve(found);
+  return new Promise((resolve) => {
+    const timeout = globalThis.setTimeout(() => {
+      observer.disconnect();
+      resolve(predicate());
+    }, timeoutMs);
+    const observer = new MutationObserver(() => {
+      const element = predicate();
+      if (!element) return;
+      globalThis.clearTimeout(timeout);
+      observer.disconnect();
+      resolve(element);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+}
+
+function browserPanelForMode(mode = "modal") {
+  const panels = Array.from(document.querySelectorAll(".browser-panel"));
+  if (mode === "canvas") {
+    return panels.find((panel) => panel.closest?.('[data-surface-id="browser"]')) || null;
+  }
+  return panels.find((panel) => panel.closest?.(".modal")) || null;
 }
 
 function placeCaretAtEnd(element) {
@@ -182,6 +227,8 @@ const model = {
   _desktopKeyboardCleanup: null,
   _desktopClipboardCleanup: null,
   _desktopStarting: null,
+  _desktopUrlIntentBusy: false,
+  _desktopUrlIntentQueue: [],
 
   async init(element = null) {
     return await this.onMount(element, { mode: "canvas" });
@@ -1574,6 +1621,94 @@ const model = {
     }
   },
 
+  async handleDesktopUrlIntents(intents = []) {
+    const incoming = Array.isArray(intents)
+      ? intents.filter((intent) => intent && typeof intent === "object")
+      : [];
+    if (!incoming.length) return;
+    this._desktopUrlIntentQueue.push(...incoming);
+    if (this._desktopUrlIntentBusy) return;
+
+    this._desktopUrlIntentBusy = true;
+    try {
+      while (this._desktopUrlIntentQueue.length) {
+        const intent = this._desktopUrlIntentQueue.shift();
+        await this.openDesktopUrlIntent(intent);
+      }
+    } finally {
+      this._desktopUrlIntentBusy = false;
+    }
+  },
+
+  async openDesktopUrlIntent(intent = {}) {
+    const url = String(intent?.url || "").trim();
+    const destination = this.browserDestinationForDesktopUrl();
+    if (destination === "canvas") {
+      await this.openBrowserCanvasForDesktopUrl(url);
+    } else {
+      await this.openBrowserModalForDesktopUrl(url);
+    }
+    this.setMessage(url ? "Opened link in Browser" : "Opened Browser");
+  },
+
+  browserDestinationForDesktopUrl() {
+    if (this.isDesktopInModal()) return "canvas";
+    return "modal";
+  },
+
+  isDesktopInModal() {
+    if (isModalPathOpen(OFFICE_MODAL_PATH)) return true;
+    const modalDesktop = Array.from(document.querySelectorAll(".office-panel"))
+      .some((panel) => panel.closest?.(".modal") && panel.querySelector?.("[data-office-desktop-frame]"));
+    if (modalDesktop) return true;
+    if (rightCanvasStore?.isOpen && rightCanvasStore.activeSurfaceId === "office") return false;
+    return this._mode === "modal";
+  },
+
+  async openBrowserCanvasForDesktopUrl(url = "") {
+    if (rightCanvasStore?.isMobileMode) {
+      await this.openBrowserModalForDesktopUrl(url);
+      return;
+    }
+    const payload = { url, source: "desktop-url" };
+    let opened = false;
+    if (isModalPathOpen(BROWSER_MODAL_PATH)) {
+      opened = await rightCanvasStore.dockSurface?.("browser", {
+        ...payload,
+        modalPath: BROWSER_MODAL_PATH,
+        sourceModalPath: BROWSER_MODAL_PATH,
+      });
+    } else {
+      opened = await rightCanvasStore.open?.("browser", payload);
+    }
+    if (!opened) {
+      await this.openBrowserModalForDesktopUrl(url);
+      return;
+    }
+    if (browserStore?.openUrlIntent) {
+      await browserStore.openUrlIntent(url);
+    }
+  },
+
+  async openBrowserModalForDesktopUrl(url = "") {
+    if (rightCanvasStore?.isOpen && rightCanvasStore.activeSurfaceId === "browser") {
+      await rightCanvasStore.openModalSurface?.("browser", { modalPath: BROWSER_MODAL_PATH });
+    } else {
+      const openModal = globalThis.ensureModalOpen || globalThis.openModal;
+      const modalPromise = openModal?.(BROWSER_MODAL_PATH);
+      if (modalPromise?.catch) {
+        modalPromise.catch((error) => console.error("Browser modal open failed", error));
+      }
+    }
+    const panel = await waitForElementByPredicate(() => browserPanelForMode("modal"));
+    if (panel && browserStore?.onOpen) {
+      await browserStore.onOpen(panel, { mode: "modal" });
+    }
+    if (browserStore?.openUrlIntent) {
+      await browserStore.openUrlIntent(url);
+    }
+  },
+
   startDesktopMonitor() {
     this.stopDesktopMonitor();
     if (!this.hasOfficialOffice()) return;
@@ -1593,6 +1728,7 @@ const model = {
         });
         if (response?.ok === false) throw new Error(response.error || "Desktop session closed.");
         this._desktopHeartbeatMisses = 0;
+        await this.handleDesktopUrlIntents(response?.url_intents);
         if (response?.document) {
           const document = normalizeDocument(response.document);
           this.replaceActiveSession({
@@ -1673,12 +1809,14 @@ const model = {
 
   setupFloatingModal(element = null) {
     const root = element || globalThis.document?.querySelector(".office-panel");
+    const modal = root?.closest?.(".modal");
     const inner = root?.closest?.(".modal-inner");
     const body = root?.closest?.(".modal-bd");
     const header = inner?.querySelector?.(".modal-header");
     if (!inner || !body || !header || inner.dataset.officeModalReady === "1") return;
 
     inner.dataset.officeModalReady = "1";
+    modal?.classList?.add("modal-floating", "modal-no-backdrop");
     inner.classList.add("office-modal", "modal-no-backdrop");
     body.classList.add("office-modal-body");
     header.style.cursor = "move";
@@ -1927,6 +2065,7 @@ const model = {
     }
     this._floatingCleanup = () => {
       cleanup.splice(0).reverse().forEach((entry) => entry());
+      modal?.classList?.remove("modal-floating", "modal-no-backdrop");
       inner.classList.remove("is-dragging", "is-resizing", "is-focus-mode");
       this._desktopResizeSuspended = false;
       this._desktopResizePending = false;
