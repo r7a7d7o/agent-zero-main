@@ -1,7 +1,7 @@
 (() => {
   const GLOBAL_KEY = "__spaceBrowserPageContent__";
   const DOM_HELPER_KEY = "__spaceBrowserDomHelper__";
-  const VERSION = "7";
+  const VERSION = "8";
   const BLOCK_TAGS = new Set([
     "ADDRESS",
     "ARTICLE",
@@ -518,6 +518,82 @@
     return String(element?.tagName || "").toUpperCase();
   }
 
+  function expandSlotNodes(node) {
+    if (!isElementNode(node) || getTagName(node) !== "SLOT" || typeof node.assignedNodes !== "function") {
+      return [node];
+    }
+
+    try {
+      const assignedNodes = [...(node.assignedNodes({ flatten: true }) || [])].filter(Boolean);
+      if (assignedNodes.length) {
+        return assignedNodes.flatMap((assignedNode) => expandSlotNodes(assignedNode));
+      }
+    } catch {
+      // Fall through to the slot's fallback children.
+    }
+
+    return [...(node.childNodes || [])].flatMap((childNode) => expandSlotNodes(childNode));
+  }
+
+  function getReadableChildNodes(element) {
+    const shadowRoot = element?.shadowRoot;
+    if (shadowRoot) {
+      const shadowNodes = [...(shadowRoot.childNodes || [])].flatMap((childNode) => expandSlotNodes(childNode));
+      if (shadowNodes.length) {
+        return shadowNodes;
+      }
+    }
+
+    return [...(element?.childNodes || [])].flatMap((childNode) => expandSlotNodes(childNode));
+  }
+
+  function getReadableElementChildren(element) {
+    return getReadableChildNodes(element).filter((childNode) => isElementNode(childNode));
+  }
+
+  function getReadableNodeText(node) {
+    if (isTextNode(node)) {
+      return node.textContent || "";
+    }
+
+    if (!isElementNode(node) || isHiddenElement(node)) {
+      return "";
+    }
+
+    return getReadableChildNodes(node)
+      .map((childNode) => getReadableNodeText(childNode))
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  function querySelectorAllDeep(selector, root = globalThis.document) {
+    const results = [];
+    const seen = new Set();
+
+    const addResult = (element) => {
+      if (element && !seen.has(element)) {
+        seen.add(element);
+        results.push(element);
+      }
+    };
+
+    const visitRoot = (scope) => {
+      if (!scope || typeof scope.querySelectorAll !== "function") {
+        return;
+      }
+
+      [...(scope.querySelectorAll(selector) || [])].forEach(addResult);
+      [...(scope.querySelectorAll("*") || [])].forEach((element) => {
+        if (element.shadowRoot) {
+          visitRoot(element.shadowRoot);
+        }
+      });
+    };
+
+    visitRoot(root);
+    return results;
+  }
+
   function getAttributeNamesSafe(element) {
     try {
       if (typeof element?.getAttributeNames === "function") {
@@ -968,7 +1044,8 @@
   }
 
   function getElementText(element) {
-    return normalizeText(element?.textContent || "");
+    const readableText = normalizeText(getReadableNodeText(element));
+    return readableText || normalizeText(element?.textContent || "");
   }
 
   function collectLabelCandidates(element, options = {}) {
@@ -1473,7 +1550,7 @@
   function renderInlineChildren(element, context) {
     const parts = [];
 
-    element.childNodes.forEach((childNode) => {
+    getReadableChildNodes(element).forEach((childNode) => {
       const renderedChild = renderInlineNode(childNode, context);
       if (renderedChild) {
         parts.push(renderedChild);
@@ -1522,7 +1599,7 @@
     const inlineParts = [];
     const nestedBlocks = [];
 
-    element.childNodes.forEach((childNode) => {
+    getReadableChildNodes(element).forEach((childNode) => {
       if (isElementNode(childNode) && (getTagName(childNode) === "UL" || getTagName(childNode) === "OL")) {
         const nestedList = renderList(childNode, context, depth + 1);
         if (nestedList) {
@@ -1548,7 +1625,7 @@
 
   function renderList(element, context, depth = 0) {
     const ordered = getTagName(element) === "OL";
-    return [...element.children]
+    return getReadableElementChildren(element)
       .filter((child) => getTagName(child) === "LI" && !isHiddenElement(child))
       .map((item, index) => renderListItem(item, context, depth, index, ordered))
       .filter(Boolean)
@@ -1661,7 +1738,7 @@
       }
     };
 
-    element.childNodes.forEach((childNode) => {
+    getReadableChildNodes(element).forEach((childNode) => {
       if (isTextNode(childNode)) {
         const rawTextContent = normalizeText(childNode.textContent || "");
         if (shouldDropReadableText(rawTextContent)) {
@@ -1732,7 +1809,9 @@
       items: selectors.map((selector) => {
         let targets = [];
         try {
-          targets = [...(doc?.querySelectorAll?.(selector) || [])];
+          targets = doc === globalThis.document
+            ? querySelectorAllDeep(selector, doc)
+            : [...(doc?.querySelectorAll?.(selector) || [])];
         } catch (error) {
           throw createNamedError(
             "BrowserPageContentSelectorError",
