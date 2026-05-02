@@ -73,21 +73,42 @@
               <div class="browser-config-empty">No installed extensions found.</div>
             </template>
             <template x-for="extension in $store.browserConfig.extensionsList" :key="extension.path">
-              <label class="browser-config-extension-row" :title="extension.path">
+              <div class="browser-config-extension-row" :title="extension.path">
                 <span class="browser-config-extension-text">
                   <span class="browser-config-extension-name" x-text="extension.name || 'Unnamed extension'"></span>
                   <span class="browser-config-extension-meta" x-text="$store.browserConfig.extensionVersionLabel(extension)"></span>
                 </span>
-                <span class="browser-config-toggle">
-                  <input
-                    type="checkbox"
-                    :checked="$store.browserConfig.extensionEnabled(extension)"
-                    @change="$store.browserConfig.setExtensionEnabled(extension, $event.target.checked)"
-                  />
-                  <span class="browser-config-switch"></span>
+                <span class="browser-config-extension-actions">
+                  <label class="browser-config-toggle">
+                    <input
+                      type="checkbox"
+                      :checked="$store.browserConfig.extensionEnabled(extension)"
+                      :disabled="$store.browserConfig.extensionDeleteLoadingPath === extension.path"
+                      @change="$store.browserConfig.setExtensionEnabled(extension, $event.target.checked)"
+                    />
+                    <span class="browser-config-switch"></span>
+                  </label>
+                  <button
+                    type="button"
+                    class="browser-config-extension-delete"
+                    :disabled="!$store.browserConfig.extensionCanDelete(extension) || $store.browserConfig.extensionDeleteLoadingPath === extension.path"
+                    :title="$store.browserConfig.extensionDeleteTitle(extension)"
+                    :aria-label="'Delete ' + (extension.name || 'extension')"
+                    @click.stop="$store.browserConfig.deleteExtension(extension)"
+                  >
+                    <span
+                      class="material-symbols-outlined"
+                      :class="{ spinning: $store.browserConfig.extensionDeleteLoadingPath === extension.path }"
+                      x-text="$store.browserConfig.extensionDeleteLoadingPath === extension.path ? 'progress_activity' : 'delete'"
+                    ></span>
+                  </button>
                 </span>
-              </label>
+              </div>
             </template>
+            <div class="browser-config-note browser-config-success" x-show="$store.browserConfig.extensionsMessage">
+              <span class="material-symbols-outlined">check_circle</span>
+              <span x-text="$store.browserConfig.extensionsMessage"></span>
+            </div>
             <div class="browser-config-note" x-show="$store.browserConfig.extensionsError">
               <span class="material-symbols-outlined">error</span>
               <span x-text="$store.browserConfig.extensionsError"></span>
@@ -238,6 +259,12 @@
       font-weight: 650;
     }
 
+    .browser-config-extension-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .browser-config-toggle {
       position: relative;
       display: inline-flex;
@@ -253,6 +280,10 @@
       margin: 0;
       opacity: 0;
       cursor: pointer;
+    }
+
+    .browser-config-toggle input:disabled {
+      cursor: wait;
     }
 
     .browser-config-switch {
@@ -285,6 +316,40 @@
       transform: translateX(18px);
     }
 
+    .browser-config-toggle input:disabled + .browser-config-switch {
+      opacity: 0.58;
+    }
+
+    .browser-config-extension-delete {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      min-width: 28px;
+      height: 28px;
+      min-height: 28px;
+      padding: 0;
+      border: 1px solid color-mix(in srgb, #be123c 30%, var(--color-border));
+      border-radius: 7px;
+      background: transparent;
+      color: color-mix(in srgb, #be123c 78%, var(--color-text));
+      cursor: pointer;
+    }
+
+    .browser-config-extension-delete:hover:not(:disabled) {
+      background: color-mix(in srgb, #be123c 12%, var(--color-background));
+      color: #be123c;
+    }
+
+    .browser-config-extension-delete:disabled {
+      cursor: not-allowed;
+      opacity: 0.48;
+    }
+
+    .browser-config-extension-delete .material-symbols-outlined {
+      font-size: 17px;
+    }
+
     .browser-config-note {
       display: flex;
       align-items: flex-start;
@@ -294,6 +359,11 @@
       background: color-mix(in srgb, var(--color-panel) 82%, transparent);
       color: var(--color-text-secondary);
       font-size: var(--font-size-small);
+    }
+
+    .browser-config-note.browser-config-success {
+      background: color-mix(in srgb, #15803d 12%, var(--color-background));
+      color: color-mix(in srgb, var(--color-text) 88%, #166534);
     }
 
     .browser-config-warning {

@@ -16,6 +16,7 @@ from plugins._browser.helpers.extension_manager import (
     install_chrome_web_store_extension,
     list_browser_extensions,
     set_browser_extension_enabled,
+    uninstall_browser_extension,
 )
 
 
@@ -46,6 +47,16 @@ class Extensions(ApiHandler):
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
             return self._browser_extension_payload(agent=agent)
+
+        if action == "uninstall_extension":
+            try:
+                result = uninstall_browser_extension(str(input.get("path", "")))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            return {
+                **self._browser_extension_payload(agent=agent),
+                **result,
+            }
 
         if action == "set_model_preset":
             preset_name = str(input.get(MODEL_PRESET_KEY, "") or "").strip()
@@ -83,6 +94,7 @@ class Extensions(ApiHandler):
             "ok": True,
             "root": str(get_extensions_root()),
             "extensions": list_browser_extensions(),
+            "extension_paths": config["extension_paths"],
             DEFAULT_HOMEPAGE_KEY: config[DEFAULT_HOMEPAGE_KEY],
             AUTOFOCUS_ACTIVE_PAGE_KEY: config[AUTOFOCUS_ACTIVE_PAGE_KEY],
             MODEL_PRESET_KEY: config[MODEL_PRESET_KEY],

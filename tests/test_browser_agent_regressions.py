@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import threading
 from pathlib import Path
@@ -92,6 +93,7 @@ from plugins._browser.helpers.extension_manager import (
     _normalize_chrome_prodversion,
     get_extensions_root,
     parse_chrome_web_store_extension_id,
+    uninstall_browser_extension,
 )
 import plugins._browser.helpers.extension_manager as browser_extension_manager_module
 from plugins._browser.helpers.runtime import (
@@ -289,6 +291,59 @@ def test_browser_extension_storage_uses_plugin_user_path(monkeypatch, tmp_path):
     assert get_extensions_root() == tmp_path / "usr" / "plugins" / "_browser" / "extensions"
 
 
+def test_browser_extension_manager_uninstalls_only_managed_extensions(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        browser_extension_manager_module.files,
+        "get_abs_path",
+        lambda *parts: str(tmp_path.joinpath(*parts)),
+    )
+    managed_extension = get_extensions_root() / "chrome-web-store" / ("a" * 32)
+    external_extension = tmp_path / "external-extension"
+    for extension_dir, name in (
+        (managed_extension, "Managed Extension"),
+        (external_extension, "External Extension"),
+    ):
+        extension_dir.mkdir(parents=True)
+        (extension_dir / "manifest.json").write_text(
+            json.dumps({"name": name, "version": "1.0.0"}),
+            encoding="utf-8",
+        )
+
+    saved_configs = []
+    monkeypatch.setattr(
+        browser_extension_manager_module,
+        "get_browser_config",
+        lambda: {
+            "extension_paths": [str(managed_extension), str(external_extension)],
+        },
+    )
+    monkeypatch.setattr(
+        browser_extension_manager_module.plugins,
+        "save_plugin_config",
+        lambda _plugin, _project, _agent, config: saved_configs.append(config.copy()),
+    )
+
+    entries = browser_extension_manager_module.list_browser_extensions()
+    managed_entry = next(item for item in entries if item["path"] == str(managed_extension))
+    external_entry = next(item for item in entries if item["path"] == str(external_extension))
+
+    assert managed_entry["can_delete"] is True
+    assert managed_entry["managed"] is True
+    assert external_entry["can_delete"] is False
+
+    result = uninstall_browser_extension(str(managed_extension))
+
+    assert result["name"] == "Managed Extension"
+    assert result["extension_paths"] == [str(external_extension)]
+    assert not managed_extension.exists()
+    assert external_extension.exists()
+    assert saved_configs[-1]["extension_paths"] == [str(external_extension)]
+
+    with pytest.raises(ValueError, match="Only Browser-managed"):
+        uninstall_browser_extension(str(external_extension))
+    assert external_extension.exists()
+
+
 def test_browser_extension_manager_parses_web_store_urls():
     extension_id = "a" * 32
 
@@ -343,6 +398,7 @@ def test_browser_extension_menu_exposes_agent_and_url_paths():
     assert "Browser LLM Preset" in html
     assert "Chrome Extensions" in html
     assert "Installed extensions" in html
+    assert "deleteExtension(extension)" not in html
     assert "No extensions installed yet." not in html
     assert "Browser Extension Settings" not in html
     assert "<span>Settings</span>" in html
@@ -640,9 +696,15 @@ def test_browser_extension_settings_stay_user_facing():
     config_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "config.html").read_text(
         encoding="utf-8"
     )
+    config_store = (
+        PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-config-store.js"
+    ).read_text(encoding="utf-8")
 
     assert "Choose which installed Chrome extensions Browser loads." in config_html
     assert "Installed extensions" in config_html
+    assert "extensionDeleteTitle(extension)" in config_html
+    assert "deleteExtension(extension)" in config_html
+    assert "Delete extension" in config_store
     assert "<textarea" not in config_html
     assert "Enabled extension directories" not in config_html
     assert "Chrome Web Store URL installs" not in config_html

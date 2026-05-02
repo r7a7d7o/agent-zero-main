@@ -134,6 +134,45 @@ def set_browser_extension_enabled(extension_path: str, enabled: bool) -> dict[st
     return config
 
 
+def uninstall_browser_extension(extension_path: str) -> dict[str, Any]:
+    raw_path = str(extension_path or "").strip()
+    if not raw_path:
+        raise ValueError("Choose an extension first.")
+
+    root = get_extensions_root().resolve()
+    extension_dir = Path(raw_path).expanduser().resolve()
+    if extension_dir == root or not extension_dir.is_relative_to(root):
+        raise ValueError("Only Browser-managed extension folders can be deleted.")
+    if not extension_dir.is_dir():
+        raise ValueError("Extension folder was not found.")
+
+    manifest = _read_manifest(extension_dir)
+    name = (
+        _manifest_label(extension_dir, manifest, "name")
+        or _manifest_label(extension_dir, manifest, "short_name")
+        or extension_dir.name
+    )
+    config = get_browser_config()
+    config["extension_paths"] = [
+        path
+        for path in config["extension_paths"]
+        if Path(path).expanduser().resolve() != extension_dir
+    ]
+
+    try:
+        shutil.rmtree(extension_dir)
+    except OSError as exc:
+        raise ValueError(f"Could not delete extension folder: {exc}") from exc
+
+    plugins.save_plugin_config(PLUGIN_NAME, "", "", config)
+    return {
+        "ok": True,
+        "name": name,
+        "path": str(extension_dir),
+        "extension_paths": config["extension_paths"],
+    }
+
+
 def _download_crx(extension_id: str, archive_path: Path) -> None:
     prodversion = _detect_chrome_prodversion()
     url = _build_web_store_download_url(extension_id, prodversion=prodversion)
@@ -261,6 +300,7 @@ def _enable_extension_path(extension_path: Path) -> dict[str, Any]:
 def _extension_entry(extension_dir: Path, enabled_paths: set[str]) -> dict[str, Any]:
     manifest = _read_manifest(extension_dir)
     extension_path = str(extension_dir)
+    can_delete = _is_managed_extension_dir(extension_dir)
     name = (
         _manifest_label(extension_dir, manifest, "name")
         or _manifest_label(extension_dir, manifest, "short_name")
@@ -273,7 +313,18 @@ def _extension_entry(extension_dir: Path, enabled_paths: set[str]) -> dict[str, 
         "version": manifest.get("version") or "",
         "path": extension_path,
         "enabled": extension_path in enabled_paths,
+        "managed": can_delete,
+        "can_delete": can_delete,
     }
+
+
+def _is_managed_extension_dir(extension_dir: Path) -> bool:
+    try:
+        root = get_extensions_root().resolve()
+        path = extension_dir.expanduser().resolve()
+    except OSError:
+        return False
+    return path != root and path.is_relative_to(root)
 
 
 def _read_manifest(extension_path: Path) -> dict[str, Any]:

@@ -43,6 +43,8 @@ export const store = createStore("browserConfig", {
   extensionsList: [],
   extensionsLoading: false,
   extensionsError: "",
+  extensionsMessage: "",
+  extensionDeleteLoadingPath: "",
 
   async init(config) {
     this.bindConfig(config);
@@ -53,6 +55,8 @@ export const store = createStore("browserConfig", {
     this.config = null;
     this.extensionsList = [];
     this.extensionsError = "";
+    this.extensionsMessage = "";
+    this.extensionDeleteLoadingPath = "";
   },
 
   bindConfig(config) {
@@ -99,12 +103,19 @@ export const store = createStore("browserConfig", {
       if (!response?.ok) {
         throw new Error(response?.error || "Could not load browser extensions.");
       }
-      this.extensionsList = Array.isArray(response.extensions) ? response.extensions : [];
+      this.applyExtensionPayload(response);
     } catch (error) {
       this.extensionsList = [];
       this.extensionsError = error instanceof Error ? error.message : String(error);
     } finally {
       this.extensionsLoading = false;
+    }
+  },
+
+  applyExtensionPayload(response = {}) {
+    this.extensionsList = Array.isArray(response.extensions) ? response.extensions : [];
+    if (Array.isArray(response.extension_paths) && this.config) {
+      this.config.extension_paths = normalizePathList(response.extension_paths);
     }
   },
 
@@ -126,6 +137,48 @@ export const store = createStore("browserConfig", {
       if (index >= 0) paths.splice(index, 1);
     }
     safeConfig.extension_paths = paths;
+  },
+
+  extensionCanDelete(extension) {
+    return Boolean(extension?.can_delete);
+  },
+
+  extensionDeleteTitle(extension) {
+    return this.extensionCanDelete(extension)
+      ? "Delete extension"
+      : "Only Browser-managed extensions can be deleted";
+  },
+
+  async deleteExtension(extension) {
+    const path = String(extension?.path || "").trim();
+    if (!path) return;
+    this.extensionsError = "";
+    this.extensionsMessage = "";
+    if (!this.extensionCanDelete(extension)) {
+      this.extensionsError = "Only Browser-managed extensions can be deleted.";
+      return;
+    }
+    const name = String(extension?.name || "this extension").trim();
+    if (globalThis.confirm && !globalThis.confirm(`Delete ${name}? This removes the extension folder from Browser.`)) {
+      return;
+    }
+
+    this.extensionDeleteLoadingPath = path;
+    try {
+      const response = await callJsonApi(BROWSER_EXTENSIONS_API, {
+        action: "uninstall_extension",
+        path,
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || "Could not delete extension.");
+      }
+      this.applyExtensionPayload(response);
+      this.extensionsMessage = `Deleted ${response.name || name}.`;
+    } catch (error) {
+      this.extensionsError = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.extensionDeleteLoadingPath = "";
+    }
   },
 
   extensionVersionLabel(extension) {
