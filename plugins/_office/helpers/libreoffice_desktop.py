@@ -44,6 +44,7 @@ HIDDEN_XPRA_DESKTOP_ENTRIES = (
     "xpra-shadow.desktop",
     "xpra-start.desktop",
 )
+DESKTOP_README_SOURCE = Path(__file__).resolve().parents[1] / "assets" / "desktop" / "README.md"
 DESKTOP_FOLDER_LINKS = (
     ("Projects", ("usr", "projects")),
     ("Skills", ("usr", "skills")),
@@ -460,6 +461,7 @@ class LibreOfficeDesktopManager:
 
         desktop_dir = session.profile_dir / "Desktop"
         desktop_dir.mkdir(parents=True, exist_ok=True)
+        _install_desktop_readme(desktop_dir)
         _remove_path_if_owned(desktop_dir / "Browser.desktop")
         _remove_path_if_owned(desktop_dir / "Files.desktop")
         config_dir = session.profile_dir / ".config"
@@ -1320,6 +1322,20 @@ def _write_desktop_launcher(
         path.chmod(0o755)
     except OSError:
         pass
+
+
+def _install_desktop_readme(desktop_dir: Path) -> None:
+    if not DESKTOP_README_SOURCE.exists():
+        return
+    target = desktop_dir / "README.md"
+    try:
+        content = DESKTOP_README_SOURCE.read_text(encoding="utf-8")
+        if target.exists() and target.read_text(encoding="utf-8") == content:
+            return
+        target.write_text(content, encoding="utf-8")
+        target.chmod(0o644)
+    except OSError:
+        return
 
 
 def _xfce_property(parent: ET.Element, name: str, property_type: str, value: str | None = None) -> ET.Element:
