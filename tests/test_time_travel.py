@@ -135,6 +135,58 @@ def test_kernel_boundary_real_git_repo_and_git_dir_exclusion(workspace):
     assert "untracked.txt" in tracked_paths(service, snapshot.hash)
 
 
+def test_snapshot_force_adds_curated_paths_ignored_by_workspace_gitignore(workspace):
+    root, service = workspace
+    (root / ".gitignore").write_text("ignored.txt\nignored-dir/\n.env\n", encoding="utf-8")
+    (root / "ignored.txt").write_text("still important\n", encoding="utf-8")
+    (root / "ignored-dir").mkdir()
+    (root / "ignored-dir" / "note.txt").write_text("nested\n", encoding="utf-8")
+    (root / ".env").write_text("SECRET=still excluded\n", encoding="utf-8")
+
+    snapshot = service.snapshot(trigger="manual")
+    paths = tracked_paths(service, snapshot.hash)
+
+    assert ".gitignore" in paths
+    assert "ignored.txt" in paths
+    assert "ignored-dir/note.txt" in paths
+    assert ".env" not in paths
+
+
+def test_shadow_repo_empty_head_is_repaired_without_losing_history(workspace):
+    root, service = workspace
+    (root / "a.txt").write_text("one\n", encoding="utf-8")
+    first = service.snapshot(trigger="manual")
+    (service.workspace.repo_git_path / "HEAD").write_text("", encoding="utf-8")
+
+    (root / "a.txt").write_text("one\ntwo\n", encoding="utf-8")
+    second = service.snapshot(trigger="manual")
+
+    assert second.created is True
+    assert service.current_hash() == second.hash
+    assert [commit["hash"] for commit in service.history_list(limit=10)["commits"][:2]] == [
+        second.hash,
+        first.hash,
+    ]
+
+
+def test_workspace_identity_canonicalizes_symlink_aliases():
+    name = f"tt-{uuid.uuid4().hex}"
+    root = PROJECT_ROOT / "usr" / "time-travel-tests" / name
+    target = root / "target"
+    alias = root / "alias"
+    target.mkdir(parents=True)
+    os.symlink(target, alias)
+
+    target_workspace = _workspace_from_display(f"/a0/usr/time-travel-tests/{name}/target")
+    alias_workspace = _workspace_from_display(f"/a0/usr/time-travel-tests/{name}/alias")
+    try:
+        assert alias_workspace.id == target_workspace.id
+        assert alias_workspace.display_path == target_workspace.display_path
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(target_workspace.shadow_path, ignore_errors=True)
+
+
 def test_usr_root_snapshot_skips_plugins_and_nested_git_projects(tmp_path: Path):
     root = tmp_path / "usr"
     root.mkdir()
