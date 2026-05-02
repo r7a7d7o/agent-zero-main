@@ -26,6 +26,8 @@ const model = {
   renameAfterConfirm: null,
   renameValidateName: null,
   openDropdownPath: null, // Track which dropdown is currently open
+  searchQuery: "",
+  isBulkBusy: false,
 
   // --- Lifecycle -----------------------------------------------------------
   init() {
@@ -38,6 +40,8 @@ const model = {
     this.isLoading = true;
     this.error = null;
     this.history = [];
+    this.searchQuery = "";
+    this.isBulkBusy = false;
 
     try {
       // Open modal FIRST (immediate UI feedback)
@@ -75,6 +79,8 @@ const model = {
     this.initialPath = "";
     this.browser.entries = [];
     this.openDropdownPath = null;
+    this.searchQuery = "";
+    this.isBulkBusy = false;
     this.resetRenameState();
   },
 
@@ -135,6 +141,76 @@ const model = {
       minute: "2-digit",
     };
     return new Date(dateString).toLocaleDateString(undefined, options);
+  },
+
+  decorateEntries(entries = [], selectedPaths = new Set()) {
+    return entries.map((entry) => ({
+      ...entry,
+      selected: selectedPaths.has(entry.path),
+    }));
+  },
+
+  get filteredEntries() {
+    const query = this.searchQuery.trim().toLowerCase();
+    if (!query) return this.browser.entries;
+
+    return this.browser.entries.filter((file) => {
+      const searchable = [
+        file.name,
+        file.path,
+        file.type,
+        file.symlink_target,
+        file.is_dir ? "folder directory" : "file",
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return searchable.includes(query);
+    });
+  },
+
+  get visibleEntries() {
+    return this.sortFiles(this.filteredEntries);
+  },
+
+  clearSearch() {
+    this.searchQuery = "";
+  },
+
+  get selectedFiles() {
+    return this.browser.entries.filter((file) => file.selected);
+  },
+
+  get selectedCount() {
+    return this.selectedFiles.length;
+  },
+
+  get selectedCountLabel() {
+    return `${this.selectedCount} ${this.selectedCount === 1 ? "item" : "items"} selected`;
+  },
+
+  get allVisibleSelected() {
+    return (
+      this.filteredEntries.length > 0 &&
+      this.filteredEntries.every((file) => file.selected)
+    );
+  },
+
+  get someVisibleSelected() {
+    return this.filteredEntries.some((file) => file.selected);
+  },
+
+  toggleSelectAllVisible() {
+    const shouldSelect = !this.allVisibleSelected;
+    this.filteredEntries.forEach((file) => {
+      file.selected = shouldSelect;
+    });
+  },
+
+  clearSelection() {
+    this.browser.entries.forEach((file) => {
+      file.selected = false;
+    });
   },
 
   // --- Modal helpers -------------------------------------------------------
@@ -223,6 +299,9 @@ const model = {
     const isSamePath = this.browser.currentPath === path || 
                        (!path && !this.browser.currentPath);
     const scrollPos = isSamePath ? this.saveScrollPosition() : null;
+    const selectedPaths = isSamePath
+      ? new Set(this.selectedFiles.map((file) => file.path))
+      : new Set();
     
     try {
       const response = await fetchApi(
@@ -231,7 +310,11 @@ const model = {
       const data = await response.json().catch(() => ({}));
 
       if (response.ok && !data.error) {
-        this.browser.entries = data.data.entries;
+        if (!isSamePath) this.searchQuery = "";
+        this.browser.entries = this.decorateEntries(
+          data.data.entries || [],
+          selectedPaths
+        );
         this.browser.currentPath = data.data.current_path;
         this.browser.parentPath = data.data.parent_path;
         
@@ -448,6 +531,162 @@ const model = {
     }
   },
 
+  copySelectedPaths() {
+    const selectedFiles = this.selectedFiles;
+    if (!selectedFiles.length) return;
+
+    const paths = selectedFiles.map((file) => file.path).join("\n");
+    this.copyToClipboard(paths, () => {
+      window.toastFrontendSuccess(
+        `Copied ${selectedFiles.length} ${selectedFiles.length === 1 ? "path" : "paths"}`,
+        "File Browser"
+      );
+    });
+  },
+
+  copyToClipboard(text, onSuccess) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard
+        .writeText(text)
+        .then(() => onSuccess?.())
+        .catch(() => this.fallbackCopyToClipboard(text, onSuccess));
+    } else {
+      this.fallbackCopyToClipboard(text, onSuccess);
+    }
+  },
+
+  fallbackCopyToClipboard(text, onSuccess) {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = "fixed";
+    textArea.style.left = "-999999px";
+    textArea.style.top = "-999999px";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      document.execCommand("copy");
+      onSuccess?.();
+    } catch (error) {
+      console.error("Clipboard copy failed:", error);
+      window.toastFrontendError("Failed to copy selected paths", "File Browser");
+    } finally {
+      document.body.removeChild(textArea);
+    }
+  },
+
+  getDownloadFilename(response, fallback) {
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+      try {
+        return decodeURIComponent(utf8Match[1].replace(/^"|"$/g, ""));
+      } catch {
+        return utf8Match[1].replace(/^"|"$/g, "");
+      }
+    }
+
+    const asciiMatch = disposition.match(/filename="([^"]+)"/i);
+    return asciiMatch?.[1] || fallback;
+  },
+
+  async bulkDownloadFiles() {
+    const selectedFiles = this.selectedFiles;
+    if (!selectedFiles.length || this.isBulkBusy) return;
+
+    this.isBulkBusy = true;
+    this.closeDropdown();
+
+    try {
+      const resp = await fetchApi("/download_work_dir_files", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paths: selectedFiles.map((file) => file.path),
+          currentPath: this.browser.currentPath,
+        }),
+      });
+
+      if (!resp.ok) {
+        const message = await resp.text();
+        throw new Error(message || "Download failed");
+      }
+
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const fallback = `agent-zero-files-${selectedFiles.length}.zip`;
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = this.getDownloadFilename(resp, fallback);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+
+      window.toastFrontendSuccess(
+        `Prepared ${selectedFiles.length} ${selectedFiles.length === 1 ? "item" : "items"} as ZIP`,
+        "File Browser"
+      );
+    } catch (error) {
+      window.toastFrontendError(
+        error?.message || "Failed to download selected files",
+        "File Browser"
+      );
+    } finally {
+      this.isBulkBusy = false;
+    }
+  },
+
+  async bulkDeleteFiles() {
+    const selectedFiles = this.selectedFiles;
+    if (!selectedFiles.length || this.isBulkBusy) return;
+
+    this.isBulkBusy = true;
+    this.closeDropdown();
+
+    try {
+      const resp = await fetchApi("/delete_work_dir_files", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paths: selectedFiles.map((file) => file.path),
+          currentPath: this.browser.currentPath,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+
+      if (resp.ok && !data.error) {
+        this.browser.entries = this.decorateEntries(data.data?.entries || []);
+        this.browser.currentPath = data.data?.current_path || this.browser.currentPath;
+        this.browser.parentPath = data.data?.parent_path || this.browser.parentPath;
+        const deletedCount = data.deleted?.length || selectedFiles.length;
+        window.toastFrontendSuccess(
+          `Deleted ${deletedCount} ${deletedCount === 1 ? "item" : "items"}`,
+          "File Browser"
+        );
+
+        if (data.failed?.length) {
+          window.toastFrontendError(
+            `${data.failed.length} selected ${data.failed.length === 1 ? "item" : "items"} could not be deleted`,
+            "File Browser"
+          );
+        }
+      } else {
+        window.toastFrontendError(
+          data.error || "Error deleting selected files",
+          "File Browser"
+        );
+      }
+    } catch (error) {
+      window.toastFrontendError(
+        "Error deleting selected files: " + error.message,
+        "File Browser"
+      );
+    } finally {
+      this.isBulkBusy = false;
+    }
+  },
+
   async handleFileUpload(event) {
     return store._handleFileUpload(event); // bind to model to ensure correct context
   },
@@ -475,7 +714,7 @@ const model = {
       });
       const data = await resp.json().catch(() => ({}));
       if (resp.ok && !data.error) {
-        this.browser.entries = data.data.entries;
+        this.browser.entries = this.decorateEntries(data.data.entries || []);
         this.browser.currentPath = data.data.current_path;
         this.browser.parentPath = data.data.parent_path;
         if (data.failed && data.failed.length) {
