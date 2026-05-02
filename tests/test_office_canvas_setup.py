@@ -300,6 +300,11 @@ def test_right_canvas_requires_explicit_open_and_is_absent_on_mobile():
     assert "if (this.isMobileMode)" in canvas_store
     assert "shouldRender()" in canvas_store
     assert "$store.rightCanvas.shouldRender()" in canvas_html
+    assert 'title="Open as window"' in canvas_html
+    assert 'title="Close canvas"' in canvas_html
+    assert 'aria-label="Close canvas"' in canvas_html
+    assert "@click=\"$store.rightCanvas.close()\"" in canvas_html
+    assert canvas_html.index('title="Open as window"') < canvas_html.index('title="Close canvas"')
     assert "body.right-canvas-mobile-mode .right-canvas" in canvas_css
     assert "display: none !important" in canvas_css
     assert "autoOpenOfficeCanvas" not in handler

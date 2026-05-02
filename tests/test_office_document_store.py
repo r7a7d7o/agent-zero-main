@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -125,6 +126,62 @@ def test_xlsx_and_pptx_creation_and_direct_edits_still_work(office_state):
     assert deck_payload["changed"] is True
     assert deck_read["slide_count"] == 2
     assert deck_read["slides"][1]["title"] == "Next"
+
+
+def test_document_artifact_accepts_method_alias_for_xlsx_create(office_state, monkeypatch):
+    tool_module = types.ModuleType("helpers.tool")
+
+    class Response:
+        def __init__(self, message, break_loop, additional=None):
+            self.message = message
+            self.break_loop = break_loop
+            self.additional = additional
+
+    class Tool:
+        def __init__(self, agent, name, method, args, message, loop_data, **kwargs):
+            self.agent = agent
+            self.name = name
+            self.method = method
+            self.args = args
+            self.message = message
+            self.loop_data = loop_data
+
+    tool_module.Response = Response
+    tool_module.Tool = Tool
+    monkeypatch.setitem(sys.modules, "helpers.tool", tool_module)
+    spec = importlib.util.spec_from_file_location(
+        "test_document_artifact_tool",
+        PROJECT_ROOT / "plugins" / "_office" / "tools" / "document_artifact.py",
+    )
+    document_artifact_module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(document_artifact_module)
+    DocumentArtifact = document_artifact_module.DocumentArtifact
+
+    tool = DocumentArtifact(
+        agent=None,
+        name="document_artifact",
+        method=None,
+        args={},
+        message="",
+        loop_data=None,
+    )
+
+    response = asyncio.run(
+        tool.execute(
+            method="create",
+            kind="document",
+            title="New Excel Workbook",
+            format="xlsx",
+            content="Sheet1\n",
+        )
+    )
+    payload = json.loads(response.message)
+
+    assert payload["action"] == "create"
+    assert payload["document"]["extension"] == "xlsx"
+    assert Path(payload["document"]["path"]).name == "New Excel Workbook.xlsx"
+    assert Path(document_store._path_from_a0(payload["document"]["path"])).exists()
 
 
 def test_odt_is_not_advertised_and_returns_clear_unsupported_response(office_state):

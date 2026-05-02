@@ -28,9 +28,10 @@ class DocumentArtifact(Tool):
         chart: Any = None,
         slides: Any = None,
         max_chars: int | str = 12000,
+        method: str = "",
         **kwargs: Any,
     ) -> Response:
-        action = str(action or self.method or "status").strip().lower().replace("-", "_")
+        action = str(action or method or self.method or "status").strip().lower().replace("-", "_")
         try:
             if action == "create":
                 doc = document_store.create_document(
