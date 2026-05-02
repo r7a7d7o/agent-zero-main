@@ -295,7 +295,6 @@ docker run -p 0:80 -v /path/to/your/work_dir:/a0/usr agent0ai/agent-zero
 ```
 
 - Replace `0` with a fixed port if you prefer (e.g., `50080:80`)
-- New Docker images raise their own soft `nofile` limit when Docker allows it. Set `A0_NOFILE_LIMIT` only if you need a different target.
 
 ---
 
@@ -624,7 +623,6 @@ docker run -p 50080:80 \
 
 - These provide initial default values when settings.json doesn't exist or when new settings are added to the application. Once a value is saved in settings.json, it takes precedence over these environment variables.
 - Sensitive settings (API keys, passwords) use their existing environment variables
-- `A0_NOFILE_LIMIT` can override the image startup soft file-descriptor target; the default is `65535` and cannot exceed Docker's hard limit.
 - Container/process restart required for changes to take effect
 
 ---

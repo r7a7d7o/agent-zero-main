@@ -43,12 +43,7 @@ Use the model rate limit fields in Settings (Main Model and Utility Model sectio
 - On macOS, grant Docker Desktop access to your project files.
 - Verify that the Docker image is updated.
 
-**13. I see `OSError: [Errno 24] Too many open files`. What should I check?**
-Long-running Docker containers with browser tabs, terminal sessions, sockets, and logs need a higher file-descriptor limit than Docker's low default soft limit on some hosts. New Docker images raise the soft `nofile` limit when Docker's hard limit allows it. Set `A0_NOFILE_LIMIT` only if you need a different startup target.
-
-You can verify the active limit with `docker exec -it <container> sh -lc 'cat /proc/1/limits | grep "Max open files"'`.
-
-**14. Can Agent Zero interact with external APIs or services (e.g., WhatsApp)?**
+**13. Can Agent Zero interact with external APIs or services (e.g., WhatsApp)?**
 Yes, by creating custom tools or using MCP servers. See [Extensions](../developer/extensions.md) and [MCP Setup](mcp-setup.md).
 
 ## Troubleshooting
