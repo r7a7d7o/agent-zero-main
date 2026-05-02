@@ -51,6 +51,8 @@ class OfficeSession(ApiHandler):
             return await self._open_document(doc, input, request)
         if action == "save":
             return self._save(input)
+        if action == "renamed":
+            return self._renamed(input, context_id)
         if action == "desktop_save":
             return self._desktop_save(input)
         if action == "desktop_sync":
@@ -107,6 +109,27 @@ class OfficeSession(ApiHandler):
         if not session_id:
             return {"ok": False, "error": "session_id is required."}
         return markdown_sessions.get_manager().save(session_id, text=input.get("text"))
+
+    def _renamed(self, input: dict, context_id: str = "") -> dict:
+        file_id = str(input.get("file_id") or "").strip()
+        path = str(input.get("path") or "").strip()
+        if not file_id:
+            return {"ok": False, "error": "file_id is required."}
+        if not path:
+            return {"ok": False, "error": "path is required."}
+        try:
+            updated = document_store.update_document_path(file_id, path, context_id=context_id)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        desktop = None
+        if str(updated.get("extension") or "").lower() in libreoffice_desktop.OFFICIAL_EXTENSIONS:
+            desktop = libreoffice_desktop.get_manager().retarget_document(file_id, updated)
+        return {
+            "ok": True,
+            "document": _public_doc(updated),
+            "version": document_store.item_version(updated),
+            "desktop": desktop,
+        }
 
     def _desktop(self) -> dict:
         desktop = libreoffice_desktop.get_manager().ensure_system_desktop()

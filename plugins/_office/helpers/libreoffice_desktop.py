@@ -185,6 +185,17 @@ class LibreOfficeDesktopManager:
         updated = document_store.register_document(doc["path"])
         return {"ok": True, "session_id": session.session_id, "document": _public_doc(updated)}
 
+    def retarget_document(self, file_id: str, doc: dict[str, Any]) -> dict[str, Any]:
+        session = self._find_by_file_id(file_id)
+        if not session:
+            return {"ok": True, "updated": False}
+        with self._lock:
+            session.path = str(doc["path"])
+            session.title = str(doc["basename"])
+            session.extension = str(doc["extension"])
+            self._write_manifest(session)
+            return {"ok": True, "updated": True, "desktop": session.public(doc)}
+
     def close(self, session_id: str, save_first: bool = True) -> dict[str, Any]:
         with self._lock:
             normalized = str(session_id or "").strip()

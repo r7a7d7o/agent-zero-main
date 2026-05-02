@@ -34,8 +34,13 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "format_align_center" not in panel
     assert "is-native-tile" not in panel
     assert "hasOfficialOffice()" in panel
+    assert 'title="Rename"' in panel
+    assert "@click=\"$store.office.renameActiveFile()\"" in panel
     assert "office_save" in store
     assert "desktop_save" in store
+    assert "openRenameModal" in store
+    assert 'callOffice("renamed"' in store
+    assert "handleActiveFileRenamed" in store
     assert "--office-zoom" not in panel
     assert "zoom: 1" not in store
     assert 'callOffice("desktop")' in store
@@ -136,6 +141,15 @@ def test_office_surface_filters_tabs_to_desktop_and_markdown_without_dashboard()
     assert "isDesktopOfficeDocument" in store
     assert "isVisibleOfficeTab" in store
     assert "return this.tabs.filter((tab) => this.isVisibleOfficeTab(tab));" in store
+
+    file_browser_store = (
+        PROJECT_ROOT / "webui" / "components" / "modals" / "file-browser" / "file-browser-store.js"
+    ).read_text(encoding="utf-8")
+
+    assert "renameAfterConfirm" in file_browser_store
+    assert "renameValidateName" in file_browser_store
+    assert "options.onRenamed" in file_browser_store
+    assert "options.validateName" in file_browser_store
 
 
 def test_right_canvas_surface_is_branded_as_desktop():

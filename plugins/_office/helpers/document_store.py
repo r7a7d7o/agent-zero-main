@@ -268,6 +268,41 @@ def get_document(file_id: str, conn: sqlite3.Connection | None = None) -> dict[s
         return _fetch(active)
 
 
+def update_document_path(file_id: str, path: str | Path, context_id: str = "") -> dict[str, Any]:
+    resolved = normalize_path(path, context_id=context_id)
+    if not resolved.exists():
+        raise FileNotFoundError(str(resolved))
+    ext = normalize_extension(resolved.suffix.lstrip("."))
+    data = resolved.read_bytes()
+    digest = sha256_bytes(data)
+    stat = resolved.stat()
+    changed_at = now()
+
+    with connect() as conn:
+        doc = get_document(file_id, conn=conn)
+        row = conn.execute("SELECT file_id FROM documents WHERE path = ?", (str(resolved),)).fetchone()
+        if row and row["file_id"] != file_id:
+            raise ValueError(f"Document path is already registered: {display_path(resolved)}")
+        conn.execute(
+            """
+            UPDATE documents
+            SET path=?, basename=?, extension=?, size=?, sha256=?, last_modified=?, updated_at=?
+            WHERE file_id=?
+            """,
+            (str(resolved), resolved.name, ext, stat.st_size, digest, now_iso(), changed_at, file_id),
+        )
+        conn.execute(
+            "INSERT INTO events (file_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
+            (
+                file_id,
+                "renamed",
+                json.dumps({"from": display_path(doc["path"]), "to": display_path(resolved)}),
+                changed_at,
+            ),
+        )
+        return get_document(file_id, conn=conn)
+
+
 def get_open_documents(limit: int = 6) -> list[dict[str, Any]]:
     with connect() as conn:
         _clear_expired_sessions(conn)

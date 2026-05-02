@@ -263,6 +263,20 @@ def test_markdown_save_tracks_version_history(office_state):
     assert Path(updated["path"]).read_text(encoding="utf-8").endswith("Second\n")
 
 
+def test_document_path_update_preserves_file_id_after_rename(office_state):
+    doc = document_store.create_document("document", "Rename Me", "md", "Body")
+    original = Path(doc["path"])
+    renamed = original.with_name("Renamed.md")
+    original.rename(renamed)
+
+    updated = document_store.update_document_path(doc["file_id"], renamed)
+
+    assert updated["file_id"] == doc["file_id"]
+    assert updated["basename"] == "Renamed.md"
+    assert updated["path"] == str(renamed)
+    assert document_store.get_document(doc["file_id"])["path"] == str(renamed)
+
+
 def test_direct_markdown_edits_refresh_open_canvas_session(office_state, monkeypatch):
     manager = markdown_sessions.MarkdownSessionManager()
     monkeypatch.setattr(markdown_sessions, "_manager", manager, raising=False)

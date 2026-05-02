@@ -34,6 +34,13 @@ function extensionOf(path = "") {
   return index >= 0 ? name.slice(index + 1) : "";
 }
 
+function parentPath(path = "") {
+  const normalized = String(path || "").split("?")[0].split("#")[0].replace(/\/+$/, "");
+  const index = normalized.lastIndexOf("/");
+  if (index <= 0) return "/";
+  return normalized.slice(0, index);
+}
+
 function uniqueTabId(session = {}) {
   return String(session.file_id || session.session_id || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
 }
@@ -508,10 +515,76 @@ const model = {
     }
   },
 
+  async renameActiveFile() {
+    if (!this.session || this.isDesktopSession() || this.saving) return;
+    if (this.dirty || this.session.dirty) {
+      await this.save();
+      if (this.error) return;
+    }
+
+    const session = this.session;
+    const path = session.path || session.document?.path || "";
+    if (!path) {
+      this.error = "This document does not have a file path to rename.";
+      return;
+    }
+    const name = basename(path || session.title || "");
+    const extension = extensionOf(name);
+    await fileBrowserStore.openRenameModal(
+      {
+        name,
+        path,
+        is_dir: false,
+        size: session.document?.size || 0,
+        modified: session.document?.last_modified || "",
+        type: "document",
+      },
+      {
+        currentPath: parentPath(path),
+        validateName: (newName) => {
+          if (!extension) return true;
+          return extensionOf(newName) === extension || `Keep the .${extension} extension for this open document.`;
+        },
+        onRenamed: async ({ path: renamedPath }) => {
+          await this.handleActiveFileRenamed(session, renamedPath);
+        },
+      },
+    );
+  },
+
+  async handleActiveFileRenamed(session, renamedPath) {
+    const response = await callOffice("renamed", {
+      file_id: session.file_id || "",
+      path: renamedPath,
+    });
+    if (response?.ok === false) throw new Error(response.error || "Rename failed.");
+
+    const document = normalizeDocument(response.document || session.document || {});
+    const updated = {
+      ...session,
+      document,
+      title: document.title || document.basename || basename(document.path),
+      path: document.path || renamedPath,
+      extension: document.extension || session.extension,
+      file_id: document.file_id || session.file_id,
+      version: document.version || response.version || session.version,
+      desktop: response.desktop?.desktop || session.desktop,
+      dirty: false,
+    };
+    this.replaceSession(session, updated);
+    this.dirty = false;
+    this.setMessage("Renamed");
+    await this.refresh();
+  },
+
   replaceActiveSession(next) {
     if (!this.session) return;
+    this.replaceSession(this.session, next);
+  },
+
+  replaceSession(previous, next) {
     this.session = next;
-    const index = this.tabs.findIndex((tab) => tab.tab_id === next.tab_id);
+    const index = this.tabs.findIndex((tab) => tab.tab_id === (previous?.tab_id || next.tab_id));
     if (index >= 0 && this.isVisibleOfficeTab(next)) this.tabs.splice(index, 1, next);
     this.queueRender();
     this.updateDesktopMonitor();

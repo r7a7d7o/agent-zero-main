@@ -38,6 +38,9 @@
             <span class="office-toolbar-spacer"></span>
 
             <div class="office-tool-group office-tool-actions" x-show="$store.office.session && !$store.office.isDesktopSession()" style="display: none;">
+              <button type="button" class="office-icon-button" title="Rename" aria-label="Rename" :disabled="$store.office.saving" @click="$store.office.renameActiveFile()">
+                <span class="material-symbols-outlined">edit</span>
+              </button>
               <button type="button" class="office-icon-button" title="Save" aria-label="Save" :class="{ 'is-primary': $store.office.dirty }" :disabled="$store.office.saving" @click="$store.office.save()">
                 <span class="material-symbols-outlined" :class="{ spinning: $store.office.saving }" x-text="$store.office.saving ? 'progress_activity' : 'save'"></span>
               </button>

@@ -23,6 +23,8 @@ const model = {
   renameMode: "rename",
   isRenaming: false,
   renameError: null,
+  renameAfterConfirm: null,
+  renameValidateName: null,
   openDropdownPath: null, // Track which dropdown is currently open
 
   // --- Lifecycle -----------------------------------------------------------
@@ -148,12 +150,26 @@ const model = {
     return `${trimmedBase}/${name}`;
   },
 
+  parentPath(path) {
+    const normalized = this.normalizePath(String(path || "")).replace(/\/+$/, "");
+    const index = normalized.lastIndexOf("/");
+    if (index <= 0) return "/";
+    return normalized.slice(0, index);
+  },
+
+  siblingPath(path, name) {
+    const parent = this.parentPath(path);
+    return parent === "/" ? `/${name}` : `${parent}/${name}`;
+  },
+
   resetRenameState() {
     this.renameTarget = null;
     this.renameName = "";
     this.renameMode = "rename";
     this.isRenaming = false;
     this.renameError = null;
+    this.renameAfterConfirm = null;
+    this.renameValidateName = null;
   },
 
   // --- Sorting -------------------------------------------------------------
@@ -258,12 +274,20 @@ const model = {
   },
 
   // --- Rename / Create -----------------------------------------------------
-  async openRenameModal(file) {
+  async openRenameModal(file, options = {}) {
     this.resetRenameState();
     this.renameTarget = file;
     this.renameName = file?.name || "";
     this.renameMode = "rename";
     this.renameError = null;
+    this.renameAfterConfirm = typeof options.onRenamed === "function" ? options.onRenamed : null;
+    this.renameValidateName = typeof options.validateName === "function" ? options.validateName : null;
+    if (typeof options.currentPath === "string" && options.currentPath) {
+      this.browser.currentPath = options.currentPath;
+    }
+    if (Array.isArray(options.entries)) {
+      this.browser.entries = options.entries;
+    }
     window.openModal("modals/file-browser/rename-modal.html");
   },
 
@@ -299,6 +323,13 @@ const model = {
       this.renameError = "No item selected for rename.";
       return;
     }
+    if (this.renameValidateName) {
+      const validation = this.renameValidateName(newName, this.renameTarget);
+      if (validation !== true) {
+        this.renameError = typeof validation === "string" ? validation : "Name is not valid.";
+        return;
+      }
+    }
 
     // UX: pre-validate duplicates so we can show a clean inline error (no toast spam)
     const duplicate = (this.browser.entries || []).some((entry) => {
@@ -317,6 +348,11 @@ const model = {
     this.renameError = null;
 
     try {
+      const previousPath = this.renameTarget?.path || "";
+      const renamedPath =
+        this.renameMode === "create-folder"
+          ? this.buildChildPath(newName)
+          : this.siblingPath(previousPath, newName);
       const payload =
         this.renameMode === "create-folder"
           ? {
@@ -344,6 +380,16 @@ const model = {
       }
 
       await this.fetchFiles(this.browser.currentPath);
+      if (this.renameAfterConfirm) {
+        await this.renameAfterConfirm({
+          action: this.renameMode,
+          previousPath,
+          path: renamedPath,
+          name: newName,
+          target: this.renameTarget,
+          response: data,
+        });
+      }
       this.closeRenameModal();
     } catch (error) {
       const message = error?.message || "Rename failed";
