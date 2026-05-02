@@ -356,6 +356,7 @@ const model = {
   _desktopPrimeAttempts: 0,
   _desktopKeyboardActive: false,
   _desktopKeyboardCleanup: null,
+  _desktopClipboardCleanup: null,
   _desktopStarting: null,
 
   async init(element = null) {
@@ -397,6 +398,7 @@ const model = {
     this.stopDesktopResizeObserver();
     this.stopXpraDesktopPrime();
     this.stopDesktopKeyboardBridge();
+    this.stopDesktopClipboardBridge();
     this._floatingCleanup?.();
     this._floatingCleanup = null;
     if (this._mode === "modal") this._root = null;
@@ -522,6 +524,10 @@ const model = {
   },
 
   installSession(session) {
+    if (this.isDesktopOfficeDocument(session)) {
+      this.installDesktopDocumentSession(session);
+      return;
+    }
     const existingIndex = this.tabs.findIndex((tab) => (
       (session.file_id && tab.file_id === session.file_id)
       || (session.path && tab.path === session.path)
@@ -534,6 +540,41 @@ const model = {
       this.activeTabId = session.tab_id;
     }
     this.selectTab(this.activeTabId);
+  },
+
+  installDesktopDocumentSession(session) {
+    this.tabs = this.tabs.filter((tab) => this.isVisibleOfficeTab(tab));
+    let desktopTab = this.tabs.find((tab) => this.isDesktopSession(tab));
+    if (!desktopTab) {
+      desktopTab = {
+        ...session,
+        tab_id: SYSTEM_DESKTOP_FILE_ID,
+        file_id: SYSTEM_DESKTOP_FILE_ID,
+        extension: "desktop",
+        title: "Desktop",
+        path: session.desktop?.desktop_path || "/desktop/session",
+        mode: "desktop",
+        document: {
+          file_id: SYSTEM_DESKTOP_FILE_ID,
+          path: session.desktop?.desktop_path || "/desktop/session",
+          basename: "Desktop",
+          title: "Desktop",
+          extension: "desktop",
+          preview: {},
+        },
+        dirty: false,
+      };
+      this.tabs.unshift(desktopTab);
+    }
+    const desktopTabId = desktopTab.tab_id;
+    this.session = { ...session, tab_id: session.tab_id || uniqueTabId(session) };
+    this.activeTabId = desktopTabId;
+    this.sourceMode = false;
+    this.editorText = "";
+    this.dirty = false;
+    this.resetHistory("");
+    this.queueRender({ focus: true });
+    this.updateDesktopMonitor();
   },
 
   selectTab(tabId, options = {}) {
@@ -559,7 +600,37 @@ const model = {
 
   async closeFile() {
     if (!this.session) return;
+    if (this.isDesktopOfficeDocument(this.session) && !this.tabs.some((tab) => tab.tab_id === this.session.tab_id)) {
+      await this.closeDesktopDocumentSession(this.session);
+      return;
+    }
     await this.closeTab(this.session.tab_id);
+  },
+
+  async closeDesktopDocumentSession(session) {
+    try {
+      await callOffice("desktop_save", {
+        desktop_session_id: session.desktop_session_id || session.session_id,
+        file_id: session.file_id || "",
+      }).catch(() => null);
+      await callOffice("close", {
+        session_id: session.store_session_id || "",
+        file_id: session.file_id || "",
+      });
+    } catch (error) {
+      console.warn("Desktop document close skipped", error);
+    }
+    this.session = null;
+    this.activeTabId = "";
+    this.editorText = "";
+    this.dirty = false;
+    const desktopTab = this.tabs.find((tab) => this.isDesktopSession(tab));
+    if (desktopTab) {
+      this.selectTab(desktopTab.tab_id, { focus: false });
+    } else {
+      await this.ensureDesktopSession({ select: true });
+    }
+    await this.refresh();
   },
 
   async closeTab(tabId) {
@@ -695,7 +766,7 @@ const model = {
     if (!this.session) return;
     this.session = next;
     const index = this.tabs.findIndex((tab) => tab.tab_id === next.tab_id);
-    if (index >= 0) this.tabs.splice(index, 1, next);
+    if (index >= 0 && this.isVisibleOfficeTab(next)) this.tabs.splice(index, 1, next);
     this.queueRender();
     this.updateDesktopMonitor();
   },
@@ -996,12 +1067,14 @@ const model = {
     return true;
   },
 
-  isMarkdown() {
-    return this.session?.extension === "md";
+  isMarkdown(tab = this.session) {
+    const ext = String(tab?.extension || tab?.document?.extension || "").toLowerCase();
+    return ext === "md";
   },
 
-  isDocx() {
-    return this.session?.extension === "docx";
+  isDocx(tab = this.session) {
+    const ext = String(tab?.extension || tab?.document?.extension || "").toLowerCase();
+    return ext === "docx";
   },
 
   isBinaryOffice(tab = this.session) {
@@ -1022,6 +1095,18 @@ const model = {
         || tab.mode === "desktop"
       )
     );
+  },
+
+  isDesktopOfficeDocument(tab = this.session) {
+    return Boolean(tab && this.hasOfficialOffice(tab) && !this.isDesktopSession(tab) && this.isBinaryOffice(tab));
+  },
+
+  isVisibleOfficeTab(tab = {}) {
+    return Boolean(this.isDesktopSession(tab) || this.isMarkdown(tab));
+  },
+
+  visibleTabs() {
+    return this.tabs.filter((tab) => this.isVisibleOfficeTab(tab));
   },
 
   officialOfficeUrl(tab = this.session) {
@@ -1299,6 +1384,7 @@ const model = {
       this.installXpraDesktopClientPatches(remoteWindow, client);
       this.installXpraDesktopCursorPatches(remoteWindow, remoteDocument, client);
       this.installXpraDesktopKeyboardBridge(frame, remoteWindow, remoteDocument, client);
+      this.installXpraDesktopClipboardBridge(frame, remoteWindow, remoteDocument, client);
       const container = client.container || remoteDocument?.querySelector?.("#screen");
       if (!container) return false;
 
@@ -1568,6 +1654,111 @@ const model = {
     client.__a0XpraDesktopClientPatched = true;
   },
 
+  installXpraDesktopClipboardBridge(frame, remoteWindow, remoteDocument, client) {
+    if (!frame || !remoteWindow || !remoteDocument || !client) return;
+    this.ensureDesktopClipboardBridge();
+    if (remoteWindow.__a0XpraDesktopClipboardBridgeInstalled) return;
+
+    const onPaste = (event) => {
+      this.handleDesktopPasteEvent(event, frame, remoteWindow, client);
+    };
+    const onKeydown = (event) => {
+      if (this.isDesktopPasteShortcut(event)) {
+        void this.syncHostClipboardToDesktop(frame);
+      }
+    };
+    remoteWindow.addEventListener("paste", onPaste, true);
+    remoteDocument.addEventListener("paste", onPaste, true);
+    remoteWindow.addEventListener("keydown", onKeydown, true);
+    remoteDocument.addEventListener("keydown", onKeydown, true);
+    remoteWindow.__a0XpraDesktopClipboardBridgeInstalled = true;
+    remoteWindow.__a0XpraDesktopClipboardBridgeCleanup = () => {
+      remoteWindow.removeEventListener("paste", onPaste, true);
+      remoteDocument.removeEventListener("paste", onPaste, true);
+      remoteWindow.removeEventListener("keydown", onKeydown, true);
+      remoteDocument.removeEventListener("keydown", onKeydown, true);
+      remoteWindow.__a0XpraDesktopClipboardBridgeInstalled = false;
+    };
+  },
+
+  ensureDesktopClipboardBridge() {
+    if (this._desktopClipboardCleanup) return;
+
+    const onPaste = (event) => {
+      if (!this._desktopKeyboardActive || !this.hasOfficialOffice()) return;
+      if (isEditableInputTarget(event.target)) return;
+      const frame = this.desktopFrame();
+      const remoteWindow = frame?.contentWindow;
+      const client = remoteWindow?.client;
+      if (!frame || !remoteWindow || !client) return;
+      this.handleDesktopPasteEvent(event, frame, remoteWindow, client);
+    };
+
+    document.addEventListener("paste", onPaste, true);
+    this._desktopClipboardCleanup = () => {
+      document.removeEventListener("paste", onPaste, true);
+      this._desktopClipboardCleanup = null;
+    };
+  },
+
+  stopDesktopClipboardBridge() {
+    this._desktopClipboardCleanup?.();
+  },
+
+  handleDesktopPasteEvent(event, frame, remoteWindow, client) {
+    const text = this.desktopClipboardTextFromEvent(event);
+    if (!text) return false;
+    if (!this.syncXpraClipboardText(client, text, remoteWindow)) return false;
+    event.preventDefault?.();
+    event.stopImmediatePropagation?.();
+    event.stopPropagation?.();
+    this.focusDesktopFrame(frame, { arm: true });
+    return true;
+  },
+
+  desktopClipboardTextFromEvent(event) {
+    const data = (event?.originalEvent || event)?.clipboardData;
+    if (!data?.getData) return "";
+    for (const type of ["text/plain", "text", "Text", "STRING", "UTF8_STRING"]) {
+      const value = data.getData(type);
+      if (value) return value;
+    }
+    return "";
+  },
+
+  syncXpraClipboardText(client, text, remoteWindow = null) {
+    const value = String(text ?? "");
+    if (!client || !value || typeof client.send_clipboard_token !== "function") return false;
+    const textPlain = remoteWindow?.TEXT_PLAIN || "text/plain";
+    const utf8String = remoteWindow?.UTF8_STRING || "UTF8_STRING";
+    const utilities = remoteWindow?.Utilities;
+    const payload = utilities?.StringToUint8 ? utilities.StringToUint8(value) : value;
+    client.clipboard_enabled = true;
+    client.clipboard_direction = "both";
+    client.clipboard_buffer = value;
+    client.clipboard_pending = false;
+    client.send_clipboard_token(payload, [textPlain, utf8String, "TEXT", "STRING"]);
+    return true;
+  },
+
+  async syncHostClipboardToDesktop(frame = null) {
+    const target = this.desktopFrame(frame);
+    const remoteWindow = target?.contentWindow;
+    const client = remoteWindow?.client;
+    if (!client || !navigator.clipboard?.readText) return false;
+    try {
+      const text = await navigator.clipboard.readText();
+      return this.syncXpraClipboardText(client, text, remoteWindow);
+    } catch {
+      return false;
+    }
+  },
+
+  isDesktopPasteShortcut(event) {
+    const key = String(event?.key || "").toLowerCase();
+    return key === "v" && (event?.ctrlKey || event?.metaKey) && !event?.altKey;
+  },
+
   installXpraDesktopKeyboardBridge(frame, remoteWindow, remoteDocument, client) {
     if (!frame || !remoteWindow || !remoteDocument || !client) return;
     this.ensureDesktopKeyboardBridge();
@@ -1607,6 +1798,9 @@ const model = {
       const client = frame.contentWindow?.client;
       const handler = pressed ? client?._keyb_onkeydown : client?._keyb_onkeyup;
       if (!client?.capture_keyboard || typeof handler !== "function") return;
+      if (pressed && this.isDesktopPasteShortcut(event)) {
+        void this.syncHostClipboardToDesktop(frame);
+      }
 
       const allowDefault = handler.call(client, event);
       if (!allowDefault) {
@@ -1755,14 +1949,18 @@ const model = {
 
   async handleOfficialOfficeClosed(tabId) {
     const tab = this.tabs.find((item) => item.tab_id === tabId);
-    if (!tab || tab._desktopClosed) return;
-    tab._desktopClosed = true;
+    const hiddenDesktopDocument = !tab && this.session?.tab_id === tabId && this.isDesktopOfficeDocument(this.session)
+      ? this.session
+      : null;
+    const target = tab || hiddenDesktopDocument;
+    if (!target || target._desktopClosed) return;
+    target._desktopClosed = true;
     this.stopDesktopMonitor();
     this.stopDesktopResizeObserver();
     this.stopXpraDesktopPrime();
     this.setMessage("Desktop is restarting");
-    await this.ensureDesktopSession({ force: true, select: this.activeTabId === tabId });
-    tab._desktopClosed = false;
+    await this.ensureDesktopSession({ force: true, select: this.activeTabId === tabId || Boolean(hiddenDesktopDocument) });
+    target._desktopClosed = false;
     await this.refresh();
   },
 
@@ -1921,7 +2119,7 @@ const model = {
   },
 
   openCards() {
-    return this.tabs
+    return this.visibleTabs()
       .filter((tab) => !this.isDesktopSession(tab))
       .map((tab) => normalizeDocument({
         ...tab.document,

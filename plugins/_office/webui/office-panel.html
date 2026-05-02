@@ -105,8 +105,8 @@
           </div>
         </div>
 
-        <div class="office-tabs" x-show="$store.office.tabs.length" role="tablist" aria-label="Open documents" style="display: none;">
-          <template x-for="tab in $store.office.tabs" :key="tab.tab_id">
+        <div class="office-tabs" x-show="$store.office.visibleTabs().length" role="tablist" aria-label="Open documents" style="display: none;">
+          <template x-for="tab in $store.office.visibleTabs()" :key="tab.tab_id">
             <div class="office-tab-shell" :class="{ 'is-active': $store.office.isActiveTab(tab), 'is-dirty': tab.dirty, 'is-system': $store.office.isDesktopSession(tab) }">
               <button type="button" class="office-tab" role="tab" :aria-selected="$store.office.isActiveTab(tab).toString()" :title="$store.office.tabLabel(tab)" @click="$store.office.selectTab(tab.tab_id)">
                 <span class="material-symbols-outlined office-tab-icon" aria-hidden="true" x-text="$store.office.tabIcon(tab)"></span>

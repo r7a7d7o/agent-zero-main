@@ -85,7 +85,7 @@ When browser automation is available, the higher-level QA flow is:
 
 The Desktop exposes stable folders for common user work:
 
-- `Workdir` -> `/a0/usr/workdir`
+- `Workdir` -> configured Agent Zero workdir (default `/a0/usr/workdir`)
 - `Projects` -> `/a0/usr/projects`
 - `Skills` -> `/a0/usr/skills`
 - `Agents` -> `/a0/usr/agents`
@@ -98,7 +98,7 @@ Use these folders when the user asks to inspect or manipulate project files, ski
 - `LibreOffice Writer`: word processing and DOCX layout.
 - `LibreOffice Calc`: spreadsheets, formulas, tables, charts.
 - `LibreOffice Impress`: presentations and slide polish.
-- `Workdir`: graphical file management with Thunar at `/a0/usr/workdir`.
+- `Workdir`: graphical file management with Thunar at the configured Agent Zero workdir (default `/a0/usr/workdir`).
 - `Terminal`: shell work inside the Agent Zero runtime.
 - `Settings`: XFCE system settings.
 

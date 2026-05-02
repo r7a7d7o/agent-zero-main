@@ -112,7 +112,7 @@ def test_desktop_xpra_canvas_scroll_is_forwarded_to_the_remote_session():
     assert "getModifierState: { value: getModifierState }" in store
 
 
-def test_office_dashboard_uses_cards_and_visible_tabs_for_open_files():
+def test_office_dashboard_uses_cards_and_filters_tabs_to_desktop_and_markdown():
     panel = (PROJECT_ROOT / "plugins" / "_office" / "webui" / "office-panel.html").read_text(
         encoding="utf-8",
     )
@@ -122,11 +122,16 @@ def test_office_dashboard_uses_cards_and_visible_tabs_for_open_files():
 
     assert "office-card-grid" in panel
     assert "office-document-card" in panel
+    assert "visibleTabs()" in panel
     assert "openCards()" in panel
     assert "recentCards()" in panel
     assert "office-editor-head" not in panel
     assert "office-recent-row" not in panel
     assert "open_documents" in store
+    assert "installDesktopDocumentSession" in store
+    assert "isDesktopOfficeDocument" in store
+    assert "isVisibleOfficeTab" in store
+    assert "return this.tabs.filter((tab) => this.isVisibleOfficeTab(tab));" in store
 
 
 def test_right_canvas_surface_is_branded_as_desktop():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import os
 import shutil
@@ -44,12 +45,14 @@ HIDDEN_XPRA_DESKTOP_ENTRIES = (
     "xpra-start.desktop",
 )
 DESKTOP_FOLDER_LINKS = (
-    ("Workdir", ("usr", "workdir")),
     ("Projects", ("usr", "projects")),
     ("Skills", ("usr", "skills")),
     ("Agents", ("usr", "agents")),
     ("Downloads", ("usr", "downloads")),
 )
+OOR_NS = "http://openoffice.org/2001/registry"
+XS_NS = "http://www.w3.org/2001/XMLSchema"
+XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
 
 
 @dataclass
@@ -431,27 +434,18 @@ class LibreOfficeDesktopManager:
         user_dir = session.profile_dir / "user"
         user_dir.mkdir(parents=True, exist_ok=True)
         registry = user_dir / "registrymodifications.xcu"
-        if registry.exists():
-            return
-        registry.write_text(
-            """<?xml version="1.0" encoding="UTF-8"?>
-<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-<item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="FirstRun" oor:op="fuse"><value>false</value></prop></item>
-<item oor:path="/org.openoffice.Setup/Office"><prop oor:name="ooSetupInstCompleted" oor:op="fuse"><value>true</value></prop></item>
-<item oor:path="/org.openoffice.Setup/Office"><prop oor:name="MigrationCompleted" oor:op="fuse"><value>true</value></prop></item>
-<item oor:path="/org.openoffice.Setup/Office"><prop oor:name="OfficeRestartInProgress" oor:op="fuse"><value>false</value></prop></item>
-<item oor:path="/org.openoffice.Setup/L10N"><prop oor:name="ooLocale" oor:op="fuse"><value>en-US</value></prop></item>
-</oor:items>
-""",
-            encoding="utf-8",
-        )
+        _write_libreoffice_registry_defaults(registry, document_store.document_home())
 
     def _prepare_desktop_launchers(self, session: DesktopSession) -> None:
         soffice = libreoffice.find_soffice()
         if not soffice:
             raise RuntimeError("LibreOffice is not installed in this runtime.")
+        workdir_home = document_store.document_home()
+        workdir_home.mkdir(parents=True, exist_ok=True)
         documents_home = document_store.document_binary_home()
         documents_home.mkdir(parents=True, exist_ok=True)
+        downloads_home = Path(files.get_abs_path("usr", "downloads"))
+        downloads_home.mkdir(parents=True, exist_ok=True)
 
         desktop_dir = session.profile_dir / "Desktop"
         desktop_dir.mkdir(parents=True, exist_ok=True)
@@ -470,13 +464,13 @@ class LibreOfficeDesktopManager:
             "\n".join(
                 [
                     'XDG_DESKTOP_DIR="$HOME/Desktop"',
-                    f'XDG_DOCUMENTS_DIR="{documents_home}"',
-                    f'XDG_DOWNLOAD_DIR="{files.get_abs_path("usr", "downloads")}"',
-                    f'XDG_TEMPLATES_DIR="{documents_home}"',
-                    f'XDG_PUBLICSHARE_DIR="{document_store.document_home()}"',
-                    f'XDG_MUSIC_DIR="{document_store.document_home()}"',
-                    f'XDG_PICTURES_DIR="{document_store.document_home()}"',
-                    f'XDG_VIDEOS_DIR="{document_store.document_home()}"',
+                    f'XDG_DOCUMENTS_DIR="{workdir_home}"',
+                    f'XDG_DOWNLOAD_DIR="{downloads_home}"',
+                    f'XDG_TEMPLATES_DIR="{workdir_home}"',
+                    f'XDG_PUBLICSHARE_DIR="{workdir_home}"',
+                    f'XDG_MUSIC_DIR="{workdir_home}"',
+                    f'XDG_PICTURES_DIR="{downloads_home}"',
+                    f'XDG_VIDEOS_DIR="{workdir_home}"',
                     "",
                 ],
             ),
@@ -485,10 +479,17 @@ class LibreOfficeDesktopManager:
         xfce_conf_dir = config_dir / "xfce4" / "xfconf" / "xfce-perchannel-xml"
         xfce_conf_dir.mkdir(parents=True, exist_ok=True)
         (xfce_conf_dir / "xfce4-desktop.xml").write_text(
-            """<?xml version="1.1" encoding="UTF-8"?>
+            f"""<?xml version="1.1" encoding="UTF-8"?>
 
 <channel name="xfce4-desktop" version="1.0">
   <property name="last-settings-migration-version" type="uint" value="1"/>
+  <property name="backdrop" type="empty">
+    <property name="screen0" type="empty">
+      <property name="monitor0" type="empty">
+        <property name="image-path" type="string" value="{_xml_attr(str(downloads_home))}"/>
+      </property>
+    </property>
+  </property>
   <property name="desktop-icons" type="empty">
     <property name="style" type="int" value="2"/>
     <property name="file-icons" type="empty">
@@ -536,16 +537,16 @@ class LibreOfficeDesktopManager:
                 icon=icon,
                 categories=categories,
                 try_exec=soffice,
+                working_dir=workdir_home,
             )
 
         terminal = shutil.which("xfce4-terminal") or "xfce4-terminal"
         settings = shutil.which("xfce4-settings-manager") or "xfce4-settings-manager"
-        workdir = document_store.document_home()
         desktop_apps = (
             {
                 "filename": "Terminal.desktop",
                 "name": "Terminal",
-                "exec": _desktop_exec(terminal, f"--working-directory={workdir}"),
+                "exec": _desktop_exec(terminal, f"--working-directory={workdir_home}"),
                 "try_exec": terminal,
                 "icon": _desktop_icon(
                     "/usr/share/icons/hicolor/128x128/apps/org.xfce.terminal.png",
@@ -578,9 +579,11 @@ class LibreOfficeDesktopManager:
                 categories=str(app["categories"]),
                 try_exec=str(app["try_exec"]),
             )
+        _ensure_desktop_folder_link(desktop_dir, "Workdir", workdir_home)
         for label, target_parts in DESKTOP_FOLDER_LINKS:
             _ensure_desktop_folder_link(desktop_dir, label, Path(files.get_abs_path(*target_parts)))
 
+        self._trust_desktop_launchers(session, desktop_dir)
         self._prepare_xfce_panel_config(session)
         self._prepare_xfce_profile_autostart(session)
 
@@ -822,6 +825,33 @@ fi
             )
         except (OSError, subprocess.TimeoutExpired):
             return
+
+    def _trust_desktop_launchers(self, session: DesktopSession, desktop_dir: Path) -> None:
+        gio = shutil.which("gio")
+        if not gio:
+            return
+        env = self._xfce_process_env(session, "xfdesktop")
+        for launcher in desktop_dir.glob("*.desktop"):
+            try:
+                launcher.chmod(0o755)
+                checksum = hashlib.sha256(launcher.read_bytes()).hexdigest()
+            except OSError:
+                continue
+            for command in (
+                [gio, "set", str(launcher), "metadata::trusted", "true"],
+                [gio, "set", "-t", "string", str(launcher), "metadata::xfce-exe-checksum", checksum],
+            ):
+                try:
+                    subprocess.run(
+                        command,
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=4,
+                        env=env,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
 
     def _xfce_process_env(self, session: DesktopSession, command_name: str) -> dict[str, str]:
         env = self._display_env(session)
@@ -1102,6 +1132,8 @@ def _xpra_shadow_command(xpra: str, session: DesktopSession) -> list[str]:
         "--tray=no",
         "--system-tray=no",
         "--notifications=no",
+        "--clipboard=yes",
+        "--clipboard-direction=both",
         "--file-transfer=yes",
         "--open-files=no",
         "--open-url=no",
@@ -1160,6 +1192,86 @@ def _desktop_exec_arg(value: str) -> str:
     return f'"{escaped}"'
 
 
+def _xml_attr(value: str) -> str:
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _oor(name: str) -> str:
+    return f"{{{OOR_NS}}}{name}"
+
+
+def _file_uri(path: str | Path) -> str:
+    return Path(path).resolve(strict=False).as_uri()
+
+
+def _write_libreoffice_registry_defaults(registry: Path, workdir: str | Path) -> None:
+    Path(workdir).mkdir(parents=True, exist_ok=True)
+    ET.register_namespace("oor", OOR_NS)
+    ET.register_namespace("xs", XS_NS)
+    ET.register_namespace("xsi", XSI_NS)
+    root = _read_libreoffice_registry(registry)
+    workdir_uri = _file_uri(workdir)
+    for path, prop, value in (
+        ("/org.openoffice.Office.Common/Misc", "FirstRun", "false"),
+        ("/org.openoffice.Setup/Office", "ooSetupInstCompleted", "true"),
+        ("/org.openoffice.Setup/Office", "MigrationCompleted", "true"),
+        ("/org.openoffice.Setup/Office", "OfficeRestartInProgress", "false"),
+        ("/org.openoffice.Setup/L10N", "ooLocale", "en-US"),
+        ("/org.openoffice.Office.Paths/Variables", "Work", workdir_uri),
+        (
+            "/org.openoffice.Office.Paths/Paths/org.openoffice.Office.Paths:NamedPath['Work']",
+            "WritePath",
+            workdir_uri,
+        ),
+    ):
+        _set_registry_prop(root, path, prop, value)
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(root).write(registry, encoding="utf-8", xml_declaration=True)
+
+
+def _read_libreoffice_registry(registry: Path) -> ET.Element:
+    if registry.exists():
+        try:
+            return ET.parse(registry).getroot()
+        except ET.ParseError:
+            pass
+    return ET.Element(
+        _oor("items"),
+        {
+            "xmlns:xs": XS_NS,
+            "xmlns:xsi": XSI_NS,
+        },
+    )
+
+
+def _set_registry_prop(root: ET.Element, item_path: str, prop_name: str, value: str) -> None:
+    item = _find_registry_item(root, item_path)
+    if item is None:
+        item = ET.SubElement(root, "item", {_oor("path"): item_path})
+    prop = next((child for child in item.findall("prop") if child.get(_oor("name")) == prop_name), None)
+    if prop is None:
+        prop = ET.SubElement(item, "prop", {_oor("name"): prop_name, _oor("op"): "fuse"})
+    else:
+        prop.set(_oor("op"), "fuse")
+    value_node = prop.find("value")
+    if value_node is None:
+        value_node = ET.SubElement(prop, "value")
+    value_node.text = str(value)
+
+
+def _find_registry_item(root: ET.Element, item_path: str) -> ET.Element | None:
+    for item in root.findall("item"):
+        if item.get(_oor("path")) == item_path:
+            return item
+    return None
+
+
 def _write_desktop_launcher(
     path: Path,
     *,
@@ -1168,6 +1280,7 @@ def _write_desktop_launcher(
     icon: str,
     categories: str,
     try_exec: str = "",
+    working_dir: str | Path | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -1179,6 +1292,8 @@ def _write_desktop_launcher(
     ]
     if try_exec:
         lines.append(f"TryExec={try_exec}")
+    if working_dir:
+        lines.append(f"Path={working_dir}")
     lines.extend(
         [
             f"Icon={icon}",

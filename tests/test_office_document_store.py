@@ -430,11 +430,17 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     assert payload["extension"] == "xlsx"
     assert payload["url"].startswith("/desktop/session/")
     registry = tmp_path / "desktop" / "profiles" / payload["session_id"] / "user" / "registrymodifications.xcu"
-    assert "ooSetupInstCompleted" in registry.read_text(encoding="utf-8")
-    assert "FirstRun" in registry.read_text(encoding="utf-8")
+    registry_text = registry.read_text(encoding="utf-8")
+    assert "ooSetupInstCompleted" in registry_text
+    assert "FirstRun" in registry_text
+    assert "Office.Paths/Variables" in registry_text
+    assert "Office.Paths:NamedPath['Work']" in registry_text
+    assert office_state.workdir.as_uri() in registry_text
     writer_launcher = tmp_path / "desktop" / "profiles" / payload["session_id"] / "Desktop" / "LibreOffice Writer.desktop"
-    assert "--writer" in writer_launcher.read_text(encoding="utf-8")
-    assert "X-XFCE-Trusted=true" in writer_launcher.read_text(encoding="utf-8")
+    writer_text = writer_launcher.read_text(encoding="utf-8")
+    assert "--writer" in writer_text
+    assert f"Path={office_state.workdir}" in writer_text
+    assert "X-XFCE-Trusted=true" in writer_text
     terminal_launcher = tmp_path / "desktop" / "profiles" / payload["session_id"] / "Desktop" / "Terminal.desktop"
     files_launcher = tmp_path / "desktop" / "profiles" / payload["session_id"] / "Desktop" / "Files.desktop"
     settings_launcher = tmp_path / "desktop" / "profiles" / payload["session_id"] / "Desktop" / "Settings.desktop"
@@ -446,13 +452,16 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     assert not (tmp_path / "desktop" / "profiles" / payload["session_id"] / "Desktop" / "Browser.desktop").exists()
     assert "xfce4-settings-manager" in settings_text
     assert "org.xfce.settings.manager" in settings_text
-    for link_name, target in {
-        "Workdir": "usr/workdir",
+    link_targets = {
         "Projects": "usr/projects",
         "Skills": "usr/skills",
         "Agents": "usr/agents",
         "Downloads": "usr/downloads",
-    }.items():
+    }
+    workdir_link = tmp_path / "desktop" / "profiles" / payload["session_id"] / "Desktop" / "Workdir"
+    assert workdir_link.is_symlink()
+    assert workdir_link.resolve() == office_state.workdir
+    for link_name, target in link_targets.items():
         link = tmp_path / "desktop" / "profiles" / payload["session_id"] / "Desktop" / link_name
         assert link.is_symlink()
         assert str(link.resolve()).endswith(target)
@@ -478,7 +487,21 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
         / "xfce-perchannel-xml"
         / "xfce4-desktop.xml"
     )
-    assert "desktop-icons" in desktop_profile.read_text(encoding="utf-8")
+    desktop_profile_text = desktop_profile.read_text(encoding="utf-8")
+    assert "desktop-icons" in desktop_profile_text
+    assert "image-path" in desktop_profile_text
+    assert "usr/downloads" in desktop_profile_text
+    user_dirs = (
+        tmp_path
+        / "desktop"
+        / "profiles"
+        / payload["session_id"]
+        / ".config"
+        / "user-dirs.dirs"
+    ).read_text(encoding="utf-8")
+    assert 'XDG_PICTURES_DIR="' in user_dirs
+    assert "usr/downloads" in user_dirs
+    assert f'XDG_DOCUMENTS_DIR="{office_state.workdir}"' in user_dirs
     panel_profile = (
         tmp_path
         / "desktop"
