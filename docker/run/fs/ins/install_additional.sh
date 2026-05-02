@@ -12,6 +12,8 @@ if ! command -v apt-get >/dev/null 2>&1; then
   exit 0
 fi
 
+XPRA_PACKAGES=(xpra xpra-x11 xpra-html5)
+
 install_xpra_repo() {
   local os_id=""
   local codename=""
@@ -43,12 +45,13 @@ install_xpra_repo() {
   configure_xpra_repo "$uri" "$suite" "$arch"
   apt-get update
 
-  if ! DEBIAN_FRONTEND=noninteractive apt-get install -s --no-install-recommends xpra xpra-x11 xpra-html5 >/tmp/xpra-install-check.log 2>&1; then
+  if ! xpra_install_check; then
     if [ "$arch" != "amd64" ]; then
       echo "xpra packages are not installable from ${uri} ${suite} for ${arch}; falling back to https://xpra.org trixie"
+      XPRA_PACKAGES=(xpra-server xpra-client xpra-client-gtk3 xpra-x11 xpra-html5)
       configure_xpra_repo "https://xpra.org" "trixie" "$arch"
       apt-get update
-      if ! DEBIAN_FRONTEND=noninteractive apt-get install -s --no-install-recommends xpra xpra-x11 xpra-html5 >/tmp/xpra-install-check.log 2>&1; then
+      if ! xpra_install_check; then
         cat /tmp/xpra-install-check.log
         exit 1
       fi
@@ -57,6 +60,10 @@ install_xpra_repo() {
       exit 1
     fi
   fi
+}
+
+xpra_install_check() {
+  DEBIAN_FRONTEND=noninteractive apt-get install -s --no-install-recommends "${XPRA_PACKAGES[@]}" >/tmp/xpra-install-check.log 2>&1
 }
 
 configure_xpra_repo() {
@@ -84,9 +91,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   libreoffice-impress \
   libreoffice-gtk3 \
   python3-uno \
-  xpra \
-  xpra-x11 \
-  xpra-html5 \
+  "${XPRA_PACKAGES[@]}" \
   xfce4-session \
   xfwm4 \
   xfce4-panel \
