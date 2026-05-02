@@ -49,19 +49,30 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "restoreDesktopFrames" in store
     assert "primeXpraDesktopFrame" in store
     assert "normalizeXpraDesktopWindow" in store
+    assert "installXpraDesktopWheelBridge" in store
     assert "reloadDesktopFrame" in store
     assert 'result?.reload' in store
     assert "a0_reload" in store
     assert "const DESKTOP_RESIZE_DELAY_MS = 80" in store
     assert "requestServerResize: false" in store
     assert "requestRefresh: false" in store
-    assert "options.serverResize !== true" in store
+    assert "_desktopResizeTarget" in store
+    assert "requestDesktopViewportSync" in store
+    assert "syncDesktopViewport" in store
+    assert "options.serverResize !== false" in store
+    assert "serverResize: true" in store
     assert "server_is_desktop = true" in store
     assert "server_resize_exact = true" in store
     assert "_set_decorated?.(false)" in store
     assert "topoffset = 0" in store
     assert ".undecorated" in store
     assert "a0-xpra-desktop-frame-css" in store
+    assert "installXpraDesktopFramePatches" in store
+    assert "installXpraDesktopClientPatches" in store
+    assert "patchedNoWindowList" in store
+    assert "patchedAddWindowListItem" in store
+    assert "patchedScreenResized" in store
+    assert "__a0AllowScreenResize" in store
     assert "_desktopHeartbeatTimer" in store
     assert "office-modal-focus-button" in store
     assert "officialOfficeUrl" in store
@@ -80,6 +91,21 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "setupTitle()" not in panel
     assert "Setup in progress" not in store
     assert "office-log" not in panel
+
+
+def test_desktop_xpra_canvas_scroll_is_forwarded_to_the_remote_session():
+    store = (PROJECT_ROOT / "plugins" / "_office" / "webui" / "office-store.js").read_text(
+        encoding="utf-8",
+    )
+
+    assert "canvas.addEventListener(\"wheel\"" in store
+    assert "mouse_scroll_cb(normalizedEvent, xpraWindow)" in store
+    assert "stopImmediatePropagation" in store
+    assert "{ passive: false, capture: true }" in store
+    assert "xpraDesktopWheelEvent" in store
+    assert "deltaMode: { value: 0 }" in store
+    assert "wheelDeltaY" in store
+    assert "getModifierState: { value: getModifierState }" in store
 
 
 def test_office_dashboard_uses_cards_and_visible_tabs_for_open_files():

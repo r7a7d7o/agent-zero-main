@@ -338,6 +338,7 @@ const model = {
   _desktopHeartbeatTabId: "",
   _desktopHeartbeatMisses: 0,
   _desktopResizeCleanup: null,
+  _desktopResizeTarget: null,
   _desktopResizeTimer: null,
   _desktopResizeKey: "",
   _desktopResizeSuspended: false,
@@ -371,13 +372,12 @@ const model = {
       await this.ensureDesktopSession({ select: !this.session });
     }
     this.restoreDesktopFrames();
+    this.requestDesktopViewportSync({ force: true });
   },
 
   beforeHostHidden(options = {}) {
     this.flushInput();
-    if (options?.unloadDesktop) {
-      this.unloadDesktopFrames();
-    }
+    this.unloadDesktopFrames();
   },
 
   cleanup() {
@@ -1071,10 +1071,7 @@ const model = {
     if (event?.target?.getAttribute?.("src") === "about:blank") return;
     this.error = "";
     this.focusEditor({ end: false });
-    this.startDesktopResizeObserver();
-    this.primeXpraDesktopFrame({ reset: true, frame: event?.target || null });
-    this.queueDesktopResize();
-    this.updateDesktopMonitor();
+    this.requestDesktopViewportSync({ force: true, frame: event?.target || null });
   },
 
   updateDesktopMonitor() {
@@ -1097,11 +1094,18 @@ const model = {
   },
 
   startDesktopResizeObserver() {
-    this.stopDesktopResizeObserver();
-    if (!this.hasOfficialOffice()) return;
+    if (!this.hasOfficialOffice()) {
+      this.stopDesktopResizeObserver();
+      return;
+    }
     const frame = this.desktopFrame();
     const target = frame?.parentElement || frame;
-    if (!target) return;
+    if (!target) {
+      this.stopDesktopResizeObserver();
+      return;
+    }
+    if (this._desktopResizeCleanup && this._desktopResizeTarget === target) return;
+    this.stopDesktopResizeObserver();
 
     const resize = () => this.queueDesktopResize();
     const resizeStart = () => this.suspendDesktopResize();
@@ -1118,6 +1122,7 @@ const model = {
     cleanup.push(() => globalThis.removeEventListener?.("right-canvas-resize-start", resizeStart));
     globalThis.addEventListener?.("right-canvas-resize-end", resizeEnd);
     cleanup.push(() => globalThis.removeEventListener?.("right-canvas-resize-end", resizeEnd));
+    this._desktopResizeTarget = target;
     this._desktopResizeCleanup = () => cleanup.splice(0).reverse().forEach((entry) => entry());
     resize();
   },
@@ -1129,6 +1134,7 @@ const model = {
     this._desktopResizeTimer = null;
     this._desktopResizeCleanup?.();
     this._desktopResizeCleanup = null;
+    this._desktopResizeTarget = null;
     this._desktopResizeKey = "";
     this._desktopResizeSuspended = false;
     this._desktopResizePending = false;
@@ -1159,6 +1165,35 @@ const model = {
     );
   },
 
+  requestDesktopViewportSync(options = {}) {
+    const run = (force = false) => {
+      this.syncDesktopViewport({ ...options, force });
+    };
+    if (globalThis.requestAnimationFrame) {
+      globalThis.requestAnimationFrame(() => run(Boolean(options.force)));
+    } else {
+      globalThis.setTimeout(() => run(Boolean(options.force)), 0);
+    }
+    for (const delay of [140, 420]) {
+      globalThis.setTimeout(() => run(false), delay);
+    }
+  },
+
+  syncDesktopViewport(options = {}) {
+    if (!this.hasOfficialOffice()) return false;
+    const frame = this.desktopFrame(options.frame || null);
+    if (!frame) return false;
+    this.startDesktopResizeObserver();
+    this.primeXpraDesktopFrame({ reset: true, frame });
+    this.queueDesktopResize({
+      force: Boolean(options.force),
+      serverResize: options.serverResize !== false,
+      frame,
+    });
+    this.updateDesktopMonitor();
+    return true;
+  },
+
   primeXpraDesktopFrame(options = {}) {
     if (options.reset) {
       this.stopXpraDesktopPrime();
@@ -1183,13 +1218,15 @@ const model = {
     const frame = this.desktopFrame(preferredFrame);
     const remoteWindow = frame?.contentWindow;
     if (!remoteWindow) return false;
-    const requestServerResize = options.requestServerResize !== false;
+    const requestServerResize = options.requestServerResize === true;
     const requestRefresh = options.requestRefresh !== false;
     try {
       const remoteDocument = frame.contentDocument || remoteWindow.document;
       this.installXpraDesktopFrameCss(remoteDocument);
+      this.installXpraDesktopFramePatches(remoteWindow, remoteDocument);
       const client = remoteWindow.client;
       if (!client) return false;
+      this.installXpraDesktopClientPatches(remoteWindow, client);
       const container = client.container || remoteDocument?.querySelector?.("#screen");
       if (!container) return false;
 
@@ -1202,10 +1239,19 @@ const model = {
 
       const width = Math.round(container.clientWidth || remoteWindow.innerWidth || 0);
       const height = Math.round(container.clientHeight || remoteWindow.innerHeight || 0);
+      if (width > 0 && height > 0) {
+        client.desktop_width = width;
+        client.desktop_height = height;
+      }
       if (requestServerResize && width > 0 && height > 0 && typeof client._screen_resized === "function") {
         client.desktop_width = 0;
         client.desktop_height = 0;
-        client._screen_resized(new remoteWindow.Event("resize"));
+        client.__a0AllowScreenResize = true;
+        try {
+          client._screen_resized(new remoteWindow.Event("resize"));
+        } finally {
+          client.__a0AllowScreenResize = false;
+        }
       }
 
       for (const xpraWindow of windows) {
@@ -1214,6 +1260,7 @@ const model = {
         this.normalizeXpraDesktopWindow(xpraWindow, width, height);
         xpraWindow.updateCSSGeometry?.();
         this.fitXpraDesktopWindowElement(xpraWindow, width, height);
+        this.installXpraDesktopWheelBridge(remoteWindow, xpraWindow);
         if (requestRefresh && xpraWindow.wid != null) client.request_refresh?.(xpraWindow.wid);
       }
       return true;
@@ -1259,6 +1306,81 @@ const model = {
     canvas?.style?.setProperty("height", cssHeight, "important");
     canvas?.style?.setProperty("display", "block", "important");
     canvas?.style?.setProperty("margin", "0", "important");
+  },
+
+  installXpraDesktopWheelBridge(remoteWindow, xpraWindow) {
+    const canvas = xpraWindow?.canvas;
+    if (!remoteWindow || !canvas || canvas.__a0XpraWheelBridgeInstalled) return;
+    if (typeof xpraWindow.mouse_scroll_cb !== "function") return;
+    canvas.__a0XpraWheelBridgeInstalled = true;
+    canvas.addEventListener("wheel", (event) => {
+      event.stopImmediatePropagation?.();
+      event.stopPropagation?.();
+      event.preventDefault?.();
+      const normalizedEvent = this.xpraDesktopWheelEvent(remoteWindow, canvas, event);
+      xpraWindow.mouse_scroll_cb(normalizedEvent, xpraWindow);
+    }, { passive: false, capture: true });
+  },
+
+  xpraDesktopWheelEvent(remoteWindow, canvas, event) {
+    const finite = (value, fallback = 0) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : fallback;
+    };
+    const deltaMode = finite(event.deltaMode, 0);
+    const lineHeight = 16;
+    const pageHeight = Math.max(1, remoteWindow.innerHeight || canvas.clientHeight || 800);
+    const deltaScale = deltaMode === 1 ? lineHeight : deltaMode === 2 ? pageHeight : 1;
+    const deltaX = finite(event.deltaX) * deltaScale;
+    const deltaY = finite(event.deltaY) * deltaScale;
+    const deltaZ = finite(event.deltaZ) * deltaScale;
+    const wheelDeltaX = finite(event.wheelDeltaX, -deltaX);
+    const wheelDeltaY = finite(event.wheelDeltaY, -deltaY);
+    const wheelDelta = finite(event.wheelDelta, wheelDeltaY || wheelDeltaX);
+    const getModifierState = (key) => {
+      if (typeof event.getModifierState === "function") return event.getModifierState(key);
+      const normalizedKey = String(key || "").toLowerCase();
+      if (normalizedKey === "alt") return Boolean(event.altKey);
+      if (normalizedKey === "control") return Boolean(event.ctrlKey);
+      if (normalizedKey === "meta") return Boolean(event.metaKey);
+      if (normalizedKey === "shift") return Boolean(event.shiftKey);
+      return false;
+    };
+    const normalizedEvent = Object.create(event);
+    Object.defineProperties(normalizedEvent, {
+      target: { value: event.target || canvas },
+      currentTarget: { value: canvas },
+      clientX: { value: finite(event.clientX) },
+      clientY: { value: finite(event.clientY) },
+      pageX: { value: finite(event.pageX, finite(event.clientX)) },
+      pageY: { value: finite(event.pageY, finite(event.clientY)) },
+      screenX: { value: finite(event.screenX) },
+      screenY: { value: finite(event.screenY) },
+      offsetX: { value: finite(event.offsetX) },
+      offsetY: { value: finite(event.offsetY) },
+      movementX: { value: finite(event.movementX) },
+      movementY: { value: finite(event.movementY) },
+      button: { value: finite(event.button) },
+      buttons: { value: finite(event.buttons) },
+      which: { value: finite(event.which) },
+      detail: { value: finite(event.detail) },
+      deltaX: { value: deltaX },
+      deltaY: { value: deltaY },
+      deltaZ: { value: deltaZ },
+      deltaMode: { value: 0 },
+      wheelDeltaX: { value: wheelDeltaX },
+      wheelDeltaY: { value: wheelDeltaY },
+      wheelDelta: { value: wheelDelta },
+      altKey: { value: Boolean(event.altKey) },
+      ctrlKey: { value: Boolean(event.ctrlKey) },
+      metaKey: { value: Boolean(event.metaKey) },
+      shiftKey: { value: Boolean(event.shiftKey) },
+      getModifierState: { value: getModifierState },
+      preventDefault: { value: () => event.preventDefault?.() },
+      stopPropagation: { value: () => event.stopPropagation?.() },
+      stopImmediatePropagation: { value: () => event.stopImmediatePropagation?.() },
+    });
+    return normalizedEvent;
   },
 
   installXpraDesktopFrameCss(remoteDocument) {
@@ -1307,13 +1429,49 @@ const model = {
     remoteDocument.head?.appendChild(style);
   },
 
+  installXpraDesktopFramePatches(remoteWindow, remoteDocument) {
+    if (!remoteWindow || !remoteDocument) return;
+    remoteWindow.__a0XpraDesktopFramePatches ||= {};
+    const patches = remoteWindow.__a0XpraDesktopFramePatches;
+    if (!patches.noWindowList && typeof remoteWindow.noWindowList === "function") {
+      const originalNoWindowList = remoteWindow.noWindowList;
+      remoteWindow.noWindowList = function patchedNoWindowList(...args) {
+        if (!remoteDocument.querySelector("#open_windows")) return undefined;
+        return originalNoWindowList.apply(this, args);
+      };
+      patches.noWindowList = true;
+    }
+    if (!patches.addWindowListItem && typeof remoteWindow.addWindowListItem === "function") {
+      const originalAddWindowListItem = remoteWindow.addWindowListItem;
+      remoteWindow.addWindowListItem = function patchedAddWindowListItem(...args) {
+        if (!remoteDocument.querySelector("#open_windows_list")) return undefined;
+        return originalAddWindowListItem.apply(this, args);
+      };
+      patches.addWindowListItem = true;
+    }
+  },
+
+  installXpraDesktopClientPatches(remoteWindow, client) {
+    if (!remoteWindow || !client || client.__a0XpraDesktopClientPatched) return;
+    if (typeof client._screen_resized === "function") {
+      const originalScreenResized = client._screen_resized.bind(client);
+      client.__a0OriginalScreenResized = originalScreenResized;
+      client._screen_resized = function patchedScreenResized(event) {
+        if (client.__a0AllowScreenResize === true) return originalScreenResized(event);
+        return false;
+      };
+    }
+    client.__a0XpraDesktopClientPatched = true;
+  },
+
   queueDesktopResize(options = {}) {
     if (!this.hasOfficialOffice()) return;
     const token = this.session?.desktop?.token || "";
-    const frame = this.desktopFrame();
+    const frame = this.desktopFrame(options.frame || null);
     const target = frame?.parentElement || frame;
     if (!token || !target) return;
     const force = Boolean(options.force);
+    const serverResize = options.serverResize !== false;
     const rect = target.getBoundingClientRect();
     const width = Math.round(rect.width);
     const height = Math.round(rect.height);
@@ -1324,11 +1482,8 @@ const model = {
       return;
     }
     const key = `${token}:${width}x${height}`;
+    if (!serverResize) return;
     if (!force && key === this._desktopResizeKey) return;
-    if (options.serverResize !== true) {
-      this._desktopResizeKey = key;
-      return;
-    }
     if (this._desktopResizeTimer) globalThis.clearTimeout(this._desktopResizeTimer);
     this._desktopResizeTimer = globalThis.setTimeout(async () => {
       this._desktopResizeTimer = null;
@@ -1342,10 +1497,20 @@ const model = {
         if (response.ok) {
           const result = await response.json().catch(() => ({}));
           this._desktopResizeKey = key;
-          if (result?.reload) {
-            this.reloadDesktopFrame(frame);
+          const activeFrame = this.desktopFrame(frame);
+          const activeTarget = activeFrame?.parentElement || activeFrame;
+          const activeRect = activeTarget?.getBoundingClientRect?.();
+          const activeWidth = Math.round(activeRect?.width || 0);
+          const activeHeight = Math.round(activeRect?.height || 0);
+          if (activeWidth >= 320 && activeHeight >= 220) {
+            const activeKey = `${token}:${activeWidth}x${activeHeight}`;
+            if (activeKey !== key) {
+              this.queueDesktopResize({ force: true, serverResize: true, frame: activeFrame });
+              return;
+            }
           }
-          this.primeXpraDesktopFrame({ reset: true });
+          if (result?.reload) this.reloadDesktopFrame(activeFrame || frame);
+          this.primeXpraDesktopFrame({ reset: true, frame: activeFrame || frame });
         }
       } catch (error) {
         console.warn("Desktop resize skipped", error);
