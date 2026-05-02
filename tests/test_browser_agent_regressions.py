@@ -1174,6 +1174,57 @@ def test_browser_runtime_removes_stale_profile_singletons(monkeypatch, tmp_path)
     )
 
 
+@pytest.mark.anyio
+async def test_browser_runtime_restarts_when_cached_context_is_stale():
+    starts = []
+    stopped = []
+
+    class StaleContext:
+        @property
+        def pages(self):
+            raise RuntimeError("Target page, context or browser has been closed")
+
+    class LiveContext:
+        pages = []
+
+    class FakePlaywright:
+        async def stop(self):
+            stopped.append(True)
+
+    core = _BrowserRuntimeCore("ctx")
+    core.context = StaleContext()
+    core.playwright = FakePlaywright()
+    core.pages[4] = browser_runtime_module.BrowserPage(id=4, page=object())
+    core.last_interacted_browser_id = 4
+
+    async def fake_start():
+        starts.append(True)
+        core.context = LiveContext()
+
+    core._start = fake_start
+
+    await core.ensure_started()
+
+    assert starts == [True]
+    assert stopped == [True]
+    assert isinstance(core.context, LiveContext)
+    assert core.pages == {}
+    assert core.last_interacted_browser_id is None
+
+
+def test_browser_runtime_context_close_event_clears_cached_state():
+    core = _BrowserRuntimeCore("ctx")
+    core.context = object()
+    core.pages[4] = browser_runtime_module.BrowserPage(id=4, page=object())
+    core.last_interacted_browser_id = 4
+
+    core._on_context_closed()
+
+    assert core.context is None
+    assert core.pages == {}
+    assert core.last_interacted_browser_id is None
+
+
 def test_browser_save_plugin_config_restarts_runtimes_on_change(monkeypatch, tmp_path):
     extension_dir = tmp_path / "extension"
     extension_dir.mkdir()

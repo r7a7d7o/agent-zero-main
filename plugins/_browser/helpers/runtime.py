@@ -658,16 +658,69 @@ class _BrowserRuntimeCore:
         return Path(files.get_abs_path("usr/downloads/browser"))
 
     async def ensure_started(self) -> None:
-        if self.context:
+        if self._context_is_alive():
             return
+        if self.context:
+            await self._discard_stale_context("Browser context is stale; restarting.")
 
         if self._start_lock is None:
             self._start_lock = asyncio.Lock()
 
         async with self._start_lock:
-            if self.context:
+            if self._context_is_alive():
                 return
+            if self.context:
+                await self._discard_stale_context("Browser context is stale; restarting.")
+            elif self.playwright and not self._closing:
+                await self._stop_playwright("Browser context closed; restarting Playwright.")
             await self._start()
+
+    def _context_is_alive(self) -> bool:
+        if not self.context:
+            return False
+        try:
+            pages = getattr(self.context, "pages")
+            len(pages() if callable(pages) else pages)
+            return True
+        except AttributeError:
+            # Lightweight test doubles may not model Playwright's pages property.
+            return True
+        except Exception:
+            return False
+
+    async def _discard_stale_context(self, message: str) -> None:
+        PrintStyle.warning(message)
+        self._discard_context_state()
+        await self._stop_playwright("Playwright stop after Browser context loss failed")
+
+    def _discard_context_state(self) -> None:
+        for waiter in self._pending_popups:
+            if not waiter.done():
+                waiter.set_exception(RuntimeError("Browser context closed."))
+        self._pending_popups.clear()
+        self._background_popup_pages.clear()
+        self.pages.clear()
+        self.last_interacted_browser_id = None
+        for screencast in self.screencasts.values():
+            screencast.stopped = True
+            screencast._drop_queued_frames()
+            with contextlib.suppress(asyncio.QueueFull):
+                screencast.queue.put_nowait(None)
+            for task in list(screencast._ack_tasks):
+                task.cancel()
+            screencast._ack_tasks.clear()
+        self.screencasts.clear()
+        self.context = None
+
+    async def _stop_playwright(self, warning: str) -> None:
+        if not self.playwright:
+            return
+        try:
+            await self.playwright.stop()
+        except Exception as exc:
+            PrintStyle.warning(f"{warning}: {exc}")
+        finally:
+            self.playwright = None
 
     async def _start(self) -> None:
         from playwright.async_api import async_playwright
@@ -711,6 +764,7 @@ class _BrowserRuntimeCore:
             raise
         self.context.set_default_timeout(30000)
         self.context.set_default_navigation_timeout(30000)
+        self.context.on("close", self._on_context_closed)
         self.context.on("page", self._on_new_page_sync)
         await self.context.add_init_script(self._shadow_dom_script())
         await self.context.add_init_script(path=str(CONTENT_HELPER_PATH))
@@ -1506,6 +1560,12 @@ class _BrowserRuntimeCore:
         self.last_interacted_browser_id = None
         if delete_profile:
             shutil.rmtree(self.profile_dir, ignore_errors=True)
+
+    def _on_context_closed(self) -> None:
+        if self._closing or self.context is None:
+            return
+        PrintStyle.warning("Browser context closed unexpectedly; will restart on next use.")
+        self._discard_context_state()
 
     async def _reference_action(
         self,
