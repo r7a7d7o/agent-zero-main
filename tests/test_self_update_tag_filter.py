@@ -1,6 +1,7 @@
 import importlib.util
 import sys
 import types
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -753,6 +754,31 @@ def test_self_update_manager_queues_update_with_main_latest_defaults(monkeypatch
     assert payload["backup_conflict_policy"] == "rename"
     assert captured["path"] == manager.TRIGGER_FILE
     assert captured["payload"]["tag"] == "latest"
+
+
+def test_self_update_manager_usr_backup_skips_broken_symlinks(tmp_path):
+    manager = load_self_update_manager()
+    repo_dir = tmp_path / "repo"
+    usr_dir = repo_dir / "usr"
+    venv_bin = usr_dir / "workdir" / "reachy-mini-mcp" / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (usr_dir / "settings.json").write_text('{"ok": true}\n', encoding="utf-8")
+    broken_symlink = venv_bin / "python"
+    broken_symlink.symlink_to("/missing/host/python")
+
+    backup_path = manager.create_usr_backup(
+        repo_dir=repo_dir,
+        backup_path=str(tmp_path / "backups"),
+        backup_name="usr-backup.zip",
+        conflict_policy="rename",
+        logger=manager.NullLogger(),
+    )
+
+    with zipfile.ZipFile(backup_path) as archive:
+        names = set(archive.namelist())
+
+    assert "usr/settings.json" in names
+    assert "usr/workdir/reachy-mini-mcp/.venv/bin/python" not in names
 
 
 def test_self_update_manager_latest_on_main_uses_current_major_release(monkeypatch):

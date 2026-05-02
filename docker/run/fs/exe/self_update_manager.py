@@ -366,6 +366,9 @@ def create_usr_backup(
                 root_path = Path(root)
                 for filename in files:
                     source_file = root_path / filename
+                    if source_file.is_symlink() and not source_file.exists():
+                        logger.log(f"Skipping broken symlink during usr backup: {source_file}")
+                        continue
                     archive_name = Path("usr") / source_file.relative_to(usr_dir)
                     archive.write(source_file, archive_name.as_posix())
 
