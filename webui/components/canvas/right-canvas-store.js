@@ -7,6 +7,8 @@ const MIN_WIDTH = 420;
 const MAX_WIDTH = 900;
 const DESKTOP_BREAKPOINT = 1200;
 const MOBILE_BREAKPOINT = 768;
+const SURFACE_MODE_CANVAS = "canvas";
+const SURFACE_MODE_MODAL = "modal";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -16,9 +18,14 @@ function viewportWidth() {
   return Math.max(document.documentElement.clientWidth || 0, globalThis.innerWidth || 0);
 }
 
+function normalizeSurfaceMode(mode = "") {
+  return mode === SURFACE_MODE_MODAL ? SURFACE_MODE_MODAL : SURFACE_MODE_CANVAS;
+}
+
 const model = {
   surfaces: [],
   activeSurfaceId: "",
+  surfaceModes: {},
   isOpen: false,
   width: DEFAULT_WIDTH,
   isOverlayMode: false,
@@ -75,6 +82,9 @@ const model = {
     } else {
       this.surfaces.push(normalized);
     }
+    if (!this.surfaceModes[normalized.id]) {
+      this.surfaceModes[normalized.id] = SURFACE_MODE_CANVAS;
+    }
     this.surfaces.sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
     if (!this._registering) {
       this.ensureActiveSurface();
@@ -116,6 +126,7 @@ const model = {
 
     this.activeSurfaceId = targetId;
     this.isOpen = true;
+    this.recordSurfaceMode(targetId, SURFACE_MODE_CANVAS, { persist: false });
     this._lastPayloadBySurface[targetId] = payload || {};
     this.persist();
     this.applyLayoutState();
@@ -126,6 +137,30 @@ const model = {
       console.error(`Canvas surface ${targetId} failed to open`, error);
     }
     return true;
+  },
+
+  recordSurfaceMode(surfaceId, mode = SURFACE_MODE_CANVAS, options = {}) {
+    const targetId = String(surfaceId || "").trim();
+    if (!targetId) return;
+    this.surfaceModes = {
+      ...this.surfaceModes,
+      [targetId]: normalizeSurfaceMode(mode),
+    };
+    if (options.persist !== false) this.persist();
+  },
+
+  latestSurfaceMode(surfaceId) {
+    const targetId = String(surfaceId || "").trim();
+    return normalizeSurfaceMode(this.surfaceModes[targetId]);
+  },
+
+  async openLatest(surfaceId = "", payload = {}) {
+    const targetId = surfaceId || this.activeSurfaceId || this.panelSurfaces[0]?.id || "";
+    if (!targetId) return false;
+    if (this.latestSurfaceMode(targetId) === SURFACE_MODE_MODAL) {
+      return await this.openModalSurface(targetId, payload);
+    }
+    return await this.open(targetId, payload);
   },
 
   async close() {
@@ -194,6 +229,8 @@ const model = {
     const surface = this.getSurface(targetId);
     const modalPath = payload.modalPath || surface?.modalPath || "";
     if (!surface || !modalPath) return false;
+    const openModal = globalThis.ensureModalOpen || globalThis.openModal;
+    if (!openModal) return false;
     if (this.activeSurfaceId === targetId) {
       this.isOpen = false;
       this.persist();
@@ -204,9 +241,37 @@ const model = {
         console.error(`Canvas surface ${targetId} failed to close while undocking`, error);
       }
     }
-    const modalPromise = globalThis.ensureModalOpen?.(modalPath);
+    this.recordSurfaceMode(targetId, SURFACE_MODE_MODAL);
+    const modalPromise = openModal(modalPath);
     if (modalPromise?.catch) {
       modalPromise.catch((error) => console.error(`Canvas surface ${targetId} failed to undock`, error));
+    }
+    return true;
+  },
+
+  async openModalSurface(surfaceId = "", payload = {}) {
+    const targetId = surfaceId || this.activeSurfaceId;
+    const surface = this.getSurface(targetId);
+    const modalPath = payload.modalPath || surface?.modalPath || "";
+    if (!surface || !modalPath) return false;
+    const openModal = globalThis.ensureModalOpen || globalThis.openModal;
+    if (!openModal) return false;
+
+    if (this.isOpen && this.activeSurfaceId === targetId) {
+      this.isOpen = false;
+      this.persist();
+      this.applyLayoutState();
+      try {
+        await surface.close?.(this._lastPayloadBySurface[targetId] || {});
+      } catch (error) {
+        console.error(`Canvas surface ${targetId} failed to close before modal open`, error);
+      }
+    }
+
+    this.recordSurfaceMode(targetId, SURFACE_MODE_MODAL);
+    const modalPromise = openModal(modalPath);
+    if (modalPromise?.catch) {
+      modalPromise.catch((error) => console.error(`Canvas surface ${targetId} failed to open as modal`, error));
     }
     return true;
   },
@@ -301,6 +366,7 @@ const model = {
         JSON.stringify({
           isOpen: this.isOpen,
           activeSurfaceId: this.activeSurfaceId,
+          surfaceModes: this.surfaceModes,
           width: this.width,
         }),
       );
@@ -315,6 +381,12 @@ const model = {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
       this.isOpen = false;
       this.activeSurfaceId = String(saved.activeSurfaceId || "");
+      this.surfaceModes = Object.fromEntries(
+        Object.entries(saved.surfaceModes || {}).map(([surfaceId, mode]) => [
+          surfaceId,
+          normalizeSurfaceMode(mode),
+        ]),
+      );
       if (saved.width) this.width = Number(saved.width);
     } catch (error) {
       console.warn("Could not restore right canvas state", error);

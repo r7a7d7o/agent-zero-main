@@ -662,6 +662,36 @@ def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
         assert "Alpine.store" not in js
 
 
+def test_browser_and_desktop_surface_buttons_remember_latest_window_mode():
+    canvas_store = (PROJECT_ROOT / "webui" / "components" / "canvas" / "right-canvas-store.js").read_text(
+        encoding="utf-8"
+    )
+    canvas_html = (PROJECT_ROOT / "webui" / "components" / "canvas" / "right-canvas.html").read_text(
+        encoding="utf-8"
+    )
+    modals_js = (PROJECT_ROOT / "webui" / "js" / "modals.js").read_text(encoding="utf-8")
+
+    assert "surfaceModes: {}" in canvas_store
+    assert "recordSurfaceMode(surfaceId" in canvas_store
+    assert "latestSurfaceMode(surfaceId)" in canvas_store
+    assert "async openLatest(surfaceId" in canvas_store
+    assert "async openModalSurface(surfaceId" in canvas_store
+    assert "this.recordSurfaceMode(targetId, SURFACE_MODE_CANVAS" in canvas_store
+    assert "this.recordSurfaceMode(targetId, SURFACE_MODE_MODAL)" in canvas_store
+    assert "surfaceModes: this.surfaceModes" in canvas_store
+    assert "normalizeSurfaceMode(mode)" in canvas_store
+
+    assert '@click="$store.rightCanvas.openLatest(surface.id)"' in canvas_html
+    assert '@click="$store.rightCanvas.open(surface.id)"' in canvas_html
+
+    assert 'rightCanvasStore.recordSurfaceMode?.(metadata.surfaceId, "modal")' in modals_js
+    assert "modalRequiresExplicitClose" in modals_js
+    assert '"plugins/_browser/webui/main.html"' in modals_js
+    assert '"plugins/_office/webui/main.html"' in modals_js
+    assert "&& !modalRequiresExplicitClose(newModal)" in modals_js
+    assert "if (modalRequiresExplicitClose(modalStack[modalStack.length - 1])) return;" in modals_js
+
+
 def test_browser_tool_does_not_auto_open_canvas_policy_is_documented():
     prompt = (
         PROJECT_ROOT / "plugins" / "_browser" / "prompts" / "agent.system.tool.browser.md"

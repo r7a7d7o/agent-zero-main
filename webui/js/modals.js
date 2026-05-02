@@ -5,6 +5,22 @@ import { store as rightCanvasStore } from "/components/canvas/right-canvas-store
 
 // Modal functionality
 const modalStack = [];
+const EXPLICIT_CLOSE_MODAL_PATHS = new Set([
+  "plugins/_browser/webui/main.html",
+  "plugins/_office/webui/main.html",
+]);
+
+function normalizeModalPath(modalPath = "") {
+  return String(modalPath || "").replace(/^\/+/, "");
+}
+
+function modalRequiresExplicitClose(modalOrElement) {
+  const element = modalOrElement?.element || modalOrElement;
+  const path = normalizeModalPath(modalOrElement?.path || element?.path || "");
+  return EXPLICIT_CLOSE_MODAL_PATHS.has(path)
+    || element?.classList?.contains("modal-explicit-close")
+    || element?.querySelector?.(".modal-inner")?.classList?.contains("modal-explicit-close");
+}
 
 function findModalIndexByPath(modalPath) {
   return modalStack.findIndex((modal) => modal.path === modalPath);
@@ -115,7 +131,11 @@ function createModalElement(path) {
     mouseDownTarget = event.target;
   });
   newModal.addEventListener("mouseup", (event) => {
-    if (event.target === newModal && mouseDownTarget === newModal) {
+    if (
+      event.target === newModal
+      && mouseDownTarget === newModal
+      && !modalRequiresExplicitClose(newModal)
+    ) {
       closeModal();
     }
     mouseDownTarget = null;
@@ -186,6 +206,8 @@ function configureModalDockButton(modal, doc) {
   if (!metadata || !modal.header || modal.header.querySelector(".modal-dock-button")) {
     return;
   }
+
+  rightCanvasStore.recordSurfaceMode?.(metadata.surfaceId, "modal");
 
   const button = document.createElement("button");
   button.type = "button";
@@ -469,6 +491,7 @@ document.addEventListener("click", async (e) => {
 // Close modal on escape key (closes only the top modal)
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && modalStack.length > 0) {
+    if (modalRequiresExplicitClose(modalStack[modalStack.length - 1])) return;
     closeModal();
   }
 });
