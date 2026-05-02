@@ -303,6 +303,97 @@ def update_document_path(file_id: str, path: str | Path, context_id: str = "") -
         return get_document(file_id, conn=conn)
 
 
+def rename_document(
+    file_id: str,
+    path: str | Path,
+    content: str | None = None,
+    context_id: str = "",
+) -> dict[str, Any]:
+    resolved = normalize_path(path, context_id=context_id)
+    ext = normalize_extension(resolved.suffix.lstrip("."))
+    data = None
+    if content is not None:
+        if ext != "md":
+            raise ValueError("Inline content can only be provided for Markdown documents.")
+        data = str(content or "").encode("utf-8")
+        if len(data) > MAX_SAVE_BYTES:
+            raise OverflowError("Document save exceeds maximum size")
+
+    changed_at = now()
+    with connect() as conn:
+        doc = get_document(file_id, conn=conn)
+        source = Path(doc["path"])
+        source_resolved = source.resolve(strict=False)
+        changed_path = str(source_resolved) != str(resolved)
+        source_exists = source.exists()
+
+        if ext != str(doc["extension"]).lower():
+            raise ValueError("Document extension cannot change during rename.")
+
+        row = conn.execute("SELECT file_id FROM documents WHERE path = ?", (str(resolved),)).fetchone()
+        if row and row["file_id"] != file_id:
+            raise ValueError(f"Document path is already registered: {display_path(resolved)}")
+        if changed_path and resolved.exists():
+            raise FileExistsError(f"Target already exists: {display_path(resolved)}")
+        if not source_exists and data is None:
+            raise FileNotFoundError(str(source_resolved))
+
+        previous = source.read_bytes() if source_exists else b""
+        content_changed = data is not None and data != previous
+
+        if changed_path and data is None:
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            source.rename(resolved)
+            final_data = resolved.read_bytes()
+        elif data is not None:
+            if content_changed:
+                _record_version(conn, file_id, source_resolved, item_version(doc), previous)
+            _write_atomic(resolved, data)
+            if changed_path and source_exists:
+                source.unlink(missing_ok=True)
+            final_data = data
+        else:
+            final_data = previous
+
+        stat = resolved.stat()
+        next_version = int(doc["version"]) + 1 if content_changed else int(doc["version"])
+        conn.execute(
+            """
+            UPDATE documents
+            SET path=?, basename=?, extension=?, size=?, version=?, sha256=?, last_modified=?, updated_at=?
+            WHERE file_id=?
+            """,
+            (
+                str(resolved),
+                resolved.name,
+                ext,
+                stat.st_size,
+                next_version,
+                sha256_bytes(final_data),
+                now_iso(),
+                changed_at,
+                file_id,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO events (file_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
+            (
+                file_id,
+                "renamed",
+                json.dumps(
+                    {
+                        "from": display_path(source_resolved),
+                        "to": display_path(resolved),
+                        "saved": content_changed,
+                        "materialized": not source_exists,
+                    }
+                ),
+                changed_at,
+            ),
+        )
+        return get_document(file_id, conn=conn)
+
+
 def get_open_documents(limit: int = 6) -> list[dict[str, Any]]:
     with connect() as conn:
         _clear_expired_sessions(conn)

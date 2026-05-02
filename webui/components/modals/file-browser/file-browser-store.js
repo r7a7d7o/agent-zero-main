@@ -24,6 +24,7 @@ const model = {
   isRenaming: false,
   renameError: null,
   renameAfterConfirm: null,
+  renamePerformAction: null,
   renameValidateName: null,
   openDropdownPath: null, // Track which dropdown is currently open
   searchQuery: "",
@@ -245,6 +246,7 @@ const model = {
     this.isRenaming = false;
     this.renameError = null;
     this.renameAfterConfirm = null;
+    this.renamePerformAction = null;
     this.renameValidateName = null;
   },
 
@@ -364,6 +366,7 @@ const model = {
     this.renameMode = "rename";
     this.renameError = null;
     this.renameAfterConfirm = typeof options.onRenamed === "function" ? options.onRenamed : null;
+    this.renamePerformAction = typeof options.performRename === "function" ? options.performRename : null;
     this.renameValidateName = typeof options.validateName === "function" ? options.validateName : null;
     if (typeof options.currentPath === "string" && options.currentPath) {
       this.browser.currentPath = options.currentPath;
@@ -451,18 +454,35 @@ const model = {
               newName: newName,
             };
 
-      const resp = await fetchApi("/rename_work_dir_file", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      let data = {};
+      if (this.renamePerformAction) {
+        data = await this.renamePerformAction({
+          action: this.renameMode,
+          previousPath,
+          path: renamedPath,
+          name: newName,
+          target: this.renameTarget,
+          payload,
+        }) || {};
+        if (data.error || data.ok === false) {
+          throw new Error(data.error || "Rename failed");
+        }
+      } else {
+        const resp = await fetchApi("/rename_work_dir_file", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
 
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || data.error) {
-        throw new Error(data.error || "Rename failed");
+        data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data.error) {
+          throw new Error(data.error || "Rename failed");
+        }
       }
 
-      await this.fetchFiles(this.browser.currentPath);
+      if (!this.renamePerformAction || data.refreshFiles !== false) {
+        await this.fetchFiles(this.browser.currentPath);
+      }
       if (this.renameAfterConfirm) {
         await this.renameAfterConfirm({
           action: this.renameMode,

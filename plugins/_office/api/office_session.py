@@ -118,7 +118,12 @@ class OfficeSession(ApiHandler):
         if not path:
             return {"ok": False, "error": "path is required."}
         try:
-            updated = document_store.update_document_path(file_id, path, context_id=context_id)
+            updated = document_store.rename_document(
+                file_id,
+                path,
+                content=input.get("text") if "text" in input else None,
+                context_id=context_id,
+            )
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
         desktop = None
@@ -129,6 +134,7 @@ class OfficeSession(ApiHandler):
             "document": _public_doc(updated),
             "version": document_store.item_version(updated),
             "desktop": desktop,
+            "refreshFiles": False,
         }
 
     def _desktop(self) -> dict:

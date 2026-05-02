@@ -277,6 +277,40 @@ def test_document_path_update_preserves_file_id_after_rename(office_state):
     assert document_store.get_document(doc["file_id"])["path"] == str(renamed)
 
 
+def test_document_rename_materializes_missing_markdown_with_editor_text(office_state):
+    doc = document_store.create_document("document", "Unsaved Draft", "md", "Seed")
+    original = Path(doc["path"])
+    original.unlink()
+    renamed = original.with_name("Renamed Draft.md")
+
+    updated = document_store.rename_document(
+        doc["file_id"],
+        renamed,
+        content="# Renamed Draft\n\nCanvas text",
+    )
+
+    assert updated["file_id"] == doc["file_id"]
+    assert updated["basename"] == "Renamed Draft.md"
+    assert updated["path"] == str(renamed)
+    assert renamed.read_text(encoding="utf-8") == "# Renamed Draft\n\nCanvas text"
+
+
+def test_document_rename_saves_dirty_markdown_and_removes_original(office_state):
+    doc = document_store.create_document("document", "Dirty Rename", "md", "Old")
+    original = Path(doc["path"])
+    renamed = original.with_name("Clean Rename.md")
+
+    updated = document_store.rename_document(
+        doc["file_id"],
+        renamed,
+        content="# Clean Rename\n\nFresh text",
+    )
+
+    assert updated["version"] == 2
+    assert not original.exists()
+    assert renamed.read_text(encoding="utf-8") == "# Clean Rename\n\nFresh text"
+
+
 def test_direct_markdown_edits_refresh_open_canvas_session(office_state, monkeypatch):
     manager = markdown_sessions.MarkdownSessionManager()
     monkeypatch.setattr(markdown_sessions, "_manager", manager, raising=False)

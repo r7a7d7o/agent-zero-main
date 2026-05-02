@@ -517,10 +517,6 @@ const model = {
 
   async renameActiveFile() {
     if (!this.session || this.isDesktopSession() || this.saving) return;
-    if (this.dirty || this.session.dirty) {
-      await this.save();
-      if (this.error) return;
-    }
 
     const session = this.session;
     const path = session.path || session.document?.path || "";
@@ -545,15 +541,26 @@ const model = {
           if (!extension) return true;
           return extensionOf(newName) === extension || `Keep the .${extension} extension for this open document.`;
         },
-        onRenamed: async ({ path: renamedPath }) => {
-          await this.handleActiveFileRenamed(session, renamedPath);
+        performRename: async ({ path: renamedPath }) => {
+          const payload = {
+            file_id: session.file_id || "",
+            path: renamedPath,
+          };
+          if (this.isMarkdown(session)) {
+            this.syncEditorText();
+            payload.text = this.session?.tab_id === session.tab_id ? this.editorText : session.text || "";
+          }
+          return await callOffice("renamed", payload);
+        },
+        onRenamed: async ({ path: renamedPath, response }) => {
+          await this.handleActiveFileRenamed(session, renamedPath, response);
         },
       },
     );
   },
 
-  async handleActiveFileRenamed(session, renamedPath) {
-    const response = await callOffice("renamed", {
+  async handleActiveFileRenamed(session, renamedPath, renameResponse = null) {
+    const response = renameResponse || await callOffice("renamed", {
       file_id: session.file_id || "",
       path: renamedPath,
     });
@@ -569,6 +576,7 @@ const model = {
       file_id: document.file_id || session.file_id,
       version: document.version || response.version || session.version,
       desktop: response.desktop?.desktop || session.desktop,
+      text: this.session?.tab_id === session.tab_id ? this.editorText : session.text,
       dirty: false,
     };
     this.replaceSession(session, updated);

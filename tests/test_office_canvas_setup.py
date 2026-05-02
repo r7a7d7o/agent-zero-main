@@ -40,6 +40,8 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "desktop_save" in store
     assert "openRenameModal" in store
     assert 'callOffice("renamed"' in store
+    assert "performRename" in store
+    assert "payload.text" in store
     assert "handleActiveFileRenamed" in store
     assert "--office-zoom" not in panel
     assert "zoom: 1" not in store
@@ -147,8 +149,10 @@ def test_office_surface_filters_tabs_to_desktop_and_markdown_without_dashboard()
     ).read_text(encoding="utf-8")
 
     assert "renameAfterConfirm" in file_browser_store
+    assert "renamePerformAction" in file_browser_store
     assert "renameValidateName" in file_browser_store
     assert "options.onRenamed" in file_browser_store
+    assert "options.performRename" in file_browser_store
     assert "options.validateName" in file_browser_store
 
 
