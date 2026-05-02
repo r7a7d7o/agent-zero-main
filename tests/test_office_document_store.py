@@ -190,6 +190,9 @@ def test_odt_is_not_advertised_and_returns_clear_unsupported_response(office_sta
     )
 
     assert "formats: md docx xlsx pptx" in prompt
+    assert "`method` is accepted as an alias for action" in prompt
+    assert "they do not open the canvas automatically" in prompt
+    assert "Download and Open in canvas message actions" in prompt
     with pytest.raises(ValueError, match="ODT editing is not supported"):
         document_store.create_document("document", "Skip ODT", "odt", "")
 
@@ -594,6 +597,40 @@ def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeyp
     assert not supervisor.exists()
     assert not runtime_dir.exists()
     assert marker.exists()
+
+
+def test_office_startup_bootstraps_persistent_desktop_runtime(monkeypatch):
+    calls = []
+    routes_module = types.ModuleType("plugins._office.helpers.libreoffice_desktop_routes")
+    routes_module.install_route_hooks = lambda: calls.append("routes")
+    monkeypatch.setitem(sys.modules, "plugins._office.helpers.libreoffice_desktop_routes", routes_module)
+    monkeypatch.delitem(
+        sys.modules,
+        "plugins._office.extensions.python.startup_migration._20_office_routes",
+        raising=False,
+    )
+
+    from plugins._office.extensions.python.startup_migration import _20_office_routes as office_startup
+
+    class Manager:
+        def ensure_system_desktop(self):
+            calls.append("desktop")
+            return {"available": True, "session_id": "agent-zero-desktop"}
+
+    monkeypatch.setattr(
+        office_startup.hooks,
+        "cleanup_stale_runtime_state",
+        lambda: {"ok": True, "errors": [], "installed": [], "removed": []},
+    )
+    monkeypatch.setattr(
+        office_startup.libreoffice_desktop,
+        "get_manager",
+        lambda: Manager(),
+    )
+
+    office_startup.OfficeStartupCleanup(agent=None).execute()
+
+    assert calls == ["routes", "desktop"]
 
 
 def test_cleanup_hook_reruns_when_stale_packages_exist_after_old_marker(tmp_path, monkeypatch):

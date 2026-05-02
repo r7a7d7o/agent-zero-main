@@ -1,7 +1,7 @@
 ---
 name: office-artifacts
 description: Use when creating, opening, reading, or editing editable document canvas artifacts such as Markdown documents, DOCX documents, XLSX spreadsheets, and PPTX presentations with the document_artifact tool.
-version: "1.2.0"
+version: "1.3.0"
 author: "Agent Zero Core Team"
 tags: ["documents", "markdown", "md", "docx", "xlsx", "pptx", "canvas", "spreadsheets", "presentations"]
 triggers:
@@ -22,11 +22,18 @@ allowed_tools:
 
 Use `document_artifact` for substantial deliverables that should remain editable in the custom document canvas. Markdown is the first-class document format and the default for writing, notes, reports, briefs, and drafts. Use DOCX, XLSX, or PPTX only when the user explicitly asks for that binary format, provides an existing file in that format, or needs a Word/Excel/PowerPoint-compatible artifact.
 
-The canvas is user-owned UI. Creating, reading, or editing an artifact must save the file and update its state, but it must not open the canvas automatically if the user has not opened it. Provide an explicit document action/button path for the user instead.
+The canvas is user-owned UI. Creating, reading, or editing an artifact must save the file and update its state, but it must not open the canvas automatically if the user has not opened it. Tool results provide explicit Download and Open in canvas actions for the user.
+
+For format-specific work, prefer the matching skill when available:
+
+- `markdown-documents` for Markdown-first editable writing.
+- `word-documents` for DOCX/Word-compatible files.
+- `excel-workbooks` for XLSX/Excel-compatible spreadsheets.
+- `presentation-decks` for PPTX/PowerPoint-compatible decks.
 
 ## Workflow
 
-1. Create or open the artifact with `document_artifact:create` or `document_artifact:open`.
+1. Create or open the artifact with `document_artifact:create` / `document_artifact:open`, or with `tool_name: "document_artifact"` plus `method: "create"` / `method: "open"`.
 2. Before content-sensitive edits, call `document_artifact:read` with `file_id` or `path`.
 3. Apply saved changes with `document_artifact:edit`.
 4. Use `version_history` or `restore_version` when the user asks to audit or roll back.
@@ -128,8 +135,9 @@ Arguments:
 
 - Prefer `file_id` from canvas context or prior tool output; use `path` when that is all you have.
 - Use `read` before editing unless the current saved content is already known.
+- Do not create an artifact for tiny one-shot edits or answers the agent can finish cleanly in chat or by directly editing the file.
 - For document-style requests with no requested binary format, create Markdown and let the custom Markdown editor be the primary interactive surface.
-- Treat Desktop and LibreOffice as opt-in visual tools for explicit GUI requests, binary Office formats, or final layout inspection.
+- The Desktop runtime may be warmed during Agent Zero startup, but visible Desktop/canvas use remains opt-in. Treat LibreOffice GUI work as appropriate for explicit GUI requests, binary Office visual polish, or final layout inspection.
 - Never open the canvas automatically from a tool result. If the user has not opened the canvas, leave the saved artifact available through the normal UI affordance.
 - Do not create ODT, ODS, or ODP in this pass; return a clear unsupported response if asked.
 - Use native `create_chart` for embedded spreadsheet charts. Reach for Python/code execution only when the requested chart behavior is not supported by the tool.

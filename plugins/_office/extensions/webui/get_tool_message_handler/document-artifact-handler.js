@@ -2,6 +2,11 @@ import {
   createActionButton,
   copyToClipboard,
 } from "/components/messages/action-buttons/simple-action-buttons.js";
+import {
+  buildDocumentFileActionButtons,
+  documentFromLog,
+  parseDocumentResult,
+} from "../lib/document-actions.js";
 import { store as stepDetailStore } from "/components/modals/process-step-detail/step-detail-store.js";
 import { store as speechStore } from "/components/chat/speech/speech-store.js";
 import {
@@ -14,42 +19,6 @@ export default async function registerDocumentArtifactHandler(extData) {
   if (extData?.tool_name === "document_artifact") {
     extData.handler = drawDocumentArtifactTool;
   }
-}
-
-async function openOfficeCanvas(kvps = {}) {
-  const canvas = globalThis.Alpine?.store?.("rightCanvas")
-    || (await import("/components/canvas/right-canvas-store.js")).store;
-  await canvas?.open?.("office", {
-    path: kvps.path || "",
-    file_id: kvps.file_id || "",
-    refresh: true,
-    source: "tool",
-  });
-}
-
-function parseDocumentResult(content) {
-  if (!content || typeof content !== "string") return {};
-  try {
-    const parsed = JSON.parse(content);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function documentFromArgs(args, result = {}) {
-  const kvps = args?.kvps || {};
-  const document = result.document && typeof result.document === "object"
-    ? result.document
-    : {};
-  return {
-    file_id: kvps.file_id || document.file_id || "",
-    path: kvps.path || document.path || "",
-    title: kvps.title || kvps.basename || document.basename || "",
-    format: kvps.format || kvps.extension || document.extension || "",
-    version: kvps.version || document.version || "",
-    last_modified: kvps.last_modified || document.last_modified || "",
-  };
 }
 
 function drawDocumentArtifactTool({
@@ -67,21 +36,13 @@ function drawDocumentArtifactTool({
   const displayKvps = { ...kvps };
   const contentText = String(content ?? "");
   const documentResult = parseDocumentResult(contentText);
-  const document = documentFromArgs(args, documentResult);
+  const document = documentFromLog(args, documentResult);
   const headerLabels = [
     kvps?._tool_name && { label: kvps._tool_name, class: "tool-name-badge" },
     document?.format && { label: String(document.format).toUpperCase(), class: "tool-name-badge" },
   ].filter(Boolean);
 
-  const actionButtons = [
-    createActionButton("desktop_windows", "Desktop", () => openOfficeCanvas(document)),
-  ];
-
-  if (document?.path) {
-    actionButtons.push(
-      createActionButton("content_copy", "Path", () => copyToClipboard(document.path)),
-    );
-  }
+  const actionButtons = buildDocumentFileActionButtons(document);
 
   if (contentText.trim()) {
     actionButtons.push(

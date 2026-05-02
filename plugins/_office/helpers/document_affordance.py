@@ -348,6 +348,6 @@ def clean_title(value: str) -> str:
 
 def format_created_response(basename: str, path: str) -> str:
     return (
-        f"Created **{basename}** and opened it in the document canvas.\n\n"
+        f"Created **{basename}**.\n\n"
         f"Path: `{path}`"
     )

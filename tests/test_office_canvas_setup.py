@@ -144,10 +144,23 @@ def test_right_canvas_surface_is_branded_as_desktop():
         / "get_tool_message_handler"
         / "document-artifact-handler.js"
     ).read_text(encoding="utf-8")
+    document_actions = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_office"
+        / "extensions"
+        / "webui"
+        / "lib"
+        / "document-actions.js"
+    ).read_text(encoding="utf-8")
 
     assert 'title: "Desktop"' in surface
     assert 'icon: "desktop_windows"' in surface
-    assert '"Desktop"' in handler
+    assert "buildDocumentFileActionButtons(document)" in handler
+    assert "Open in canvas" in document_actions
+    assert "downloadDocument" in document_actions
+    assert "/api/download_work_dir_file?path=" in document_actions
+    assert "source: \"message-action\"" in document_actions
 
 
 def test_official_libreoffice_desktop_route_and_packages_are_declared():
@@ -318,10 +331,34 @@ def test_office_skills_preserve_markdown_first_and_opt_in_desktop_policy():
     desktop_skill = (
         PROJECT_ROOT / "plugins" / "_office" / "skills" / "linux-desktop" / "SKILL.md"
     ).read_text(encoding="utf-8")
+    markdown_skill = (
+        PROJECT_ROOT / "plugins" / "_office" / "skills" / "markdown-documents" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    word_skill = (
+        PROJECT_ROOT / "plugins" / "_office" / "skills" / "word-documents" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    excel_skill = (
+        PROJECT_ROOT / "plugins" / "_office" / "skills" / "excel-workbooks" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    presentation_skill = (
+        PROJECT_ROOT / "plugins" / "_office" / "skills" / "presentation-decks" / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
     assert "Markdown is the first-class document format" in office_skill
     assert "custom document canvas" in office_skill
     assert "must not open the canvas automatically" in office_skill
+    assert "Download and Open in canvas actions" in office_skill
+    assert "method: \"create\"" in office_skill
     assert "The Desktop is opt-in" in desktop_skill
     assert "custom Markdown editor" in desktop_skill
     assert "Never open the Desktop/canvas automatically" in desktop_skill
+    assert "persistent Desktop runtime during initial startup" in desktop_skill
+    assert '"format": "md"' in markdown_skill
+    assert "never open the canvas automatically" in markdown_skill
+    assert '"format": "docx"' in word_skill
+    assert "must not open the canvas automatically" in word_skill
+    assert '"format": "xlsx"' in excel_skill
+    assert "For a blank workbook request" in excel_skill
+    assert "must not open the canvas automatically" in excel_skill
+    assert '"format": "pptx"' in presentation_skill
+    assert "must not open the canvas automatically" in presentation_skill

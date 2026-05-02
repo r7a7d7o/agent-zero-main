@@ -100,10 +100,11 @@ def public_doc(doc: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def document_additional(doc: dict[str, Any]) -> dict[str, Any]:
+def document_additional(doc: dict[str, Any], action: str = "create") -> dict[str, Any]:
     return {
         "_tool_name": "document_artifact",
         "canvas_surface": "office",
+        "action": action,
         "file_id": doc["file_id"],
         "title": doc["basename"],
         "format": doc["extension"],
