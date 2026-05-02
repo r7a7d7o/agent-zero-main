@@ -28,11 +28,24 @@ export default async function registerOfficeSurface(canvas) {
     icon: "desktop_windows",
     order: 20,
     modalPath: "/plugins/_office/webui/main.html",
+    async beginDockHandoff() {
+      const office = globalThis.Alpine?.store?.("office");
+      office?.beforeDesktopHostHandoff?.();
+    },
+    async finishDockHandoff(payload = {}) {
+      const office = globalThis.Alpine?.store?.("office");
+      if (payload.opened !== false) office?.afterDesktopHostShown?.({ source: "dock" });
+    },
+    async cancelDockHandoff() {
+      const office = globalThis.Alpine?.store?.("office");
+      office?.cancelDesktopHostHandoff?.();
+    },
     async open(payload = {}) {
       const panel = await waitForElement('[data-surface-id="office"] .office-panel');
       const office = globalThis.Alpine?.store?.("office");
       await office?.onMount?.(panel, { mode: "canvas" });
       await office?.onOpen?.(payload);
+      office?.afterDesktopHostShown?.({ source: payload?.source || "canvas" });
     },
     async close(payload = {}) {
       const office = globalThis.Alpine?.store?.("office");

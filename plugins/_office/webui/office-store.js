@@ -1043,6 +1043,8 @@ const model = {
 
   desktopFrame(preferred = null) {
     if (this.isUsableDesktopFrame(preferred)) return preferred;
+    const rootFrame = this._root?.querySelector?.("[data-office-desktop-frame]");
+    if (this.isUsableDesktopFrame(rootFrame)) return rootFrame;
     const frames = this.desktopFrames();
     return frames
       .filter((frame) => this.isUsableDesktopFrame(frame))
@@ -1075,6 +1077,34 @@ const model = {
       delete frame.dataset.officeDesktopUnloaded;
       frame.setAttribute("src", url);
     }
+  },
+
+  afterDesktopHostShown() {
+    if (!this.hasOfficialOffice()) return;
+    this._desktopResizeKey = "";
+    this._desktopResizeSuspended = false;
+    this._desktopResizePending = false;
+    this.restoreDesktopFrames();
+    this.requestDesktopViewportSync({ force: true, frame: this.desktopFrame() });
+    for (const delay of [720, 1280]) {
+      globalThis.setTimeout(() => {
+        this.requestDesktopViewportSync({ force: true, frame: this.desktopFrame() });
+      }, delay);
+    }
+  },
+
+  beforeDesktopHostHandoff() {
+    this.stopDesktopResizeObserver();
+    this.stopXpraDesktopPrime();
+    this._desktopResizeKey = "";
+    this._desktopResizeSuspended = true;
+    this._desktopResizePending = true;
+  },
+
+  cancelDesktopHostHandoff() {
+    this._desktopResizeSuspended = false;
+    this._desktopResizePending = false;
+    this.requestDesktopViewportSync({ force: true, frame: this.desktopFrame() });
   },
 
   onDesktopFrameLoaded(event = null) {
@@ -1267,6 +1297,7 @@ const model = {
       const client = remoteWindow.client;
       if (!client) return false;
       this.installXpraDesktopClientPatches(remoteWindow, client);
+      this.installXpraDesktopCursorPatches(remoteWindow, remoteDocument, client);
       this.installXpraDesktopKeyboardBridge(frame, remoteWindow, remoteDocument, client);
       const container = client.container || remoteDocument?.querySelector?.("#screen");
       if (!container) return false;
@@ -1439,6 +1470,11 @@ const model = {
       .windowbuttons {
         display: none !important;
       }
+      #shadow_pointer {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+      }
       .window,
       .window.border,
       .window.desktop,
@@ -1468,6 +1504,33 @@ const model = {
       }
     `;
     remoteDocument.head?.appendChild(style);
+  },
+
+  installXpraDesktopCursorPatches(remoteWindow, remoteDocument, client) {
+    if (!remoteWindow || !remoteDocument || !client) return;
+    const hideShadowPointer = () => {
+      const pointer = remoteDocument.getElementById?.("shadow_pointer");
+      pointer?.style?.setProperty("display", "none", "important");
+      pointer?.style?.setProperty("visibility", "hidden", "important");
+      pointer?.style?.setProperty("opacity", "0", "important");
+    };
+    hideShadowPointer();
+
+    const pointerPacket = remoteWindow.PACKET_TYPES?.pointer_position || "pointer-position";
+    if (!client.__a0XpraDesktopCursorPatched) {
+      if (typeof client._process_pointer_position === "function") {
+        client.__a0OriginalProcessPointerPosition = client._process_pointer_position;
+      }
+      client._process_pointer_position = function patchedProcessPointerPosition(packet) {
+        hideShadowPointer();
+        this.__a0LastPointerPosition = packet;
+        return false;
+      };
+      client.__a0XpraDesktopCursorPatched = true;
+    }
+    if (client.packet_handlers && pointerPacket) {
+      client.packet_handlers[pointerPacket] = client._process_pointer_position;
+    }
   },
 
   installXpraDesktopFramePatches(remoteWindow, remoteDocument) {
