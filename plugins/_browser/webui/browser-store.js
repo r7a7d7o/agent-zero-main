@@ -23,6 +23,7 @@ const FRAME_REJECT_SYNC_COOLDOWN_MS = 600;
 const ANNOTATION_DRAG_THRESHOLD = 6;
 const ANNOTATION_MAX_COMMENTS = 24;
 const ANNOTATION_DOM_LIMIT = 1200;
+const ANNOTATION_TRAY_MARGIN = 10;
 
 function makeViewerToken() {
   return globalThis.crypto?.randomUUID?.()
@@ -106,6 +107,8 @@ const model = {
   annotationDragRect: null,
   annotationBusy: false,
   annotationError: "",
+  annotationTrayPosition: null,
+  annotationTrayDragging: false,
   connected: false,
   switchingBrowserId: null,
   commandInFlight: false,
@@ -127,6 +130,7 @@ const model = {
   _lastViewportKey: "",
   _lastViewport: null,
   _annotationPointer: null,
+  _annotationTrayDrag: null,
   _annotationSequence: 0,
   _mode: "",
   _surfaceMounted: false,
@@ -1588,8 +1592,93 @@ const model = {
     return this.visibleAnnotations().length + 1;
   },
 
+  annotationTrayStyle() {
+    if (!this.annotationTrayPosition) return {};
+    const position = this.clampAnnotationTrayPosition(this.annotationTrayPosition);
+    return {
+      left: `${position.x}px`,
+      top: `${position.y}px`,
+      right: "auto",
+      bottom: "auto",
+    };
+  },
+
+  clampAnnotationTrayPosition(position = {}) {
+    const stageRect = this._stageElement?.getBoundingClientRect?.();
+    const stageWidth = Math.max(1, Number(stageRect?.width || 0));
+    const stageHeight = Math.max(1, Number(stageRect?.height || 0));
+    const width = Math.max(180, Number(position.width || 0));
+    const height = Math.max(90, Number(position.height || 0));
+    const maxX = Math.max(ANNOTATION_TRAY_MARGIN, stageWidth - width - ANNOTATION_TRAY_MARGIN);
+    const maxY = Math.max(ANNOTATION_TRAY_MARGIN, stageHeight - height - ANNOTATION_TRAY_MARGIN);
+    return {
+      x: Math.min(Math.max(ANNOTATION_TRAY_MARGIN, Number(position.x || 0)), maxX),
+      y: Math.min(Math.max(ANNOTATION_TRAY_MARGIN, Number(position.y || 0)), maxY),
+      width,
+      height,
+    };
+  },
+
+  startAnnotationTrayDrag(event) {
+    if (event.button !== 0) return;
+    if (event.target?.closest?.("button, input, select, textarea, a")) return;
+    const tray = event.currentTarget?.closest?.(".browser-annotation-tray");
+    const stageRect = this._stageElement?.getBoundingClientRect?.();
+    const trayRect = tray?.getBoundingClientRect?.();
+    if (!tray || !stageRect || !trayRect) return;
+
+    const position = this.clampAnnotationTrayPosition({
+      x: trayRect.left - stageRect.left,
+      y: trayRect.top - stageRect.top,
+      width: trayRect.width,
+      height: trayRect.height,
+    });
+    this.annotationTrayPosition = position;
+    this.annotationTrayDragging = true;
+    this._annotationTrayDrag = {
+      id: event.pointerId,
+      target: event.currentTarget,
+      x: event.clientX,
+      y: event.clientY,
+      startX: position.x,
+      startY: position.y,
+      width: position.width,
+      height: position.height,
+    };
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  },
+
+  moveAnnotationTrayDrag(event) {
+    const drag = this._annotationTrayDrag;
+    if (!drag || event.pointerId !== drag.id) return;
+    this.annotationTrayPosition = this.clampAnnotationTrayPosition({
+      x: drag.startX + event.clientX - drag.x,
+      y: drag.startY + event.clientY - drag.y,
+      width: drag.width,
+      height: drag.height,
+    });
+    event.preventDefault();
+  },
+
+  finishAnnotationTrayDrag(event = null) {
+    const drag = this._annotationTrayDrag;
+    if (!drag || (event?.pointerId && event.pointerId !== drag.id)) return;
+    try {
+      drag.target?.releasePointerCapture?.(drag.id);
+    } catch {}
+    this._annotationTrayDrag = null;
+    this.annotationTrayDragging = false;
+  },
+
+  resetAnnotationTrayPosition() {
+    this.finishAnnotationTrayDrag();
+    this.annotationTrayPosition = null;
+  },
+
   clearVisibleAnnotations() {
     this.clearAnnotationsForBrowser(this.activeBrowserId, this.activeAnnotationUrl(), this.activeBrowserContextId);
+    this.resetAnnotationTrayPosition();
   },
 
   clearAnnotationsForBrowser(browserId, url = null, contextId = "") {
@@ -1821,6 +1910,9 @@ const model = {
 
   removeAnnotationComment(annotationId) {
     this.annotationComments = this.annotationComments.filter((annotation) => annotation.id !== annotationId);
+    if (!this.visibleAnnotations().length) {
+      this.resetAnnotationTrayPosition();
+    }
   },
 
   annotationChipLabel(annotation) {
@@ -2114,6 +2206,7 @@ const model = {
     this.annotationError = "";
     this.cancelAnnotationDraft();
     this.cancelAnnotationSelection();
+    this.resetAnnotationTrayPosition();
     if (this.contextId) {
       try {
         await websocket.emit("browser_viewer_unsubscribe", { context_id: this.contextId });

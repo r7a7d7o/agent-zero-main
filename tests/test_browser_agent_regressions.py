@@ -788,11 +788,15 @@ def test_browser_annotate_mode_ui_and_prompt_hooks():
     assert "Annotating" in panel_html
     assert "browser-annotation-layer" in panel_html
     assert "browser-annotation-tray" in panel_html
+    assert "annotationTrayStyle()" in panel_html
+    assert "startAnnotationTrayDrag($event)" in panel_html
     assert "Draft to chat" in panel_html
     assert "Send now" in panel_html
     assert "@pointerdown.stop.prevent=\"$store.browserPage.startAnnotationSelection($event)\"" in panel_html
     assert "@keydown.window=\"$store.browserPage.handleKeydown($event)\"" in panel_html
     assert "annotationComments: []" in browser_store
+    assert "annotationTrayPosition: null" in browser_store
+    assert "clampAnnotationTrayPosition" in browser_store
     assert '"browser_viewer_annotation"' in browser_store
     assert 'event?.key === "." && (event.metaKey || event.ctrlKey)' in browser_store
     assert "Browser annotations" in browser_store
