@@ -213,6 +213,15 @@ function editorContainsFocus(element) {
   return Boolean(element && active && (element === active || element.contains(active)));
 }
 
+function isEditableInputTarget(target) {
+  const element = target?.nodeType === 1 ? target : target?.parentElement;
+  const editable = element?.closest?.("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='textbox']");
+  if (!editable) return false;
+  if (editable.tagName !== "INPUT") return true;
+  const type = String(editable.getAttribute("type") || "text").toLowerCase();
+  return !["button", "checkbox", "color", "file", "image", "radio", "range", "reset", "submit"].includes(type);
+}
+
 function placeCaretAtEnd(element) {
   if (!element) return;
   if (element.tagName === "TEXTAREA" || element.tagName === "INPUT") {
@@ -345,6 +354,8 @@ const model = {
   _desktopResizePending: false,
   _desktopPrimeTimer: null,
   _desktopPrimeAttempts: 0,
+  _desktopKeyboardActive: false,
+  _desktopKeyboardCleanup: null,
   _desktopStarting: null,
 
   async init(element = null) {
@@ -385,6 +396,7 @@ const model = {
     this.stopDesktopMonitor();
     this.stopDesktopResizeObserver();
     this.stopXpraDesktopPrime();
+    this.stopDesktopKeyboardBridge();
     this._floatingCleanup?.();
     this._floatingCleanup = null;
     if (this._mode === "modal") this._root = null;
@@ -973,9 +985,7 @@ const model = {
   focusEditor(options = {}) {
     if (!this.session || this.isPreviewOnly()) return false;
     if (this.hasOfficialOffice()) {
-      const frame = this.desktopFrame();
-      frame?.focus?.({ preventScroll: true });
-      return Boolean(frame);
+      return this.focusDesktopFrame(this.desktopFrame(), { arm: true });
     }
     const source = this._root?.querySelector?.("[data-office-source]");
     const editor = this.sourceMode ? source : (this.isDocx() ? this._docxEditor : this._richEditor);
@@ -1070,14 +1080,44 @@ const model = {
   onDesktopFrameLoaded(event = null) {
     if (event?.target?.getAttribute?.("src") === "about:blank") return;
     this.error = "";
-    this.focusEditor({ end: false });
+    this.queueDesktopFrameFocus(event?.target || null);
     this.requestDesktopViewportSync({ force: true, frame: event?.target || null });
+  },
+
+  queueDesktopFrameFocus(frame = null) {
+    for (const delay of [0, 80, 260]) {
+      globalThis.setTimeout(() => {
+        if (!this.hasOfficialOffice()) return;
+        if (isEditableInputTarget(document.activeElement)) return;
+        this.focusDesktopFrame(frame || this.desktopFrame(), { arm: true });
+      }, delay);
+    }
+  },
+
+  focusDesktopFrame(frame = null, options = {}) {
+    const target = this.desktopFrame(frame);
+    if (!target) return false;
+    if (options.arm !== false) this._desktopKeyboardActive = true;
+    try {
+      target.setAttribute("tabindex", "0");
+      target.focus?.({ preventScroll: true });
+      target.contentWindow?.focus?.();
+      if (target.contentDocument?.body && !target.contentDocument.body.hasAttribute("tabindex")) {
+        target.contentDocument.body.tabIndex = -1;
+      }
+      target.contentDocument?.body?.focus?.({ preventScroll: true });
+      if (target.contentWindow?.client) target.contentWindow.client.capture_keyboard = true;
+    } catch {
+      target.focus?.({ preventScroll: true });
+    }
+    return Boolean(document.activeElement === target || target.contentDocument?.hasFocus?.());
   },
 
   updateDesktopMonitor() {
     if (!this.hasOfficialOffice()) {
       this.stopDesktopMonitor();
       this.stopDesktopResizeObserver();
+      this._desktopKeyboardActive = false;
       return;
     }
     const sessionId = this.session?.desktop_session_id || this.session?.session_id || "";
@@ -1227,6 +1267,7 @@ const model = {
       const client = remoteWindow.client;
       if (!client) return false;
       this.installXpraDesktopClientPatches(remoteWindow, client);
+      this.installXpraDesktopKeyboardBridge(frame, remoteWindow, remoteDocument, client);
       const container = client.container || remoteDocument?.querySelector?.("#screen");
       if (!container) return false;
 
@@ -1462,6 +1503,71 @@ const model = {
       };
     }
     client.__a0XpraDesktopClientPatched = true;
+  },
+
+  installXpraDesktopKeyboardBridge(frame, remoteWindow, remoteDocument, client) {
+    if (!frame || !remoteWindow || !remoteDocument || !client) return;
+    this.ensureDesktopKeyboardBridge();
+    frame.setAttribute("tabindex", "0");
+    if (remoteWindow.__a0XpraDesktopKeyboardBridgeInstalled) return;
+
+    const activate = () => this.focusDesktopFrame(frame, { arm: true });
+    const events = ["pointerdown", "mousedown", "touchstart", "focusin"];
+    for (const eventName of events) {
+      remoteDocument.addEventListener(eventName, activate, true);
+    }
+    remoteWindow.addEventListener("focus", activate, true);
+    remoteWindow.__a0XpraDesktopKeyboardBridgeInstalled = true;
+    remoteWindow.__a0XpraDesktopKeyboardBridgeCleanup = () => {
+      for (const eventName of events) {
+        remoteDocument.removeEventListener(eventName, activate, true);
+      }
+      remoteWindow.removeEventListener("focus", activate, true);
+      remoteWindow.__a0XpraDesktopKeyboardBridgeInstalled = false;
+    };
+  },
+
+  ensureDesktopKeyboardBridge() {
+    if (this._desktopKeyboardCleanup) return;
+
+    const deactivateWhenOutsideDesktop = (event) => {
+      const target = event.target;
+      if (target?.closest?.(".office-desktop-wrap") || target?.matches?.("[data-office-desktop-frame]")) return;
+      this._desktopKeyboardActive = false;
+    };
+    const forwardKeyboardEvent = (event, pressed) => {
+      if (!this._desktopKeyboardActive || !this.hasOfficialOffice()) return;
+      if (event.defaultPrevented || isEditableInputTarget(event.target)) return;
+
+      const frame = this.desktopFrame();
+      if (!frame || document.activeElement === frame) return;
+      const client = frame.contentWindow?.client;
+      const handler = pressed ? client?._keyb_onkeydown : client?._keyb_onkeyup;
+      if (!client?.capture_keyboard || typeof handler !== "function") return;
+
+      const allowDefault = handler.call(client, event);
+      if (!allowDefault) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    const onKeydown = (event) => forwardKeyboardEvent(event, true);
+    const onKeyup = (event) => forwardKeyboardEvent(event, false);
+
+    document.addEventListener("pointerdown", deactivateWhenOutsideDesktop, true);
+    document.addEventListener("keydown", onKeydown, true);
+    document.addEventListener("keyup", onKeyup, true);
+    this._desktopKeyboardCleanup = () => {
+      document.removeEventListener("pointerdown", deactivateWhenOutsideDesktop, true);
+      document.removeEventListener("keydown", onKeydown, true);
+      document.removeEventListener("keyup", onKeyup, true);
+      this._desktopKeyboardActive = false;
+      this._desktopKeyboardCleanup = null;
+    };
+  },
+
+  stopDesktopKeyboardBridge() {
+    this._desktopKeyboardCleanup?.();
   },
 
   queueDesktopResize(options = {}) {

@@ -50,6 +50,10 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "primeXpraDesktopFrame" in store
     assert "normalizeXpraDesktopWindow" in store
     assert "installXpraDesktopWheelBridge" in store
+    assert "installXpraDesktopKeyboardBridge" in store
+    assert "focusDesktopFrame" in store
+    assert "_desktopKeyboardActive" in store
+    assert "isEditableInputTarget" in store
     assert "reloadDesktopFrame" in store
     assert 'result?.reload' in store
     assert "a0_reload" in store
