@@ -17,6 +17,7 @@
           'is-mobile': $store.rightCanvas.isMobileMode
         }"
         :style="$store.rightCanvas.widthStyle()"
+        x-show="$store.rightCanvas.shouldRender()"
         x-init="$store.rightCanvas.init($el)"
         x-effect="$store.rightCanvas.applyLayoutState()"
         aria-label="Universal Canvas"
@@ -96,6 +97,15 @@
                 @click="$store.rightCanvas.undockActiveSurface()"
               >
                 <span class="material-symbols-outlined">open_in_new</span>
+              </button>
+              <button
+                type="button"
+                class="right-canvas-icon-button right-canvas-close-button"
+                title="Close canvas"
+                aria-label="Close canvas"
+                @click="$store.rightCanvas.close()"
+              >
+                <span class="material-symbols-outlined">close</span>
               </button>
               <x-extension id="right-canvas-toolbar-end"></x-extension>
             </div>

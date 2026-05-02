@@ -40,6 +40,7 @@ DOCUMENT_TERMS = {
     "guide",
     "letter",
     "manual",
+    "markdown",
     "memo",
     "policy",
     "proposal",
@@ -86,9 +87,8 @@ DELIVERABLE_TERMS = {
 
 EXPLICIT_FORMAT_TERMS = {
     "docx",
-    "odt",
-    "ods",
-    "odp",
+    "md",
+    "markdown",
     "pptx",
     "xlsx",
 }
@@ -97,12 +97,10 @@ HANDOFF_TERMS = {
     "artifact",
     "artifacts",
     "canvas",
+    "document canvas",
     "downloadable",
     "editable",
-    "in office",
-    "office canvas",
     "open it",
-    "open in office",
     "save it",
     "save this",
 }
@@ -205,7 +203,9 @@ def infer_kind_and_format(lowered_user: str) -> tuple[str, str]:
         return "presentation", "pptx"
     if has_any(lowered_user, SPREADSHEET_TERMS):
         return "spreadsheet", "xlsx"
-    return "document", "docx"
+    if has_any(lowered_user, {"docx"}):
+        return "document", "docx"
+    return "document", "md"
 
 
 def artifact_intent(lowered_user: str, response_text: str) -> str | None:
@@ -235,14 +235,14 @@ def has_explicit_handoff_signal(lowered_user: str) -> bool:
         return True
     if re.search(
         r"\b(?:convert|format|save|turn)\b(?:\W+\w+){0,8}?\W+(?:as|to|into)\s+"
-        r"(?:a|an|the)?\s*(?:doc|document|spreadsheet|workbook|presentation|deck|slides|docx|xlsx|pptx)\b",
+        r"(?:a|an|the)?\s*(?:doc|document|markdown|spreadsheet|workbook|presentation|deck|slides|md|docx|xlsx|pptx)\b",
         lowered_user,
     ):
         return True
     return bool(re.search(
         r"\b(?:write|draft|compose|create|generate|prepare|produce|make|build|author|format)\b"
         r"(?:\s+(?:me|us|a|an|the|new|blank|editable|office|word|excel|powerpoint))*"
-        r"\s+(?:doc|document|spreadsheet|workbook|presentation|deck|slides)\b",
+        r"\s+(?:doc|document|markdown|spreadsheet|workbook|presentation|deck|slides)\b",
         lowered_user,
     ))
 
@@ -263,7 +263,7 @@ def looks_like_tool_or_status_response(text: str) -> bool:
     stripped = text.strip()
     if stripped.startswith("{") and '"tool_name"' in stripped[:300]:
         return True
-    if "/a0/usr/workdir/documents/" in stripped:
+    if "/a0/usr/workdir/" in stripped or "/a0/usr/projects/" in stripped:
         return True
     return False
 
@@ -348,6 +348,6 @@ def clean_title(value: str) -> str:
 
 def format_created_response(basename: str, path: str) -> str:
     return (
-        f"Created **{basename}** and opened it in the Office canvas.\n\n"
+        f"Created **{basename}**.\n\n"
         f"Path: `{path}`"
     )

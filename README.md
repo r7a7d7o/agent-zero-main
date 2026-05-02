@@ -74,19 +74,15 @@ The important idea is not a fixed list of buttons. The important idea is that th
 
 ## Universal Canvas
 
-Agent Zero is becoming more visual and collaborative. The right-side Universal Canvas gives agents and humans shared working surfaces for browser sessions, Office files, workspace history, and other plugin panels.
+Agent Zero is becoming more visual and shared. The right-side Universal Canvas gives agents and humans working surfaces for browser sessions, documents, workspace history, and other plugin panels.
 
 The canvas makes agent work visible. You can watch it browse, inspect what changed, open files, cowork on deliverables, and intervene before a small mistake becomes a large one.
 
-## Cowork on Office Documents
+## Cowork on Documents
 
 Create, open, and cowork with the AI on documents, spreadsheets, and presentation decks.
 
-
-<img width="1280" height="656" alt="Agent Zero Collabora Office" src="https://github.com/user-attachments/assets/23893e10-cee9-4ee1-8f92-66193c25f0cd" />
-<br>
-
-The Office canvas supports editable artifacts with Collabora Online and WOPI, including DOCX, XLSX, and PPTX workflows. Agents can create substantial deliverables, read their contents, apply precise saved edits, preserve version history, and generate native XLSX charts directly inside spreadsheets.
+The document canvas supports Markdown by default, with LibreOffice-backed DOCX, XLSX, and PPTX workflows when binary artifacts are needed. Agents can create substantial deliverables, read their contents, apply precise saved edits, preserve version history, and generate native XLSX charts directly inside spreadsheets.
 
 ## Native Browser With Annotations and Extensions
 

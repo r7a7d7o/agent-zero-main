@@ -1,6 +1,6 @@
 name: _office
-title: Office
-description: Universal Canvas office documents with Collabora Online, WOPI, and document artifacts.
+title: LibreOffice
+description: Markdown-first writing and LibreOffice-backed document artifacts in the right canvas.
 version: "0.1"
 settings_sections:
   - developer

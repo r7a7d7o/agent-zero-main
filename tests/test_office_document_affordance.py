@@ -14,7 +14,7 @@ from plugins._office.helpers import document_affordance
 def substantial_text(prefix: str = "Here is the material.") -> str:
     paragraph = (
         "This section gives concrete context, constraints, tradeoffs, and next steps "
-        "so the artifact has enough substance to be useful in a real collaboration. "
+        "so the artifact has enough substance to be useful in a real shared workflow. "
     )
     return f"{prefix}\n\n" + paragraph * 8
 
@@ -65,6 +65,7 @@ def test_convert_into_document_creates_document_artifact():
 
     assert decision is not None
     assert decision.kind == "document"
+    assert decision.fmt == "md"
     assert decision.reason == "explicit_handoff"
 
 
@@ -122,3 +123,14 @@ def test_chat_only_instruction_blocks_even_explicit_file_request():
     )
 
     assert decision is None
+
+
+def test_created_response_does_not_claim_canvas_was_opened():
+    message = document_affordance.format_created_response(
+        "Project Brief.md",
+        "/a0/usr/workdir/Project Brief.md",
+    )
+
+    assert "Created **Project Brief.md**." in message
+    assert "opened" not in message.lower()
+    assert "Path: `/a0/usr/workdir/Project Brief.md`" in message

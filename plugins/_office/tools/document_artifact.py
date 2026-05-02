@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from helpers.tool import Response, Tool
-from plugins._office.helpers import artifact_editor, collabora_status, wopi_store
+from plugins._office.helpers import artifact_editor, document_store, libreoffice
 
 
 class DocumentArtifact(Tool):
@@ -14,7 +14,7 @@ class DocumentArtifact(Tool):
         action: str = "",
         kind: str = "document",
         title: str = "Untitled",
-        format: str = "docx",
+        format: str = "md",
         content: str = "",
         path: str = "",
         file_id: str = "",
@@ -28,12 +28,27 @@ class DocumentArtifact(Tool):
         chart: Any = None,
         slides: Any = None,
         max_chars: int | str = 12000,
+        method: str = "",
         **kwargs: Any,
     ) -> Response:
-        action = str(action or self.method or "status").strip().lower().replace("-", "_")
+        action = str(action or method or self.method or "status").strip().lower().replace("-", "_")
         try:
             if action == "create":
-                doc = wopi_store.create_document(kind=kind, title=title, fmt=format, content=content, path=path)
+                doc = document_store.create_document(
+                    kind=kind,
+                    title=title,
+                    fmt=format,
+                    content=content,
+                    path=path,
+                    context_id=self._context_id(),
+                )
+                if doc["extension"] == "docx":
+                    validation = libreoffice.validate_docx(doc["path"])
+                    if not validation.get("ok"):
+                        return Response(
+                            message=f"document_artifact create failed: {validation.get('error')}",
+                            break_loop=False,
+                        )
                 return self._document_response("Created document artifact.", doc, action=action)
             if action == "open":
                 doc = self._document_from_input(file_id=file_id, path=path)
@@ -69,26 +84,35 @@ class DocumentArtifact(Tool):
                 return self._json_response({"ok": True, "action": action, "document": self._public_doc(doc)}, doc=doc, action=action)
             if action == "version_history":
                 doc = self._document_from_input(file_id=file_id, path=path)
-                versions = wopi_store.version_history(doc["file_id"])
+                versions = document_store.version_history(doc["file_id"])
                 return self._json_response({"ok": True, "action": action, "versions": versions}, doc=doc, action=action)
             if action == "restore_version":
                 if version_id is None or str(version_id).strip() == "":
                     return Response(message="version_id is required for restore_version.", break_loop=False)
                 doc = self._document_from_input(file_id=file_id, path=path)
-                restored = wopi_store.restore_version(doc["file_id"], int(version_id))
+                restored = document_store.restore_version(doc["file_id"], int(version_id))
                 return self._document_response("Restored document artifact version.", restored, action=action)
             if action == "export":
                 doc = self._document_from_input(file_id=file_id, path=path)
                 target_format = str(kwargs.get("target_format") or kwargs.get("export_format") or "").lower().lstrip(".")
                 if target_format and target_format != doc["extension"]:
+                    result = libreoffice.convert_document(doc["path"], target_format)
+                    if result.get("ok"):
+                        payload = {
+                            "ok": True,
+                            "action": action,
+                            "path": document_store.display_path(result["path"]),
+                            "document": self._public_doc(doc),
+                        }
+                        return self._json_response(payload, doc=doc, action=action)
                     return Response(
-                        message=f"Export to .{target_format} is not available yet. The source file remains unchanged at {doc['path']}.",
+                        message=f"document_artifact export failed: {result.get('error')}",
                         break_loop=False,
                         additional=self._additional(doc, action=action),
                     )
                 return self._document_response("Document artifact export path is ready.", doc, action=action)
             if action == "status":
-                return self._json_response({"ok": True, "action": action, "status": collabora_status.collect_status()}, action=action)
+                return self._json_response({"ok": True, "action": action, "status": libreoffice.collect_status()}, action=action)
             return Response(message=f"Unknown document_artifact action: {action}", break_loop=False)
         except Exception as exc:
             return Response(message=f"document_artifact {action} failed: {exc}", break_loop=False)
@@ -104,10 +128,13 @@ class DocumentArtifact(Tool):
 
     def _document_from_input(self, file_id: str = "", path: str = "") -> dict[str, Any]:
         if file_id:
-            return wopi_store.get_document(file_id)
+            return document_store.get_document(file_id)
         if path:
-            return wopi_store.register_document(path)
+            return document_store.register_document(path, context_id=self._context_id())
         raise ValueError("file_id or path is required")
+
+    def _context_id(self) -> str:
+        return self.agent.context.id if self.agent and self.agent.context else ""
 
     def _document_response(self, message: str, doc: dict[str, Any], action: str = "") -> Response:
         payload = {"ok": True, "action": action, "message": message, "document": self._public_doc(doc)}
@@ -134,18 +161,18 @@ class DocumentArtifact(Tool):
             "file_id": doc["file_id"],
             "title": doc["basename"],
             "format": doc["extension"],
-            "path": doc["path"],
-            "version": wopi_store.item_version(doc),
+            "path": document_store.display_path(doc["path"]),
+            "version": document_store.item_version(doc),
         }
 
     def _public_doc(self, doc: dict[str, Any]) -> dict[str, Any]:
         return {
             "file_id": doc["file_id"],
-            "path": doc["path"],
+            "path": document_store.display_path(doc["path"]),
             "basename": doc["basename"],
             "extension": doc["extension"],
             "size": doc["size"],
-            "version": wopi_store.item_version(doc),
+            "version": document_store.item_version(doc),
             "last_modified": doc["last_modified"],
             "exists": Path(doc["path"]).exists(),
         }

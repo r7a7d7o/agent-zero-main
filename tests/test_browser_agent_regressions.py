@@ -540,22 +540,23 @@ def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
     assert "this.releaseSurfaceBindings();" in browser_store
 
     assert "async function openBrowserCanvas" in tool_handler
-    assert "openBrowserModal" not in tool_handler
-    assert tool_handler.index('await rightCanvasStore.open("browser", payload);') < tool_handler.index("if (window.ensureModalOpen)")
+    assert 'await rightCanvasStore.open("browser", payload);' in tool_handler
+    assert "window.ensureModalOpen" in tool_handler
+    assert "window.openModal" in tool_handler
     assert "function syncOpenBrowserCanvas" in tool_handler
-    assert "function autoOpenBrowserCanvas" not in tool_handler
-    assert "function shouldSyncOpenBrowserCanvas" in tool_handler
-    assert "function isBrowserCanvasAlreadyOpen" in tool_handler
-
     assert "async function syncOpenBrowserCanvas" in after_loop_handler
     assert "syncBrowserResultsIntoOpenCanvas" in after_loop_handler
-    assert "openBrowserCanvas" not in after_loop_handler
-    assert "BROWSER_MODAL" not in after_loop_handler
+    assert "window.ensureModalOpen" not in after_loop_handler
+    assert "window.openModal" not in after_loop_handler
 
     for js in (tool_handler, after_loop_handler):
-        assert "syncedBrowserCanvases" in js
-        assert "autoOpenedBrowsers" not in js
+        assert "openBrowserModal" not in js
+        assert "isBrowserCanvasAlreadyOpen" in js
+        assert "rightCanvasStore?.isOpen" in js
         assert 'rightCanvasStore?.activeSurfaceId === "browser"' in js
+        assert "autoOpenBrowserCanvas" not in js
+        assert "autoOpenedBrowsers" not in js
+        assert "syncedBrowserCanvases" in js
         assert "const FOCUS_ACTIONS = new Set" in js
         assert "FOCUS_ACTIONS.has(action)" in js
 
@@ -569,10 +570,18 @@ def test_browser_tool_does_not_auto_open_canvas_policy_is_documented():
     prompt = (
         PROJECT_ROOT / "plugins" / "_browser" / "prompts" / "agent.system.tool.browser.md"
     ).read_text(encoding="utf-8")
+    config = (PROJECT_ROOT / "plugins" / "_browser" / "default_config.yaml").read_text(
+        encoding="utf-8"
+    )
+    config_html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "config.html").read_text(
+        encoding="utf-8"
+    )
 
-    assert "optional visible WebUI viewer" in prompt
     assert "must not open the right canvas automatically" in prompt
     assert "Use the tool headlessly unless the user opens the Browser canvas" in prompt
+    assert "optional visible WebUI viewer" in prompt
+    assert "already open" in config
+    assert "already-open Browser canvas" in config_html
 
 
 def test_browser_canvas_uses_plain_panel_without_debug_probe():
@@ -806,6 +815,7 @@ def test_browser_runtime_and_content_helper_expose_annotation_target():
     assert "globalThis.__spaceBrowserPageContent__.annotate(payload || null)" in runtime
     assert "function annotate(payload = null)" in helper
     assert "annotate," in helper
+    assert "boundingBoxFor," in helper
     assert "sanitizeAnnotationDom" in helper
     assert "password" in helper
 

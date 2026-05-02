@@ -10,7 +10,7 @@ from typing import Any
 from xml.sax.saxutils import escape
 import xml.etree.ElementTree as ET
 
-from plugins._office.helpers import wopi_store
+from plugins._office.helpers import document_store, pptx_writer
 
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -38,16 +38,16 @@ def read_artifact(doc: dict[str, Any], max_chars: int = 12000) -> dict[str, Any]
     """Extract compact editable content from an Office artifact."""
     path = Path(doc["path"])
     ext = str(doc["extension"]).lower()
-    if ext == "docx":
+    if ext == "md":
+        content = _read_markdown(path)
+    elif ext == "docx":
         content = _read_docx(path)
     elif ext == "xlsx":
         content = _read_xlsx(path)
     elif ext == "pptx":
         content = _read_pptx(path)
-    elif ext in {"odt", "ods", "odp"}:
-        content = _read_odf(path)
     else:
-        raise ValueError(f"Unsupported Office format: {ext}")
+        raise ValueError(f"Unsupported document format: {ext}")
 
     return _trim_payload(content, max_chars=max_chars)
 
@@ -71,21 +71,31 @@ def edit_artifact(
     op = normalize_operation(operation, content=content, find=find, cells=cells, rows=rows, chart=chart, slides=slides)
     before = path.read_bytes()
 
-    if ext == "docx":
+    invalidate_sessions = bool(kwargs.pop("invalidate_sessions", False))
+    if ext == "md":
+        updated, details = _edit_markdown(before, op, content=content, find=find, replace=replace, **kwargs)
+    elif ext == "docx":
         updated, details = _edit_docx(before, op, content=content, find=find, replace=replace, **kwargs)
     elif ext == "xlsx":
         updated, details = _edit_xlsx(path, op, content=content, find=find, replace=replace, sheet=sheet, cells=cells, rows=rows, chart=chart, **kwargs)
     elif ext == "pptx":
         updated, details = _edit_pptx(before, op, content=content, find=find, replace=replace, slides=slides, **kwargs)
     else:
-        raise ValueError(f"Direct edit is not available for .{ext}. Use Collabora in the Office canvas.")
+        raise ValueError(f"Direct edit is not available for .{ext}.")
 
     changed = updated != before
     updated_doc = (
-        wopi_store.replace_document_bytes(doc["file_id"], updated, actor="document_artifact:edit")
+        document_store.replace_document_bytes(
+            doc["file_id"],
+            updated,
+            actor="document_artifact:edit",
+            invalidate_sessions=invalidate_sessions,
+        )
         if changed
         else doc
     )
+    if changed:
+        _refresh_open_editor_sessions(updated_doc["file_id"])
     preview = read_artifact(updated_doc, max_chars=int(kwargs.get("preview_chars") or 4000))
     payload = {
         "ok": True,
@@ -96,6 +106,16 @@ def edit_artifact(
         "preview": preview,
     }
     return updated_doc, payload
+
+
+def _refresh_open_editor_sessions(file_id: str) -> None:
+    try:
+        from plugins._office.helpers import libreofficekit_sessions
+
+        libreofficekit_sessions.get_manager().refresh_document(file_id)
+    except Exception:
+        # Direct artifact edits should never fail just because no canvas is open.
+        return
 
 
 def normalize_operation(
@@ -144,6 +164,19 @@ def normalize_operation(
     if content:
         return "set_text"
     raise ValueError("operation is required")
+
+
+def _read_markdown(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = [line for line in text.splitlines() if line.strip()]
+    headings = [line.lstrip("#").strip() for line in lines if line.lstrip().startswith("#")]
+    return {
+        "kind": "document",
+        "format": "markdown",
+        "line_count": len(text.splitlines()),
+        "headings": headings[:40],
+        "text": text,
+    }
 
 
 def _read_docx(path: Path) -> dict[str, Any]:
@@ -213,15 +246,30 @@ def _read_pptx(path: Path) -> dict[str, Any]:
     }
 
 
-def _read_odf(path: Path) -> dict[str, Any]:
-    with zipfile.ZipFile(path) as archive:
-        xml = archive.read("content.xml")
-    root = ET.fromstring(xml)
-    text = "\n".join((node.text or "").strip() for node in root.iter() if (node.text or "").strip())
-    return {
-        "kind": "office_document",
-        "text": text,
-    }
+def _edit_markdown(before: bytes, op: str, *, content: str = "", find: str = "", replace: str = "", **kwargs: Any) -> tuple[bytes, dict[str, Any]]:
+    if op not in {"set_text", "append_text", "prepend_text", "replace_text", "delete_text"}:
+        raise ValueError(f"Unsupported Markdown operation: {op}")
+
+    text = before.decode("utf-8", errors="replace")
+    if op == "set_text":
+        updated = content
+        details = {"lines_written": len(content.splitlines())}
+    elif op == "append_text":
+        separator = "" if not text or text.endswith("\n") else "\n"
+        updated = f"{text}{separator}{content}"
+        details = {"lines_appended": len(content.splitlines())}
+    elif op == "prepend_text":
+        separator = "" if not text or content.endswith("\n") else "\n"
+        updated = f"{content}{separator}{text}"
+        details = {"lines_prepended": len(content.splitlines())}
+    else:
+        if not find:
+            raise ValueError("find is required for replace_text")
+        replacement = "" if op == "delete_text" else replace
+        count_limit = _int_or_none(kwargs.get("count"))
+        updated, count = _replace_limited(text, find, replacement, count_limit)
+        details = {"replacements": count}
+    return updated.encode("utf-8"), details
 
 
 def _edit_docx(before: bytes, op: str, *, content: str = "", find: str = "", replace: str = "", **kwargs: Any) -> tuple[bytes, dict[str, Any]]:
@@ -1157,25 +1205,7 @@ def _slide_from_mapping(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _pptx_from_slides(slides: list[dict[str, Any]]) -> bytes:
-    if not slides:
-        slides = [{"title": "Presentation", "bullets": []}]
-
-    files: dict[str, str | bytes] = {
-        "[Content_Types].xml": _pptx_content_types(len(slides)),
-        "_rels/.rels": (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            f'<Relationships xmlns="{REL_NS}">'
-            '<Relationship Id="rId1" '
-            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
-            'Target="ppt/presentation.xml"/>'
-            "</Relationships>"
-        ),
-        "ppt/_rels/presentation.xml.rels": _pptx_presentation_rels(len(slides)),
-        "ppt/presentation.xml": _pptx_presentation_xml(len(slides)),
-    }
-    for index, slide in enumerate(slides, start=1):
-        files[f"ppt/slides/slide{index}.xml"] = _pptx_slide_xml(slide)
-    return _zip_map(files)
+    return pptx_writer.pptx_from_slides(slides)
 
 
 def _pptx_content_types(count: int) -> str:

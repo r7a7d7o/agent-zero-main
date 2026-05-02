@@ -4,11 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from helpers import files
 from helpers.extension import Extension
 from helpers.print_style import PrintStyle
 from helpers.tool import Response
-from plugins._office.helpers import document_affordance, wopi_store
+from plugins._office.helpers import document_affordance, document_store
 
 
 HANDOFF_CREATED_FLAG = "_office_document_handoff_created"
@@ -45,14 +44,15 @@ class DocumentResponseAffordance(Extension):
             return
 
         try:
-            doc = wopi_store.create_document(
+            doc = document_store.create_document(
                 kind=decision.kind,
                 title=decision.title,
                 fmt=decision.fmt,
                 content=decision.content,
+                context_id=getattr(self.agent.context, "id", "") if self.agent.context else "",
             )
         except Exception as exc:
-            PrintStyle().error(f"Office document affordance failed: {exc}")
+            PrintStyle().error(f"Document affordance failed: {exc}")
             return
 
         payload = {
@@ -66,7 +66,7 @@ class DocumentResponseAffordance(Extension):
         self.agent.hist_add_tool_result("document_artifact", content, **additional)
         self.agent.loop_data.params_persistent[HANDOFF_CREATED_FLAG] = True
 
-        display_path = display_workspace_path(doc["path"])
+        display_path = document_store.display_path(doc["path"])
         note = document_affordance.format_created_response(doc["basename"], display_path)
         response.message = note
         tool.args["text"] = note
@@ -90,34 +90,24 @@ class DocumentResponseAffordance(Extension):
 def public_doc(doc: dict[str, Any]) -> dict[str, Any]:
     return {
         "file_id": doc["file_id"],
-        "path": display_workspace_path(doc["path"]),
+        "path": document_store.display_path(doc["path"]),
         "basename": doc["basename"],
         "extension": doc["extension"],
         "size": doc["size"],
-        "version": wopi_store.item_version(doc),
+        "version": document_store.item_version(doc),
         "last_modified": doc["last_modified"],
         "exists": Path(doc["path"]).exists(),
     }
 
 
-def document_additional(doc: dict[str, Any]) -> dict[str, Any]:
+def document_additional(doc: dict[str, Any], action: str = "create") -> dict[str, Any]:
     return {
         "_tool_name": "document_artifact",
         "canvas_surface": "office",
+        "action": action,
         "file_id": doc["file_id"],
         "title": doc["basename"],
         "format": doc["extension"],
-        "path": display_workspace_path(doc["path"]),
-        "version": wopi_store.item_version(doc),
+        "path": document_store.display_path(doc["path"]),
+        "version": document_store.item_version(doc),
     }
-
-
-def display_workspace_path(path: str) -> str:
-    base = Path(files.get_base_dir()).resolve(strict=False)
-    resolved = Path(path).resolve(strict=False)
-    if str(base).startswith("/a0"):
-        return str(resolved)
-    try:
-        return "/a0/" + str(resolved.relative_to(base)).lstrip("/")
-    except ValueError:
-        return str(path)

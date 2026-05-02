@@ -11,10 +11,7 @@
          $store.modelConfig.refreshSwitcher($store.chats?.selected || ''),
          $store.modelConfig.loadAgentProfiles(),
        ]);
-       const refreshActiveModels = () => $store.modelConfig.refreshSwitcher($store.chats?.selected || '');
        $watch('$store.chats.selected', v => $store.modelConfig.refreshSwitcher(v || ''));
-       $watch('$store.chats.selectedContext?.project?.name || \'\'' , refreshActiveModels);
-       $watch('$store.chats.selectedContext?.agent_profile || \'\'' , refreshActiveModels);
      ">
   <template x-if="($store.modelConfig.switcherAllowed && !$store.modelConfig.switcherLoading) || $store.chats?.selectedContext?.agent_profile">
     <div class="model-switcher-container">
@@ -30,18 +27,18 @@
                     x-text="showDropdown ? 'expand_less' : 'expand_more'"></span>
             </button>
 
-            <!-- Inline active model pills -->
-            <template x-if="$store.modelConfig.hasActiveModelNames()">
+            <!-- Inline active model pills (shown when a preset is active) -->
+            <template x-if="$store.modelConfig.switcherOverride">
               <div class="model-switcher-active-pills">
-                <template x-if="$store.modelConfig.getActiveModels().main?.name">
+                <template x-if="$store.modelConfig.getActiveModels().main">
                   <div class="model-pill">
-                    <span class="model-pill-role">Main:</span>
+                    <span class="model-pill-role">Main</span>
                     <span class="model-pill-name" x-text="$store.modelConfig.getActiveModels().main.name"></span>
                   </div>
                 </template>
-                <template x-if="$store.modelConfig.getActiveModels().utility?.name">
+                <template x-if="$store.modelConfig.getActiveModels().utility">
                   <div class="model-pill">
-                    <span class="model-pill-role">Utility:</span>
+                    <span class="model-pill-role">Util</span>
                     <span class="model-pill-name" x-text="$store.modelConfig.getActiveModels().utility.name"></span>
                   </div>
                 </template>
@@ -259,7 +256,6 @@
     font-size: 0.68rem;
     white-space: nowrap;
     min-width: 0;
-    max-width: 240px;
     overflow: hidden;
   }
   .model-pill-role {
@@ -400,7 +396,7 @@
   }
 
   /* Responsive: hide pills on narrow screens */
-  @media (max-width: 760px) {
+  @media (max-width: 600px) {
     .model-switcher-active-pills {
       display: none;
     }

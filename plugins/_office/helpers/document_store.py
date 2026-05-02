@@ -6,8 +6,6 @@ import io
 import json
 import os
 import re
-import secrets
-import shutil
 import sqlite3
 import time
 import uuid
@@ -19,15 +17,13 @@ from typing import Any
 from xml.sax.saxutils import escape
 
 from helpers import files
+from plugins._office.helpers import pptx_writer
 
 
 PLUGIN_NAME = "_office"
-SUPPORTED_EXTENSIONS = {"docx", "xlsx", "pptx", "odt", "ods", "odp"}
+SUPPORTED_EXTENSIONS = {"md", "docx", "xlsx", "pptx"}
 DEFAULT_TTL_SECONDS = 8 * 60 * 60
-DEFAULT_LOCK_SECONDS = 30 * 60
 ORPHAN_SESSION_GRACE_SECONDS = 30
-MAX_LOCK_SECONDS = 3600
-MIN_LOCK_SECONDS = 60
 MAX_SAVE_BYTES = 512 * 1024 * 1024
 PREVIEW_LINE_LIMIT = 5
 PREVIEW_ROW_LIMIT = 5
@@ -38,11 +34,11 @@ W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 X_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
-STATE_DIR = Path(files.get_abs_path("usr", "plugins", PLUGIN_NAME, "collabora"))
+STATE_DIR = Path(files.get_abs_path("usr", "plugins", PLUGIN_NAME, "documents"))
 DB_PATH = STATE_DIR / "documents.sqlite3"
 BACKUP_DIR = STATE_DIR / "backups"
-DOCUMENTS_DIR = Path(files.get_abs_path("usr", "workdir", "documents"))
 WORKDIR = Path(files.get_abs_path("usr", "workdir"))
+DOCUMENTS_DIR = WORKDIR / "documents"
 
 
 def now() -> float:
@@ -56,15 +52,10 @@ def now_iso() -> str:
 def ensure_dirs() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def safe_title(title: str, fallback: str = "Document") -> str:
@@ -74,25 +65,109 @@ def safe_title(title: str, fallback: str = "Document") -> str:
 
 def normalize_extension(value: str) -> str:
     ext = value.lower().strip().lstrip(".")
+    if not ext:
+        ext = "md"
     if ext not in SUPPORTED_EXTENSIONS:
-        raise ValueError(f"Unsupported Office format: {ext}")
+        if ext == "odt":
+            raise ValueError("ODT editing is not supported in this migration. Use Markdown or DOCX.")
+        raise ValueError(f"Unsupported document format: {ext}")
     return ext
 
 
-def normalize_path(path: str | Path) -> Path:
+def document_home(context_id: str = "") -> Path:
+    context_id = str(context_id or "").strip()
+    if context_id:
+        try:
+            from agent import AgentContext
+
+            context = AgentContext.get(context_id)
+            project_helpers = _projects()
+            project_name = project_helpers.get_context_project_name(context) if context else None
+            if project_name:
+                return Path(project_helpers.get_project_folder(project_name)).resolve(strict=False)
+        except Exception:
+            pass
+
+    configured = str(_settings().get_settings().get("workdir_path") or "").strip()
+    if configured:
+        return _path_from_a0(configured).resolve(strict=False)
+    return WORKDIR.resolve(strict=False)
+
+
+def document_binary_home(context_id: str = "") -> Path:
+    if str(context_id or "").strip():
+        return document_home(context_id) / "documents"
+    return DOCUMENTS_DIR.resolve(strict=False)
+
+
+def default_open_path(context_id: str = "") -> str:
+    return display_path(document_home(context_id))
+
+
+def display_path(path: str | Path) -> str:
+    resolved = Path(path).resolve(strict=False)
+    base = Path(files.get_base_dir()).resolve(strict=False)
+    if str(base).startswith("/a0"):
+        return str(resolved)
+    try:
+        return "/a0/" + str(resolved.relative_to(base)).lstrip("/")
+    except ValueError:
+        return str(path)
+
+
+def _path_from_a0(path: str | Path) -> Path:
     raw = str(path)
     if raw.startswith("/a0/") and not files.get_base_dir().startswith("/a0"):
         raw = files.get_abs_path(raw.removeprefix("/a0/"))
-    candidate = Path(raw if os.path.isabs(raw) else files.get_abs_path(raw))
-    resolved = candidate.expanduser().resolve(strict=False)
-    allowed_roots = [WORKDIR.resolve(strict=False)]
-    if not any(os.path.commonpath([str(resolved), str(root)]) == str(root) for root in allowed_roots):
-        raise PermissionError("Office documents must be inside /a0/usr/workdir")
+    return Path(raw if os.path.isabs(raw) else files.get_abs_path(raw)).expanduser()
+
+
+def allowed_roots(context_id: str = "") -> list[Path]:
+    project_helpers = _projects()
+    roots = {
+        WORKDIR.resolve(strict=False),
+        DOCUMENTS_DIR.resolve(strict=False),
+        Path(project_helpers.get_projects_parent_folder()).resolve(strict=False),
+        document_home(context_id).resolve(strict=False),
+        document_binary_home(context_id).resolve(strict=False),
+    }
+    configured = str(_settings().get_settings().get("workdir_path") or "").strip()
+    if configured:
+        roots.add(_path_from_a0(configured).resolve(strict=False))
+    return sorted(roots, key=lambda item: str(item))
+
+
+def _projects() -> Any:
+    from helpers import projects
+
+    return projects
+
+
+def _settings() -> Any:
+    from helpers import settings
+
+    return settings
+
+
+def normalize_path(path: str | Path, context_id: str = "") -> Path:
+    candidate = _path_from_a0(path)
+    resolved = candidate.resolve(strict=False)
+    roots = allowed_roots(context_id)
+    if not any(_is_relative_to(resolved, root) for root in roots):
+        raise PermissionError("Document artifacts must stay inside the active project or workdir.")
     if candidate.exists():
         real = candidate.resolve(strict=True)
-        if not any(os.path.commonpath([str(real), str(root)]) == str(root) for root in allowed_roots):
-            raise PermissionError("Office document symlink escapes the workdir")
+        if not any(_is_relative_to(real, root) for root in roots):
+            raise PermissionError("Document artifact symlink escapes the active project or workdir.")
     return resolved
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        os.path.commonpath([str(path), str(root)])
+    except ValueError:
+        return False
+    return os.path.commonpath([str(path), str(root)]) == str(root)
 
 
 @contextmanager
@@ -135,23 +210,6 @@ def init_db(conn: sqlite3.Connection) -> None:
             created_at REAL NOT NULL,
             expires_at REAL NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS tokens (
-            token_hash TEXT PRIMARY KEY,
-            file_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            permission TEXT NOT NULL,
-            source_path TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            expires_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS locks (
-            file_id TEXT PRIMARY KEY,
-            lock_value TEXT NOT NULL,
-            expires_at REAL NOT NULL,
-            session_id TEXT NOT NULL,
-            updated_at REAL NOT NULL
-        );
         CREATE TABLE IF NOT EXISTS versions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             file_id TEXT NOT NULL,
@@ -172,8 +230,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     )
 
 
-def register_document(path: str | Path, owner_id: str = "a0") -> dict[str, Any]:
-    resolved = normalize_path(path)
+def register_document(path: str | Path, owner_id: str = "a0", context_id: str = "") -> dict[str, Any]:
+    resolved = normalize_path(path, context_id=context_id)
     if not resolved.exists():
         raise FileNotFoundError(str(resolved))
     ext = normalize_extension(resolved.suffix.lstrip("."))
@@ -251,7 +309,32 @@ def get_open_documents(limit: int = 6) -> list[dict[str, Any]]:
             """,
             (now(), limit),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [with_preview(dict(row)) for row in rows]
+
+
+def create_session(
+    file_id: str,
+    user_id: str = "agent-zero-user",
+    permission: str = "write",
+    origin: str = "",
+    ttl_seconds: int = DEFAULT_TTL_SECONDS,
+) -> dict[str, Any]:
+    permission = "write" if permission == "write" else "read"
+    created = now()
+    expires = created + ttl_seconds
+    session_id = uuid.uuid4().hex
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO sessions (session_id, file_id, user_id, permission, origin, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (session_id, file_id, user_id, permission, origin, created, expires),
+        )
+    return {
+        "session_id": session_id,
+        "file_id": file_id,
+        "expires_at": expires,
+        "permission": permission,
+        "origin": origin,
+    }
 
 
 def close_session(session_id: str = "", file_id: str = "") -> int:
@@ -266,9 +349,7 @@ def close_session(session_id: str = "", file_id: str = "") -> int:
             row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
             if not row:
                 return 0
-            conn.execute("DELETE FROM tokens WHERE session_id = ?", (session_id,))
             conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-            conn.execute("DELETE FROM locks WHERE session_id = ?", (session_id,))
             conn.execute(
                 "INSERT INTO events (file_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
                 (row["file_id"], "close_session", json.dumps({"session_id": session_id}), now()),
@@ -276,9 +357,7 @@ def close_session(session_id: str = "", file_id: str = "") -> int:
             return 1
 
         rows = conn.execute("SELECT session_id FROM sessions WHERE file_id = ?", (file_id,)).fetchall()
-        conn.execute("DELETE FROM tokens WHERE file_id = ?", (file_id,))
         conn.execute("DELETE FROM sessions WHERE file_id = ?", (file_id,))
-        conn.execute("DELETE FROM locks WHERE file_id = ?", (file_id,))
         conn.execute(
             "INSERT INTO events (file_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
             (file_id, "close_document_sessions", json.dumps({"closed": len(rows)}), now()),
@@ -305,52 +384,13 @@ def sync_open_sessions(active_session_ids: list[str] | tuple[str, ...] | set[str
 
         session_ids = tuple(row["session_id"] for row in rows)
         placeholders = ",".join("?" for _ in session_ids)
-        conn.execute(f"DELETE FROM tokens WHERE session_id IN ({placeholders})", session_ids)
         conn.execute(f"DELETE FROM sessions WHERE session_id IN ({placeholders})", session_ids)
-        conn.execute(f"DELETE FROM locks WHERE session_id IN ({placeholders})", session_ids)
-
         for row in rows:
             conn.execute(
                 "INSERT INTO events (file_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
-                (
-                    row["file_id"],
-                    "close_orphan_session",
-                    json.dumps({"session_id": row["session_id"]}),
-                    now(),
-                ),
+                (row["file_id"], "close_orphan_session", json.dumps({"session_id": row["session_id"]}), now()),
             )
         return len(rows)
-
-
-def create_session(file_id: str, user_id: str, permission: str, origin: str, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> dict[str, Any]:
-    permission = "write" if permission == "write" else "read"
-    token = secrets.token_urlsafe(32)
-    created = now()
-    expires = created + ttl_seconds
-    doc = get_document(file_id)
-    session_id = uuid.uuid4().hex
-    with connect() as conn:
-        conn.execute(
-            "INSERT INTO sessions (session_id, file_id, user_id, permission, origin, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (session_id, file_id, user_id, permission, origin, created, expires),
-        )
-        conn.execute(
-            """
-            INSERT INTO tokens
-            (token_hash, file_id, session_id, user_id, permission, source_path, created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (token_hash(token), file_id, session_id, user_id, permission, doc["path"], created, expires),
-        )
-    return {
-        "session_id": session_id,
-        "file_id": file_id,
-        "access_token": token,
-        "access_token_ttl": int(expires * 1000),
-        "expires_at": expires,
-        "permission": permission,
-        "origin": origin,
-    }
 
 
 def with_preview(document: dict[str, Any]) -> dict[str, Any]:
@@ -370,6 +410,9 @@ def build_preview(document: dict[str, Any]) -> dict[str, Any]:
     if not path.exists():
         return preview
     try:
+        if ext == "md":
+            lines = _preview_markdown(path)
+            return {**preview, "available": bool(lines), "lines": lines}
         if ext == "docx":
             lines = _preview_docx(path)
             return {**preview, "available": bool(lines), "lines": lines}
@@ -379,20 +422,17 @@ def build_preview(document: dict[str, Any]) -> dict[str, Any]:
         if ext == "pptx":
             slides = _preview_pptx(path)
             return {**preview, "available": bool(slides), "slides": slides}
-        if ext in {"odt", "ods", "odp"}:
-            lines = _preview_odf(path)
-            return {**preview, "available": bool(lines), "lines": lines}
     except Exception:
         return preview
     return preview
 
 
 def _preview_kind(ext: str) -> str:
-    if ext in {"xlsx", "ods"}:
+    if ext == "xlsx":
         return "spreadsheet"
-    if ext in {"pptx", "odp"}:
+    if ext == "pptx":
         return "presentation"
-    if ext in {"docx", "odt"}:
+    if ext in {"md", "docx"}:
         return "document"
     return "file"
 
@@ -405,7 +445,22 @@ def _clean_preview_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def _preview_markdown(path: Path) -> list[str]:
+    lines = []
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        text = _clean_preview_text(raw.lstrip("#>-*0123456789.[]() "))
+        if text:
+            lines.append(text)
+        if len(lines) >= PREVIEW_LINE_LIMIT:
+            break
+    return lines
+
+
 def _preview_docx(path: Path) -> list[str]:
+    return _docx_paragraphs(path, limit=PREVIEW_LINE_LIMIT)
+
+
+def _docx_paragraphs(path: Path, limit: int | None = None) -> list[str]:
     with zipfile.ZipFile(path) as archive:
         root = ET.fromstring(archive.read("word/document.xml"))
     lines = []
@@ -413,9 +468,23 @@ def _preview_docx(path: Path) -> list[str]:
         text = _clean_preview_text("".join(node.text or "" for node in paragraph.iter(_qn(W_NS, "t"))))
         if text:
             lines.append(text)
-        if len(lines) >= PREVIEW_LINE_LIMIT:
+        if limit is not None and len(lines) >= limit:
             break
     return lines
+
+
+def read_text_for_editor(doc: dict[str, Any]) -> str:
+    path = Path(doc["path"])
+    ext = str(doc["extension"]).lower()
+    if ext == "md":
+        return path.read_text(encoding="utf-8", errors="replace")
+    if ext == "docx":
+        return "\n\n".join(_docx_paragraphs(path))
+    raise ValueError(f"Text editing is not available for .{ext}.")
+
+
+def write_markdown(file_id: str, content: str) -> dict[str, Any]:
+    return replace_document_bytes(file_id, str(content or "").encode("utf-8"), actor="office:markdown")
 
 
 def _preview_xlsx(path: Path) -> list[list[str]]:
@@ -487,19 +556,6 @@ def _preview_pptx(path: Path) -> list[dict[str, Any]]:
         return slides
 
 
-def _preview_odf(path: Path) -> list[str]:
-    with zipfile.ZipFile(path) as archive:
-        root = ET.fromstring(archive.read("content.xml"))
-    lines = []
-    for node in root.iter():
-        text = _clean_preview_text(node.text)
-        if text:
-            lines.append(text)
-        if len(lines) >= PREVIEW_LINE_LIMIT:
-            break
-    return lines
-
-
 def _natural_name_key(value: str) -> list[int | str]:
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", value)]
 
@@ -508,10 +564,10 @@ def replace_document_bytes(
     file_id: str,
     data: bytes,
     actor: str = "agent",
-    invalidate_sessions: bool = True,
+    invalidate_sessions: bool = False,
 ) -> dict[str, Any]:
     if len(data) > MAX_SAVE_BYTES:
-        raise OverflowError("Office save exceeds maximum size")
+        raise OverflowError("Document save exceeds maximum size")
     with connect() as conn:
         doc = get_document(file_id, conn=conn)
         path = Path(doc["path"])
@@ -533,165 +589,16 @@ def replace_document_bytes(
             (len(data), next_version, digest, now_iso(), changed_at, file_id),
         )
         if invalidate_sessions:
-            conn.execute("DELETE FROM locks WHERE file_id = ?", (file_id,))
-            conn.execute("DELETE FROM tokens WHERE file_id = ?", (file_id,))
             conn.execute("DELETE FROM sessions WHERE file_id = ?", (file_id,))
         conn.execute(
             "INSERT INTO events (file_id, event_type, payload, created_at) VALUES (?, ?, ?, ?)",
-            (
-                file_id,
-                "direct_edit",
-                json.dumps({"actor": actor, "version": f"{next_version}-{digest[:12]}"}),
-                changed_at,
-            ),
+            (file_id, "saved", json.dumps({"actor": actor, "version": f"{next_version}-{digest[:12]}"}), changed_at),
         )
         return get_document(file_id, conn=conn)
 
 
-def validate_token(raw_token: str, file_id: str, require_write: bool = False) -> dict[str, Any]:
-    if not raw_token:
-        raise PermissionError("Missing WOPI access token")
-    with connect() as conn:
-        row = conn.execute("SELECT * FROM tokens WHERE token_hash = ?", (token_hash(raw_token),)).fetchone()
-        if not row or row["file_id"] != file_id:
-            raise PermissionError("Invalid WOPI access token")
-        if row["expires_at"] < now():
-            raise PermissionError("Expired WOPI access token")
-        if require_write and row["permission"] != "write":
-            raise PermissionError("WOPI token is read-only")
-        session = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (row["session_id"],)).fetchone()
-        return {"token": dict(row), "session": dict(session) if session else {}}
-
-
-def check_file_info(file_id: str, token_info: dict[str, Any]) -> dict[str, Any]:
-    doc = get_document(file_id)
-    session = token_info.get("session") or {}
-    can_write = (token_info.get("token") or {}).get("permission") == "write"
-    origin = session.get("origin") or "http://localhost:32080"
-    info = {
-        "BaseFileName": doc["basename"],
-        "OwnerId": doc["owner_id"],
-        "Size": int(doc["size"]),
-        "Version": item_version(doc),
-        "UserId": session.get("user_id") or "agent-zero-user",
-        "UserFriendlyName": "Agent Zero",
-        "UserCanWrite": bool(can_write),
-        "ReadOnly": not bool(can_write),
-        "SupportsLocks": True,
-        "SupportsUpdate": True,
-        "SupportsExtendedLockLength": True,
-        "SupportsGetLock": True,
-        "UserCanNotWriteRelative": True,
-        "PostMessageOrigin": origin,
-        "ClosePostMessage": True,
-        "CloseUrl": origin.rstrip("/") + "/",
-        "LastModifiedTime": doc["last_modified"],
-    }
-    return {key: value for key, value in info.items() if value is not None}
-
-
 def item_version(doc: dict[str, Any]) -> str:
     return f"{int(doc['version'])}-{str(doc['sha256'])[:12]}"
-
-
-def get_lock(file_id: str) -> str:
-    with connect() as conn:
-        _clear_expired_locks(conn)
-        row = conn.execute("SELECT lock_value FROM locks WHERE file_id = ?", (file_id,)).fetchone()
-        return row["lock_value"] if row else ""
-
-
-def lock(file_id: str, lock_value: str, session_id: str, timeout_seconds: int) -> tuple[bool, str]:
-    timeout_seconds = clamp_lock_timeout(timeout_seconds)
-    with connect() as conn:
-        _clear_expired_locks(conn)
-        row = conn.execute("SELECT * FROM locks WHERE file_id = ?", (file_id,)).fetchone()
-        if row and row["lock_value"] != lock_value:
-            return False, row["lock_value"]
-        expires = now() + timeout_seconds
-        conn.execute(
-            """
-            INSERT INTO locks (file_id, lock_value, expires_at, session_id, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(file_id) DO UPDATE SET lock_value=excluded.lock_value, expires_at=excluded.expires_at, session_id=excluded.session_id, updated_at=excluded.updated_at
-            """,
-            (file_id, lock_value, expires, session_id, now()),
-        )
-        return True, lock_value
-
-
-def refresh_lock(file_id: str, lock_value: str, timeout_seconds: int) -> tuple[bool, str]:
-    timeout_seconds = clamp_lock_timeout(timeout_seconds)
-    with connect() as conn:
-        _clear_expired_locks(conn)
-        row = conn.execute("SELECT * FROM locks WHERE file_id = ?", (file_id,)).fetchone()
-        if not row or row["lock_value"] != lock_value:
-            return False, row["lock_value"] if row else ""
-        conn.execute(
-            "UPDATE locks SET expires_at = ?, updated_at = ? WHERE file_id = ?",
-            (now() + timeout_seconds, now(), file_id),
-        )
-        return True, lock_value
-
-
-def unlock(file_id: str, lock_value: str) -> tuple[bool, str]:
-    with connect() as conn:
-        _clear_expired_locks(conn)
-        row = conn.execute("SELECT * FROM locks WHERE file_id = ?", (file_id,)).fetchone()
-        if not row:
-            return True, ""
-        if row["lock_value"] != lock_value:
-            return False, row["lock_value"]
-        conn.execute("DELETE FROM locks WHERE file_id = ?", (file_id,))
-        return True, ""
-
-
-def unlock_and_relock(file_id: str, old_lock: str, new_lock: str, session_id: str, timeout_seconds: int) -> tuple[bool, str]:
-    with connect() as conn:
-        _clear_expired_locks(conn)
-        row = conn.execute("SELECT * FROM locks WHERE file_id = ?", (file_id,)).fetchone()
-        if row and row["lock_value"] != old_lock:
-            return False, row["lock_value"]
-        expires = now() + clamp_lock_timeout(timeout_seconds)
-        conn.execute(
-            """
-            INSERT INTO locks (file_id, lock_value, expires_at, session_id, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(file_id) DO UPDATE SET lock_value=excluded.lock_value, expires_at=excluded.expires_at, session_id=excluded.session_id, updated_at=excluded.updated_at
-            """,
-            (file_id, new_lock, expires, session_id, now()),
-        )
-        return True, new_lock
-
-
-def put_file(file_id: str, data: bytes, lock_value: str) -> str:
-    if len(data) > MAX_SAVE_BYTES:
-        raise OverflowError("Office save exceeds maximum size")
-    with connect() as conn:
-        _clear_expired_locks(conn)
-        doc = get_document(file_id, conn=conn)
-        current_lock = conn.execute("SELECT lock_value FROM locks WHERE file_id = ?", (file_id,)).fetchone()
-        current = current_lock["lock_value"] if current_lock else ""
-        path = Path(doc["path"])
-        if current and current != lock_value:
-            raise LockMismatch(current)
-        if not current and int(doc["size"]) > 0:
-            raise LockMismatch("")
-
-        previous = path.read_bytes() if path.exists() else b""
-        _record_version(conn, file_id, path, item_version(doc), previous)
-        _write_atomic(path, data)
-        digest = sha256_bytes(data)
-        next_version = int(doc["version"]) + 1
-        conn.execute(
-            """
-            UPDATE documents
-            SET size=?, version=?, sha256=?, last_modified=?, updated_at=?
-            WHERE file_id=?
-            """,
-            (len(data), next_version, digest, now_iso(), now(), file_id),
-        )
-        return f"{next_version}-{digest[:12]}"
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
@@ -708,29 +615,8 @@ def _write_atomic(path: Path, data: bytes) -> None:
             tmp_path.unlink(missing_ok=True)
 
 
-class LockMismatch(Exception):
-    def __init__(self, current_lock: str) -> None:
-        super().__init__("WOPI lock mismatch")
-        self.current_lock = current_lock
-
-
-def clamp_lock_timeout(value: int | str | None) -> int:
-    try:
-        seconds = int(value or DEFAULT_LOCK_SECONDS)
-    except (TypeError, ValueError):
-        seconds = DEFAULT_LOCK_SECONDS
-    return max(MIN_LOCK_SECONDS, min(MAX_LOCK_SECONDS, seconds))
-
-
-def _clear_expired_locks(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM locks WHERE expires_at < ?", (now(),))
-
-
 def _clear_expired_sessions(conn: sqlite3.Connection) -> None:
-    current = now()
-    conn.execute("DELETE FROM tokens WHERE expires_at < ?", (current,))
-    conn.execute("DELETE FROM sessions WHERE expires_at < ?", (current,))
-    conn.execute("DELETE FROM locks WHERE expires_at < ?", (current,))
+    conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now(),))
 
 
 def _record_version(conn: sqlite3.Connection, file_id: str, path: Path, version: str, data: bytes) -> None:
@@ -763,7 +649,7 @@ def restore_version(file_id: str, version_id: int) -> dict[str, Any]:
         data = Path(row["path"]).read_bytes()
         path = Path(doc["path"])
         _record_version(conn, file_id, path, item_version(doc), path.read_bytes() if path.exists() else b"")
-        path.write_bytes(data)
+        _write_atomic(path, data)
         digest = sha256_bytes(data)
         next_version = int(doc["version"]) + 1
         conn.execute(
@@ -773,58 +659,80 @@ def restore_version(file_id: str, version_id: int) -> dict[str, Any]:
         return get_document(file_id, conn=conn)
 
 
-def create_document(kind: str, title: str, fmt: str, content: str = "", path: str = "") -> dict[str, Any]:
-    ext = normalize_extension(fmt)
-    target = normalize_path(path) if path else _unique_document_path(title, ext)
+def create_document(
+    kind: str,
+    title: str,
+    fmt: str = "md",
+    content: str = "",
+    path: str = "",
+    context_id: str = "",
+) -> dict[str, Any]:
+    ext = normalize_extension(fmt or "md")
+    target = normalize_path(path, context_id=context_id) if path else _unique_document_path(title, ext, context_id=context_id)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         raise FileExistsError(str(target))
     data = template_bytes(kind, ext, title, content)
-    target.write_bytes(data)
-    return register_document(target)
+    _write_atomic(target, data)
+    return register_document(target, context_id=context_id)
 
 
-def _unique_document_path(title: str, ext: str) -> Path:
+def _unique_document_path(title: str, ext: str, context_id: str = "") -> Path:
     base = safe_title(title, "Document")
-    candidate = DOCUMENTS_DIR / f"{base}.{ext}"
+    root = document_home(context_id) if ext == "md" else document_binary_home(context_id)
+    candidate = root / f"{base}.{ext}"
     index = 2
     while candidate.exists():
-        candidate = DOCUMENTS_DIR / f"{base} {index}.{ext}"
+        candidate = root / f"{base} {index}.{ext}"
         index += 1
     return candidate.resolve(strict=False)
 
 
 def template_bytes(kind: str, ext: str, title: str, content: str) -> bytes:
+    ext = normalize_extension(ext or "md")
+    if ext == "md":
+        return _markdown(title, content).encode("utf-8")
     if ext == "docx":
         return _docx(title, content)
     if ext == "xlsx":
         return _xlsx(title, content)
     if ext == "pptx":
         return _pptx(title, content)
-    if ext in {"odt", "ods", "odp"}:
-        return _odf(ext, title, content)
     raise ValueError(ext)
 
 
-def _zip_bytes(files_map: dict[str, str | bytes], stored: set[str] | None = None) -> bytes:
+def _markdown(title: str, content: str) -> str:
+    text = str(content or "").strip()
+    if text:
+        return text if text.startswith("#") else f"# {title}\n\n{text}\n"
+    return f"# {title}\n"
+
+
+def _zip_bytes(files_map: dict[str, str | bytes]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, value in files_map.items():
             data = value.encode("utf-8") if isinstance(value, str) else value
-            info = zipfile.ZipInfo(name)
-            info.compress_type = zipfile.ZIP_STORED if stored and name in stored else zipfile.ZIP_DEFLATED
-            archive.writestr(info, data)
+            archive.writestr(name, data)
     return buffer.getvalue()
 
 
 def _docx(title: str, content: str) -> bytes:
     lines = [title] + [line for line in content.splitlines() if line.strip()]
-    body = "".join(f"<w:p><w:r><w:t>{escape(line)}</w:t></w:r></w:p>" for line in lines)
+    if len(lines) == 1:
+        lines.append("")
+    body = "".join(_docx_paragraph(line) for line in lines)
     return _zip_bytes({
         "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>""",
         "_rels/.rels": """<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>""",
         "word/document.xml": f"""<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:sectPr/></w:body></w:document>""",
     })
+
+
+def _docx_paragraph(line: str) -> str:
+    if not str(line).strip():
+        return '<w:p><w:r><w:t xml:space="preserve">&#160;</w:t></w:r></w:p>'
+    return f"<w:p><w:r><w:t>{escape(line)}</w:t></w:r></w:p>"
 
 
 def _xlsx(title: str, content: str) -> bytes:
@@ -922,25 +830,4 @@ def _column_name(index: int) -> str:
 
 
 def _pptx(title: str, content: str) -> bytes:
-    subtitle = content.splitlines()[0] if content.splitlines() else ""
-    return _zip_bytes({
-        "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>""",
-        "_rels/.rels": """<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>""",
-        "ppt/_rels/presentation.xml.rels": """<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/></Relationships>""",
-        "ppt/presentation.xml": """<?xml version="1.0" encoding="UTF-8"?><p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="9144000" cy="5143500"/></p:presentation>""",
-        "ppt/slides/slide1.xml": f"""<?xml version="1.0" encoding="UTF-8"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{escape(title)}</a:t></a:r></a:p><a:p><a:r><a:t>{escape(subtitle)}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>""",
-    })
-
-
-def _odf(ext: str, title: str, content: str) -> bytes:
-    mime = {
-        "odt": "application/vnd.oasis.opendocument.text",
-        "ods": "application/vnd.oasis.opendocument.spreadsheet",
-        "odp": "application/vnd.oasis.opendocument.presentation",
-    }[ext]
-    body = f"<text:p>{escape(title)}</text:p><text:p>{escape(content)}</text:p>"
-    return _zip_bytes({
-        "mimetype": mime,
-        "META-INF/manifest.xml": f"""<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:media-type="{mime}" manifest:full-path="/"/><manifest:file-entry manifest:media-type="text/xml" manifest:full-path="content.xml"/></manifest:manifest>""",
-        "content.xml": f"""<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.2"><office:body><office:text>{body}</office:text></office:body></office:document-content>""",
-    }, stored={"mimetype"})
+    return pptx_writer.pptx_from_text(title, content)

@@ -7,7 +7,87 @@ set -e
 # searxng - moved to base image
 # bash /ins/install_searxng.sh "$@"
 
-# Collabora CODE for future images. Existing containers still self-heal through the
-# Office plugin runtime bootstrap, so this is an optimization rather than a release
-# prerequisite.
-bash /ins/install_collabora_code.sh "$@"
+if ! command -v apt-get >/dev/null 2>&1; then
+  echo "apt-get unavailable; skipping LibreOffice install"
+  exit 0
+fi
+
+install_xpra_repo() {
+  local os_id=""
+  local codename=""
+  local uri="https://xpra.org"
+  local suite="trixie"
+  local arch
+
+  arch="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+
+  if [ -r /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    os_id="${ID:-}"
+    codename="${VERSION_CODENAME:-}"
+  fi
+
+  if [ "$os_id" = "kali" ]; then
+    uri="https://xpra.org/beta"
+    suite="sid"
+  elif [ "$codename" = "sid" ] || [ "$codename" = "forky" ]; then
+    uri="https://xpra.org/beta"
+    suite="$codename"
+  elif [ -n "$codename" ]; then
+    suite="$codename"
+  fi
+
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates wget
+  wget -O /usr/share/keyrings/xpra.asc https://xpra.org/xpra.asc
+  cat >/etc/apt/sources.list.d/xpra.sources <<EOF
+Types: deb
+URIs: ${uri}
+Suites: ${suite}
+Components: main
+Signed-By: /usr/share/keyrings/xpra.asc
+Architectures: ${arch}
+EOF
+}
+
+install_xpra_repo
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  libreoffice-core \
+  libreoffice-writer \
+  libreoffice-calc \
+  libreoffice-impress \
+  libreoffice-gtk3 \
+  libreofficekit-data \
+  libreofficekit-dev \
+  gir1.2-lokdocview-0.1 \
+  python3-gi \
+  python3-uno \
+  xpra \
+  xpra-x11 \
+  xpra-html5 \
+  xfce4-session \
+  xfwm4 \
+  xfce4-panel \
+  xfdesktop4 \
+  xfce4-settings \
+  thunar \
+  gvfs \
+  libglib2.0-bin \
+  xfce4-terminal \
+  pulseaudio \
+  pulseaudio-utils \
+  x11-xserver-utils \
+  xdotool \
+  xauth \
+  dbus-x11 \
+  fonts-dejavu \
+  fonts-liberation \
+  fonts-crosextra-caladea \
+  fonts-crosextra-carlito \
+  fonts-noto-core \
+  fonts-noto-cjk \
+  fonts-noto-color-emoji
+
+rm -rf /var/lib/apt/lists/*

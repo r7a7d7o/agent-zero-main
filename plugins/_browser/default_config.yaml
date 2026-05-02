@@ -5,7 +5,7 @@ extension_paths: []
 # Page opened by new Browser sessions when no URL is provided.
 default_homepage: "about:blank"
 
-# Focus Browser canvas pages automatically when agent Browser tool results arrive.
+# When the Browser canvas is already open, keep it synced to agent Browser tool results.
 autofocus_active_page: true
 
 # Optional _model_config preset used by Browser-owned model helpers.

@@ -200,7 +200,6 @@ export const store = createStore("modelConfig", {
   /**
    * Install save and reset hooks on the plugin settings context.
    * - Save: persists dirty API keys before the normal config save.
-   * - Save: refreshes active chat model names after the config is persisted.
    * - Reset: reloads global presets when settings are reset to defaults.
    */
   installSettingsHooks(context, config) {
@@ -216,9 +215,6 @@ export const store = createStore("modelConfig", {
         return;
       }
       await originalSave();
-      if (!context.error) {
-        await this.refreshActiveChatModels();
-      }
     };
 
     const originalReset = context.resetToDefault.bind(context);
@@ -231,12 +227,6 @@ export const store = createStore("modelConfig", {
     };
 
     context.__modelConfigHooksInstalled = true;
-  },
-
-  async refreshActiveChatModels() {
-    const contextId = window.Alpine?.store("chats")?.selected || "";
-    if (!contextId) return;
-    await this.refreshSwitcher(contextId);
   },
 
   // Model search

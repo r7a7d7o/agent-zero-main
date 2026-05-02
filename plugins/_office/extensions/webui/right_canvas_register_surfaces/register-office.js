@@ -1,3 +1,7 @@
+import { store as officeStore } from "/plugins/_office/webui/office-store.js";
+
+void officeStore;
+
 function waitForElement(selector, timeoutMs = 3000) {
   const found = document.querySelector(selector);
   if (found) return Promise.resolve(found);
@@ -20,8 +24,8 @@ function waitForElement(selector, timeoutMs = 3000) {
 export default async function registerOfficeSurface(canvas) {
   canvas.registerSurface({
     id: "office",
-    title: "Office",
-    icon: "description",
+    title: "Desktop",
+    icon: "desktop_windows",
     order: 20,
     modalPath: "/plugins/_office/webui/main.html",
     async open(payload = {}) {
@@ -30,9 +34,9 @@ export default async function registerOfficeSurface(canvas) {
       await office?.onMount?.(panel, { mode: "canvas" });
       await office?.onOpen?.(payload);
     },
-    async close() {
+    async close(payload = {}) {
       const office = globalThis.Alpine?.store?.("office");
-      office?.beforeHostHidden?.();
+      office?.beforeHostHidden?.({ unloadDesktop: payload?.reason === "mobile" });
     },
   });
 }

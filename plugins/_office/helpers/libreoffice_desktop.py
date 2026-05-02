@@ -1,0 +1,1308 @@
+from __future__ import annotations
+
+import atexit
+import json
+import os
+import shutil
+import socket
+import subprocess
+import threading
+import time
+import uuid
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from helpers import files, virtual_desktop
+from plugins._office.helpers import document_store, libreoffice
+
+
+OFFICIAL_EXTENSIONS = {"docx", "xlsx", "pptx"}
+SYSTEM_SESSION_ID = "agent-zero-desktop"
+SYSTEM_FILE_ID = "system-desktop"
+SYSTEM_TITLE = "Desktop"
+STATE_DIR = Path(files.get_abs_path("tmp", "_office", "desktop"))
+SESSION_DIR = STATE_DIR / "sessions"
+PROFILE_DIR = STATE_DIR / "profiles"
+DISPLAY_BASE = 120
+XPRA_PORT_BASE = 14500
+MAX_SESSIONS = 12
+DEFAULT_SCREEN_WIDTH = virtual_desktop.DEFAULT_WIDTH
+DEFAULT_SCREEN_HEIGHT = virtual_desktop.DEFAULT_HEIGHT
+MAX_SCREEN_WIDTH = virtual_desktop.MAX_WIDTH
+MAX_SCREEN_HEIGHT = virtual_desktop.MAX_HEIGHT
+BLOCKING_DIALOG_TITLES = ("Remote Files", "File Services")
+DISPLAY_START_TIMEOUT_SECONDS = 30.0
+PORT_START_TIMEOUT_SECONDS = 30.0
+STARTUP_GRACE_SECONDS = 45
+HIDDEN_XPRA_DESKTOP_ENTRIES = (
+    "xpra.desktop",
+    "xpra-gui.desktop",
+    "xpra-launcher.desktop",
+    "xpra-shadow.desktop",
+    "xpra-start.desktop",
+)
+DESKTOP_FOLDER_LINKS = (
+    ("Workdir", ("usr", "workdir")),
+    ("Projects", ("usr", "projects")),
+    ("Skills", ("usr", "skills")),
+    ("Agents", ("usr", "agents")),
+    ("Downloads", ("usr", "downloads")),
+)
+
+
+@dataclass
+class DesktopSession:
+    session_id: str
+    file_id: str
+    extension: str
+    path: str
+    title: str
+    display: int
+    xpra_port: int
+    token: str
+    url: str
+    profile_dir: Path
+    width: int = DEFAULT_SCREEN_WIDTH
+    height: int = DEFAULT_SCREEN_HEIGHT
+    processes: dict[str, subprocess.Popen[Any]] = field(default_factory=dict)
+    started_at: float = field(default_factory=time.time)
+
+    def alive(self) -> bool:
+        return _running(self.processes.get("xpra"))
+
+    def public(self, doc: dict[str, Any] | None = None) -> dict[str, Any]:
+        title = str(doc.get("basename") or "") if doc else self.title
+        path = str(doc.get("path") or "") if doc else self.path
+        extension = str(doc.get("extension") or "") if doc else self.extension
+        file_id = str(doc.get("file_id") or "") if doc else self.file_id
+        return {
+            "available": True,
+            "session_id": self.session_id,
+            "file_id": file_id,
+            "extension": extension,
+            "title": title,
+            "path": document_store.display_path(path),
+            "url": self.url,
+            "token": self.token,
+            "display": f":{self.display}",
+            "desktop_path": virtual_desktop.SESSION_PATH,
+            "width": self.width,
+            "height": self.height,
+            "started_at": self.started_at,
+        }
+
+
+class LibreOfficeDesktopManager:
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._sessions: dict[str, DesktopSession] = {}
+
+    def ensure_system_desktop(self) -> dict[str, Any]:
+        try:
+            with self._lock:
+                self._reap_dead_locked()
+                session = self._ensure_system_desktop_locked()
+                return session.public()
+        except Exception as exc:
+            status = collect_desktop_status()
+            return {
+                "available": False,
+                "error": str(exc),
+                "status": status,
+            }
+
+    def open(self, doc: dict[str, Any]) -> dict[str, Any]:
+        ext = str(doc.get("extension") or "").lower()
+        if ext not in OFFICIAL_EXTENSIONS:
+            return {"available": False, "reason": f".{ext} does not use the LibreOffice desktop surface."}
+
+        with self._lock:
+            self._reap_dead_locked()
+            try:
+                session = self._ensure_system_desktop_locked()
+            except Exception as exc:
+                status = collect_desktop_status()
+                return {
+                    "available": False,
+                    "error": str(exc),
+                    "status": status,
+                }
+            self._open_document_locked(session, doc)
+            session.file_id = str(doc["file_id"])
+            session.extension = ext
+            session.path = str(doc["path"])
+            session.title = str(doc["basename"])
+            self._write_manifest(session)
+            return session.public(doc)
+
+    def save(self, session_id: str, file_id: str = "") -> dict[str, Any]:
+        session = self.require(session_id)
+        doc = self._document_for_save(session, file_id)
+        xdotool = shutil.which("xdotool")
+        if not xdotool:
+            updated = document_store.register_document(doc["path"]) if doc else None
+            return {
+                "ok": False,
+                "error": "xdotool is not installed; use LibreOffice's Save control inside the canvas.",
+                "document": _public_doc(updated) if updated else None,
+            }
+
+        result = subprocess.run(
+            [xdotool, "key", "--clearmodifiers", "ctrl+s"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=8,
+            env=self._display_env(session),
+        )
+        time.sleep(0.8)
+        updated = document_store.register_document(doc["path"]) if doc else None
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            return {
+                "ok": False,
+                "error": detail or "LibreOffice desktop save shortcut failed.",
+                "document": _public_doc(updated) if updated else None,
+            }
+        return {
+            "ok": True,
+            "session_id": session.session_id,
+            "document": _public_doc(updated) if updated else None,
+        }
+
+    def sync(self, session_id: str = "", file_id: str = "") -> dict[str, Any]:
+        session = self.get(session_id) if session_id else self._find_by_file_id(file_id)
+        if not session:
+            return {"ok": False, "error": "LibreOffice desktop session not found."}
+        doc = self._document_for_save(session, file_id)
+        if not doc:
+            return {"ok": True, "session_id": session.session_id, "desktop": session.public()}
+        updated = document_store.register_document(doc["path"])
+        return {"ok": True, "session_id": session.session_id, "document": _public_doc(updated)}
+
+    def close(self, session_id: str, save_first: bool = True) -> dict[str, Any]:
+        with self._lock:
+            normalized = str(session_id or "").strip()
+            session = self._sessions.get(normalized)
+        if not session:
+            return {"ok": True, "closed": 0}
+        if session.session_id == SYSTEM_SESSION_ID:
+            save_result = None
+            if save_first:
+                try:
+                    save_result = self.save(session.session_id)
+                except Exception as exc:
+                    save_result = {"ok": False, "error": str(exc)}
+            return {
+                "ok": True,
+                "closed": 0,
+                "session_id": session.session_id,
+                "persistent": True,
+                "save": save_result,
+            }
+
+        save_result = None
+        if save_first:
+            try:
+                save_result = self.save(session.session_id)
+            except Exception as exc:
+                save_result = {"ok": False, "error": str(exc)}
+        with self._lock:
+            self._sessions.pop(session.session_id, None)
+        virtual_desktop.unregister_session(session.token)
+        self._terminate_session(session)
+        self._remove_manifest(session.session_id)
+        return {"ok": True, "closed": 1, "session_id": session.session_id, "save": save_result}
+
+    def close_file(self, file_id: str) -> int:
+        return 0
+
+    def resize(self, session_id: str, width: int, height: int) -> dict[str, Any]:
+        session = self.get(session_id)
+        if not session:
+            return {"ok": False, "error": "LibreOffice desktop session not found."}
+        result = virtual_desktop.resize_display(
+            display=session.display,
+            width=width,
+            height=height,
+            max_width=MAX_SCREEN_WIDTH,
+            max_height=MAX_SCREEN_HEIGHT,
+            window_class="libreoffice",
+            keys=("Escape",),
+            xauthority=self._xauthority(session),
+            home=str(session.profile_dir),
+        )
+        if result.get("ok"):
+            session.width = int(result["width"])
+            session.height = int(result["height"])
+            self._dismiss_blocking_dialogs(session)
+        return result
+
+    def proxy_for_token(self, token: str) -> tuple[str, int] | None:
+        normalized = str(token or "").strip()
+        with self._lock:
+            session = self._sessions.get(normalized)
+            if not session:
+                session = next((item for item in self._sessions.values() if item.token == normalized), None)
+            if not session or not session.alive():
+                return None
+            return ("127.0.0.1", session.xpra_port)
+
+    def resize_for_token(self, token: str, width: int, height: int) -> dict[str, Any]:
+        normalized = str(token or "").strip()
+        with self._lock:
+            session = self._sessions.get(normalized)
+            if not session:
+                session = next((item for item in self._sessions.values() if item.token == normalized), None)
+        if not session:
+            return {"ok": False, "error": "LibreOffice desktop session not found."}
+        return self.resize(session.session_id, width, height)
+
+    def get(self, session_id: str) -> DesktopSession | None:
+        with self._lock:
+            session = self._sessions.get(str(session_id or "").strip())
+            return session if session and session.alive() else None
+
+    def require(self, session_id: str) -> DesktopSession:
+        session = self.get(session_id)
+        if not session:
+            raise FileNotFoundError(f"LibreOffice desktop session not found: {session_id}")
+        return session
+
+    def shutdown(self) -> None:
+        with self._lock:
+            sessions = list(self._sessions.values())
+            self._sessions.clear()
+        for session in sessions:
+            virtual_desktop.unregister_session(session.token)
+            self._terminate_session(session)
+            self._remove_manifest(session.session_id)
+
+    def _document_for_save(self, session: DesktopSession, file_id: str = "") -> dict[str, Any] | None:
+        normalized = str(file_id or "").strip()
+        if normalized == SYSTEM_FILE_ID:
+            return None
+        if normalized and normalized != SYSTEM_FILE_ID:
+            return document_store.get_document(normalized)
+        if session.file_id and session.file_id != SYSTEM_FILE_ID:
+            try:
+                return document_store.get_document(session.file_id)
+            except Exception:
+                path = Path(session.path)
+                if path.is_file():
+                    return document_store.register_document(path)
+        return None
+
+    def _register_virtual_desktop(self, session: DesktopSession) -> None:
+        virtual_desktop.register_session(
+            token=session.token,
+            host="127.0.0.1",
+            port=session.xpra_port,
+            owner="libreoffice",
+            title=session.title,
+            resize=lambda width, height, session_id=session.session_id: self.resize(session_id, width, height),
+        )
+
+    def _ensure_system_desktop_locked(self) -> DesktopSession:
+        existing = self._sessions.get(SYSTEM_SESSION_ID)
+        if existing and existing.alive():
+            return existing
+
+        status = collect_desktop_status()
+        if not status["healthy"]:
+            raise RuntimeError(status["message"])
+
+        display, xpra_port = self._allocate_endpoint_locked()
+        profile_dir = PROFILE_DIR / SYSTEM_SESSION_ID
+        session = DesktopSession(
+            session_id=SYSTEM_SESSION_ID,
+            file_id=SYSTEM_FILE_ID,
+            extension="desktop",
+            path=str(document_store.document_binary_home()),
+            title=SYSTEM_TITLE,
+            display=display,
+            xpra_port=xpra_port,
+            token=SYSTEM_SESSION_ID,
+            url=_xpra_url(SYSTEM_SESSION_ID),
+            profile_dir=profile_dir,
+        )
+        try:
+            self._prepare_profile(session)
+            self._prepare_desktop_launchers(session)
+            self._spawn_desktop_locked(session)
+        except Exception:
+            self._terminate_session(session)
+            raise
+        self._sessions[session.session_id] = session
+        self._register_virtual_desktop(session)
+        self._write_manifest(session)
+        return session
+
+    def _spawn_desktop_locked(self, session: DesktopSession) -> None:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        SESSION_DIR.mkdir(parents=True, exist_ok=True)
+        session.profile_dir.mkdir(parents=True, exist_ok=True)
+
+        xpra = _require_binary("xpra")
+        xvfb = _require_binary("Xvfb")
+        _require_binary("xfce4-session")
+        _require_binary("dbus-launch")
+        xfce_launcher = self._prepare_xfce_launcher(session)
+
+        session.processes["xvfb"] = subprocess.Popen(
+            _xvfb_command(xvfb, session),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=self._session_env(session),
+        )
+        self._wait_for_display(session)
+        self._set_display_size(session, session.width, session.height)
+        self._prepare_root_window(session)
+        session.processes["xfce"] = subprocess.Popen(
+            [str(xfce_launcher)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=self._display_env(session),
+        )
+        self._wait_for_xfce(session)
+        session.processes["xpra"] = subprocess.Popen(
+            _xpra_shadow_command(xpra, session),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=self._display_env(session),
+        )
+        _wait_for_port(
+            "127.0.0.1",
+            session.xpra_port,
+            timeout=PORT_START_TIMEOUT_SECONDS,
+            process=session.processes.get("xpra"),
+        )
+        self._refresh_xfce_desktop(session)
+
+    def _restart_xpra_shadow(self, session: DesktopSession) -> None:
+        xpra = _require_binary("xpra")
+        process = session.processes.get("xpra")
+        if process:
+            _terminate_process(process)
+        session.processes["xpra"] = subprocess.Popen(
+            _xpra_shadow_command(xpra, session),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=self._display_env(session),
+        )
+        _wait_for_port(
+            "127.0.0.1",
+            session.xpra_port,
+            timeout=PORT_START_TIMEOUT_SECONDS,
+            process=session.processes.get("xpra"),
+        )
+
+    def _open_document_locked(self, session: DesktopSession, doc: dict[str, Any]) -> None:
+        soffice = libreoffice.find_soffice()
+        if not soffice:
+            raise RuntimeError("LibreOffice is not installed in this runtime.")
+        path = str(doc["path"])
+        self._remove_stale_lock_file(session, path=path)
+        process_key = f"soffice-{doc['file_id']}"
+        session.processes[process_key] = subprocess.Popen(
+            [
+                soffice,
+                "--norestore",
+                "--nofirststartwizard",
+                "--nolockcheck",
+                f"-env:UserInstallation=file://{session.profile_dir}",
+                path,
+            ],
+            cwd=str(Path(path).parent),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=self._display_env(session),
+        )
+        self._fit_office_window(session, process=session.processes[process_key])
+
+    def _prepare_profile(self, session: DesktopSession) -> None:
+        user_dir = session.profile_dir / "user"
+        user_dir.mkdir(parents=True, exist_ok=True)
+        registry = user_dir / "registrymodifications.xcu"
+        if registry.exists():
+            return
+        registry.write_text(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="FirstRun" oor:op="fuse"><value>false</value></prop></item>
+<item oor:path="/org.openoffice.Setup/Office"><prop oor:name="ooSetupInstCompleted" oor:op="fuse"><value>true</value></prop></item>
+<item oor:path="/org.openoffice.Setup/Office"><prop oor:name="MigrationCompleted" oor:op="fuse"><value>true</value></prop></item>
+<item oor:path="/org.openoffice.Setup/Office"><prop oor:name="OfficeRestartInProgress" oor:op="fuse"><value>false</value></prop></item>
+<item oor:path="/org.openoffice.Setup/L10N"><prop oor:name="ooLocale" oor:op="fuse"><value>en-US</value></prop></item>
+</oor:items>
+""",
+            encoding="utf-8",
+        )
+
+    def _prepare_desktop_launchers(self, session: DesktopSession) -> None:
+        soffice = libreoffice.find_soffice()
+        if not soffice:
+            raise RuntimeError("LibreOffice is not installed in this runtime.")
+        documents_home = document_store.document_binary_home()
+        documents_home.mkdir(parents=True, exist_ok=True)
+
+        desktop_dir = session.profile_dir / "Desktop"
+        desktop_dir.mkdir(parents=True, exist_ok=True)
+        _remove_path_if_owned(desktop_dir / "Browser.desktop")
+        _remove_path_if_owned(desktop_dir / "Files.desktop")
+        config_dir = session.profile_dir / ".config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        _remove_path_if_owned(config_dir / "xfce4" / "panel")
+        data_dir = session.profile_dir / ".local" / "share"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        applications_dir = data_dir / "applications"
+        applications_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir = session.profile_dir / ".cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "user-dirs.dirs").write_text(
+            "\n".join(
+                [
+                    'XDG_DESKTOP_DIR="$HOME/Desktop"',
+                    f'XDG_DOCUMENTS_DIR="{documents_home}"',
+                    f'XDG_DOWNLOAD_DIR="{files.get_abs_path("usr", "downloads")}"',
+                    f'XDG_TEMPLATES_DIR="{documents_home}"',
+                    f'XDG_PUBLICSHARE_DIR="{document_store.document_home()}"',
+                    f'XDG_MUSIC_DIR="{document_store.document_home()}"',
+                    f'XDG_PICTURES_DIR="{document_store.document_home()}"',
+                    f'XDG_VIDEOS_DIR="{document_store.document_home()}"',
+                    "",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        xfce_conf_dir = config_dir / "xfce4" / "xfconf" / "xfce-perchannel-xml"
+        xfce_conf_dir.mkdir(parents=True, exist_ok=True)
+        (xfce_conf_dir / "xfce4-desktop.xml").write_text(
+            """<?xml version="1.1" encoding="UTF-8"?>
+
+<channel name="xfce4-desktop" version="1.0">
+  <property name="last-settings-migration-version" type="uint" value="1"/>
+  <property name="desktop-icons" type="empty">
+    <property name="style" type="int" value="2"/>
+    <property name="file-icons" type="empty">
+      <property name="show-home" type="bool" value="false"/>
+      <property name="show-filesystem" type="bool" value="false"/>
+      <property name="show-removable" type="bool" value="false"/>
+      <property name="show-trash" type="bool" value="false"/>
+    </property>
+  </property>
+</channel>
+""",
+            encoding="utf-8",
+        )
+        helpers_rc = config_dir / "xfce4" / "helpers.rc"
+        helpers_rc.parent.mkdir(parents=True, exist_ok=True)
+        helpers_rc.write_text(
+            "\n".join(
+                [
+                    "TerminalEmulator=xfce4-terminal",
+                    "FileManager=thunar",
+                    "",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        self._hide_xpra_desktop_entries(applications_dir)
+
+        base_args = (
+            soffice,
+            "--norestore",
+            "--nofirststartwizard",
+            "--nolockcheck",
+            f"-env:UserInstallation=file://{session.profile_dir}",
+        )
+        office_launchers = (
+            ("LibreOffice Writer", "libreoffice-writer", "--writer", "Office;WordProcessor;"),
+            ("LibreOffice Calc", "libreoffice-calc", "--calc", "Office;Spreadsheet;"),
+            ("LibreOffice Impress", "libreoffice-impress", "--impress", "Office;Presentation;"),
+        )
+        for name, icon, mode, categories in office_launchers:
+            _write_desktop_launcher(
+                desktop_dir / f"{name}.desktop",
+                name=name,
+                exec_line=_desktop_exec(*base_args, mode),
+                icon=icon,
+                categories=categories,
+                try_exec=soffice,
+            )
+
+        terminal = shutil.which("xfce4-terminal") or "xfce4-terminal"
+        settings = shutil.which("xfce4-settings-manager") or "xfce4-settings-manager"
+        workdir = document_store.document_home()
+        desktop_apps = (
+            {
+                "filename": "Terminal.desktop",
+                "name": "Terminal",
+                "exec": _desktop_exec(terminal, f"--working-directory={workdir}"),
+                "try_exec": terminal,
+                "icon": _desktop_icon(
+                    "/usr/share/icons/hicolor/128x128/apps/org.xfce.terminal.png",
+                    "/usr/share/icons/hicolor/scalable/apps/org.xfce.terminal.svg",
+                    "org.xfce.terminal",
+                    "utilities-terminal",
+                ),
+                "categories": "System;TerminalEmulator;",
+            },
+            {
+                "filename": "Settings.desktop",
+                "name": "Settings",
+                "exec": _desktop_exec(settings),
+                "try_exec": settings,
+                "icon": _desktop_icon(
+                    "/usr/share/icons/hicolor/128x128/apps/org.xfce.settings.manager.png",
+                    "/usr/share/icons/hicolor/scalable/apps/org.xfce.settings.manager.svg",
+                    "org.xfce.settings.manager",
+                    "preferences-system",
+                ),
+                "categories": "Settings;DesktopSettings;",
+            },
+        )
+        for app in desktop_apps:
+            _write_desktop_launcher(
+                desktop_dir / str(app["filename"]),
+                name=str(app["name"]),
+                exec_line=str(app["exec"]),
+                icon=str(app["icon"]),
+                categories=str(app["categories"]),
+                try_exec=str(app["try_exec"]),
+            )
+        for label, target_parts in DESKTOP_FOLDER_LINKS:
+            _ensure_desktop_folder_link(desktop_dir, label, Path(files.get_abs_path(*target_parts)))
+
+        self._prepare_xfce_panel_config(session)
+        self._prepare_xfce_profile_autostart(session)
+
+    def _hide_xpra_desktop_entries(self, applications_dir: Path) -> None:
+        for filename in HIDDEN_XPRA_DESKTOP_ENTRIES:
+            (applications_dir / filename).write_text(
+                "\n".join(
+                    [
+                        "[Desktop Entry]",
+                        "Type=Application",
+                        "Name=Xpra",
+                        "NoDisplay=true",
+                        "Hidden=true",
+                        "",
+                    ],
+                ),
+                encoding="utf-8",
+            )
+
+    def _prepare_xfce_panel_config(self, session: DesktopSession) -> None:
+        panel_xml = (
+            session.profile_dir
+            / ".config"
+            / "xfce4"
+            / "xfconf"
+            / "xfce-perchannel-xml"
+            / "xfce4-panel.xml"
+        )
+        panel_xml.parent.mkdir(parents=True, exist_ok=True)
+
+        root = ET.Element("channel", {"name": "xfce4-panel", "version": "1.0"})
+        ET.SubElement(root, "property", {"name": "configver", "type": "int", "value": "2"})
+
+        panels = ET.SubElement(root, "property", {"name": "panels", "type": "array"})
+        ET.SubElement(panels, "value", {"type": "int", "value": "1"})
+        panel = ET.SubElement(panels, "property", {"name": "panel-1", "type": "empty"})
+        for name, prop_type, value in (
+            ("position", "string", "p=6;x=0;y=0"),
+            ("length", "uint", "100"),
+            ("position-locked", "bool", "true"),
+            ("size", "uint", "24"),
+            ("mode", "uint", "0"),
+            ("autohide-behavior", "uint", "0"),
+            ("disable-struts", "bool", "false"),
+            ("nrows", "uint", "1"),
+        ):
+            ET.SubElement(panel, "property", {"name": name, "type": prop_type, "value": value})
+        plugin_ids = ET.SubElement(panel, "property", {"name": "plugin-ids", "type": "array"})
+        for plugin_id in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+            ET.SubElement(plugin_ids, "value", {"type": "int", "value": plugin_id})
+
+        plugins = ET.SubElement(root, "property", {"name": "plugins", "type": "empty"})
+        ET.SubElement(plugins, "property", {"name": "plugin-1", "type": "string", "value": "applicationsmenu"})
+        ET.SubElement(plugins, "property", {"name": "plugin-2", "type": "string", "value": "tasklist"})
+        tasklist = _xfce_property(plugins, "plugin-2", "string", "tasklist")
+        ET.SubElement(tasklist, "property", {"name": "flat-buttons", "type": "bool", "value": "true"})
+        ET.SubElement(tasklist, "property", {"name": "show-handle", "type": "bool", "value": "false"})
+        ET.SubElement(tasklist, "property", {"name": "show-labels", "type": "bool", "value": "true"})
+        separator = ET.SubElement(plugins, "property", {"name": "plugin-3", "type": "string", "value": "separator"})
+        ET.SubElement(separator, "property", {"name": "expand", "type": "bool", "value": "true"})
+        ET.SubElement(separator, "property", {"name": "style", "type": "uint", "value": "0"})
+        ET.SubElement(plugins, "property", {"name": "plugin-4", "type": "string", "value": "pager"})
+        ET.SubElement(plugins, "property", {"name": "plugin-5", "type": "string", "value": "systray"})
+        ET.SubElement(plugins, "property", {"name": "plugin-6", "type": "string", "value": "separator"})
+        ET.SubElement(plugins, "property", {"name": "plugin-7", "type": "string", "value": "clock"})
+        ET.SubElement(plugins, "property", {"name": "plugin-8", "type": "string", "value": "separator"})
+        ET.SubElement(plugins, "property", {"name": "plugin-9", "type": "string", "value": "actions"})
+
+        tree = ET.ElementTree(root)
+        try:
+            ET.indent(tree, space="  ")
+        except AttributeError:
+            pass
+        tree.write(panel_xml, encoding="utf-8", xml_declaration=True)
+
+    def _prepare_xfce_profile_autostart(self, session: DesktopSession) -> None:
+        script = session.profile_dir / "prepare-xfce-profile.sh"
+        script.write_text(
+            """#!/bin/sh
+set -eu
+export HOME="${HOME:-%s}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-XFCE}"
+mkdir -p "$HOME/Desktop" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+if command -v xfconf-query >/dev/null 2>&1; then
+  xfconf-query -c xfce4-desktop -p /desktop-icons/style -n -t int -s 2 >/dev/null 2>&1 || true
+  xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-home -n -t bool -s false >/dev/null 2>&1 || true
+  xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-filesystem -n -t bool -s false >/dev/null 2>&1 || true
+  xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-removable -n -t bool -s false >/dev/null 2>&1 || true
+  xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-trash -n -t bool -s false >/dev/null 2>&1 || true
+  xfconf-query -c xfce4-panel -p /panels -n -a -t int -s 1 >/dev/null 2>&1 || true
+  xfconf-query -c xfce4-panel -p /panels/panel-2 -r -R >/dev/null 2>&1 || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -r -R >/dev/null 2>&1 || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -n -a -t int -s 1 -t int -s 2 -t int -s 3 -t int -s 4 -t int -s 5 -t int -s 6 -t int -s 7 -t int -s 8 -t int -s 9 >/dev/null 2>&1 || true
+  for plugin_id in $(seq 10 30); do
+    xfconf-query -c xfce4-panel -p "/plugins/plugin-${plugin_id}" -r -R >/dev/null 2>&1 || true
+  done
+fi
+rm -rf "$XDG_CONFIG_HOME"/xfce4/panel/launcher-* 2>/dev/null || true
+for launcher in "$HOME"/Desktop/*.desktop; do
+  [ -f "$launcher" ] || continue
+  chmod +x "$launcher" 2>/dev/null || true
+  if command -v gio >/dev/null 2>&1; then
+    checksum="$(sha256sum "$launcher" 2>/dev/null | cut -d " " -f 1)"
+    gio set "$launcher" metadata::trusted true >/dev/null 2>&1 || true
+    if [ -n "$checksum" ]; then
+      gio set -t string "$launcher" metadata::xfce-exe-checksum "$checksum" >/dev/null 2>&1 || true
+    fi
+  fi
+done
+if command -v xfdesktop >/dev/null 2>&1; then
+  timeout 4 xfdesktop --reload >/dev/null 2>&1 || true
+fi
+""" % str(session.profile_dir),
+            encoding="utf-8",
+        )
+        try:
+            script.chmod(0o700)
+        except OSError:
+            pass
+
+        autostart_dir = session.profile_dir / ".config" / "autostart"
+        autostart_dir.mkdir(parents=True, exist_ok=True)
+        autostart = autostart_dir / "agent-zero-office-desktop.desktop"
+        autostart.write_text(
+            "\n".join(
+                [
+                    "[Desktop Entry]",
+                    "Type=Application",
+                    "Name=Agent Zero desktop profile",
+                    f"Exec={script}",
+                    "Terminal=false",
+                    "OnlyShowIn=XFCE;",
+                    "X-GNOME-Autostart-enabled=true",
+                    "",
+                ],
+            ),
+            encoding="utf-8",
+        )
+
+    def _prepare_xfce_launcher(self, session: DesktopSession) -> Path:
+        launcher = session.profile_dir / "start-xfce.sh"
+        launcher.write_text(
+            "\n".join(
+                [
+                    "#!/bin/sh",
+                    'export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"',
+                    'export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"',
+                    'export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"',
+                    'export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-XFCE}"',
+                    (
+                        "exec dbus-launch --exit-with-session sh -c "
+                        f"'\"{session.profile_dir / 'prepare-xfce-profile.sh'}\" >/dev/null 2>&1 || true; exec xfce4-session'"
+                    ),
+                    "",
+                ],
+            ),
+            encoding="utf-8",
+        )
+        try:
+            launcher.chmod(0o700)
+        except OSError:
+            pass
+        return launcher
+
+    def _prepare_root_window(self, session: DesktopSession) -> None:
+        xsetroot = shutil.which("xsetroot")
+        if not xsetroot:
+            return
+        subprocess.run(
+            [xsetroot, "-solid", "#20242a"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            env=self._display_env(session),
+        )
+
+    def _fit_office_window(
+        self,
+        session: DesktopSession,
+        *,
+        process: subprocess.Popen[Any] | None = None,
+    ) -> None:
+        virtual_desktop.fit_window_until(
+            display=session.display,
+            width=session.width,
+            height=session.height,
+            window_class="libreoffice",
+            keys=("Escape",),
+            settle_seconds=4,
+            timeout_seconds=10,
+            process=process,
+            xauthority=self._xauthority(session),
+            home=str(session.profile_dir),
+        )
+        self._dismiss_blocking_dialogs(session)
+
+    def _set_display_size(self, session: DesktopSession, width: int, height: int) -> dict[str, Any]:
+        result = virtual_desktop.resize_display(
+            display=session.display,
+            width=width,
+            height=height,
+            max_width=MAX_SCREEN_WIDTH,
+            max_height=MAX_SCREEN_HEIGHT,
+            window_class="",
+            keys=(),
+            xauthority=self._xauthority(session),
+            home=str(session.profile_dir),
+        )
+        if result.get("ok"):
+            session.width = int(result["width"])
+            session.height = int(result["height"])
+        return result
+
+    def _dismiss_blocking_dialogs(self, session: DesktopSession) -> None:
+        virtual_desktop.close_windows(
+            display=session.display,
+            names=BLOCKING_DIALOG_TITLES,
+            xauthority=self._xauthority(session),
+            home=str(session.profile_dir),
+        )
+
+    def _refresh_xfce_desktop(self, session: DesktopSession) -> None:
+        xfdesktop = shutil.which("xfdesktop")
+        if not xfdesktop:
+            return
+        env = self._xfce_process_env(session, "xfdesktop")
+        try:
+            subprocess.run(
+                [xfdesktop, "--reload"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=4,
+                env=env,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return
+
+    def _xfce_process_env(self, session: DesktopSession, command_name: str) -> dict[str, str]:
+        env = self._display_env(session)
+        proc = Path("/proc")
+        for candidate in proc.iterdir():
+            if not candidate.name.isdigit():
+                continue
+            try:
+                if (candidate / "comm").read_text(encoding="utf-8").strip() != command_name:
+                    continue
+                process_env = self._read_process_env(candidate)
+            except OSError:
+                continue
+            if process_env.get("HOME") != str(session.profile_dir):
+                continue
+            if process_env.get("DISPLAY") != f":{session.display}":
+                continue
+            for key, value in process_env.items():
+                if (
+                    key in {"DBUS_SESSION_BUS_ADDRESS", "DISPLAY", "HOME", "XAUTHORITY"}
+                    or key.startswith("XDG_")
+                ):
+                    env[key] = value
+            break
+        return env
+
+    def _read_process_env(self, proc_dir: Path) -> dict[str, str]:
+        raw = (proc_dir / "environ").read_bytes()
+        env: dict[str, str] = {}
+        for item in raw.split(b"\0"):
+            if not item or b"=" not in item:
+                continue
+            key, value = item.split(b"=", 1)
+            env[key.decode("utf-8", errors="ignore")] = value.decode("utf-8", errors="ignore")
+        return env
+
+    def _session_env(self, session: DesktopSession) -> dict[str, str]:
+        env = {
+            **os.environ,
+            "HOME": str(session.profile_dir),
+            "LANG": os.environ.get("LANG") or "C.UTF-8",
+        }
+        env.setdefault("XDG_RUNTIME_DIR", str(STATE_DIR / "xdg-runtime"))
+        runtime_dir = Path(env["XDG_RUNTIME_DIR"])
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            runtime_dir.chmod(0o700)
+        except OSError:
+            pass
+        return env
+
+    def _display_env(self, session: DesktopSession) -> dict[str, str]:
+        env = {
+            **self._session_env(session),
+            "DISPLAY": f":{session.display}",
+            "SAL_USE_VCLPLUGIN": os.environ.get("SAL_USE_VCLPLUGIN") or "gtk3",
+        }
+        xauthority = self._xauthority(session)
+        if xauthority:
+            env["XAUTHORITY"] = xauthority
+        return env
+
+    def _xauthority(self, session: DesktopSession) -> str:
+        path = session.profile_dir / ".Xauthority"
+        return str(path) if path.exists() else ""
+
+    def _allocate_endpoint_locked(self) -> tuple[int, int]:
+        used_displays = {session.display for session in self._sessions.values()}
+        used_ports = {session.xpra_port for session in self._sessions.values()}
+        for offset in range(MAX_SESSIONS):
+            display = DISPLAY_BASE + offset
+            port = XPRA_PORT_BASE + offset
+            if display in used_displays or port in used_ports:
+                continue
+            if _port_is_free(port):
+                return display, port
+        raise RuntimeError("No LibreOffice desktop slots are available.")
+
+    def _find_by_file_id_locked(self, file_id: str) -> DesktopSession | None:
+        for session in self._sessions.values():
+            if session.file_id == file_id and session.alive():
+                return session
+        return None
+
+    def _find_by_file_id(self, file_id: str) -> DesktopSession | None:
+        with self._lock:
+            return self._find_by_file_id_locked(str(file_id or "").strip())
+
+    def _reap_dead_locked(self) -> None:
+        for session_id, session in list(self._sessions.items()):
+            if not session.alive():
+                self._terminate_session(session)
+                virtual_desktop.unregister_session(session.token)
+                self._sessions.pop(session_id, None)
+                self._remove_manifest(session_id)
+
+    def _wait_for_display(self, session: DesktopSession) -> None:
+        marker = Path(f"/tmp/.X11-unix/X{session.display}")
+        deadline = time.time() + DISPLAY_START_TIMEOUT_SECONDS
+        while time.time() < deadline:
+            process = session.processes.get("xvfb") or session.processes.get("xpra")
+            if process and process.poll() is not None:
+                raise RuntimeError("The LibreOffice X display exited before it was ready.")
+            if marker.exists():
+                return
+            time.sleep(0.1)
+        raise TimeoutError("Timed out waiting for the LibreOffice X display.")
+
+    def _wait_for_xfce(self, session: DesktopSession) -> None:
+        deadline = time.time() + STARTUP_GRACE_SECONDS
+        while time.time() < deadline:
+            process = session.processes.get("xfce")
+            if process and process.poll() is not None:
+                return
+            if virtual_desktop.has_window(
+                display=session.display,
+                name="xfce4-panel",
+                xauthority=self._xauthority(session),
+                home=str(session.profile_dir),
+            ):
+                return
+            time.sleep(0.25)
+
+    def _write_manifest(self, session: DesktopSession) -> None:
+        SESSION_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "session_id": session.session_id,
+            "file_id": session.file_id,
+            "path": session.path,
+            "display": session.display,
+            "xpra_port": session.xpra_port,
+            "owner_pid": os.getpid(),
+            "pids": {name: process.pid for name, process in session.processes.items()},
+        }
+        (SESSION_DIR / f"{session.session_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def _remove_manifest(self, session_id: str) -> None:
+        (SESSION_DIR / f"{session_id}.json").unlink(missing_ok=True)
+
+    def _terminate_session(self, session: DesktopSession) -> None:
+        process_names = [name for name in session.processes if name.startswith("soffice")]
+        process_names.extend(["xfce", "xpra", "xvfb"])
+        for name in process_names:
+            process = session.processes.get(name)
+            if not process:
+                continue
+            _terminate_process(process)
+        self._remove_stale_lock_file(session)
+
+    def _remove_stale_lock_file(self, session: DesktopSession, *, path: str | Path | None = None) -> None:
+        path = Path(path or session.path)
+        if not path.name:
+            return
+        lock_file = path.with_name(f".~lock.{path.name}#")
+        try:
+            lock_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def collect_desktop_status() -> dict[str, Any]:
+    desktop = virtual_desktop.collect_status()
+    binaries = {
+        **desktop["binaries"],
+        "soffice": libreoffice.find_soffice(),
+        "thunar": shutil.which("thunar") or "",
+        "xfce4-terminal": shutil.which("xfce4-terminal") or "",
+        "xfce4-settings-manager": shutil.which("xfce4-settings-manager") or "",
+        "gio": shutil.which("gio") or "",
+        "pulseaudio": shutil.which("pulseaudio") or "",
+        "pactl": shutil.which("pactl") or "",
+    }
+    missing = [
+        name
+        for name in (
+            "soffice",
+            "thunar",
+            "xfce4-terminal",
+            "xfce4-settings-manager",
+            "gio",
+            "pulseaudio",
+            "pactl",
+        )
+        if not binaries[name]
+    ]
+    missing.extend(
+        name
+        for name in ("xpra", "Xvfb", "xfce4-session", "dbus-launch", "xrandr", "xdotool")
+        if not binaries.get(name)
+    )
+    if not desktop.get("xpra_html_root"):
+        missing.append("xpra-html5")
+    if desktop.get("binaries", {}).get("xpra") and desktop.get("packages", {}).get("xpra-x11") is False:
+        missing.append("xpra-x11")
+    healthy = not missing
+    return {
+        "ok": True,
+        "healthy": healthy,
+        "state": "healthy" if healthy else "missing",
+        "binaries": binaries,
+        "xpra_html_root": str(desktop.get("xpra_html_root") or ""),
+        "message": (
+            "Official LibreOffice desktop sessions are available."
+            if healthy
+            else f"Official LibreOffice desktop sessions need: {', '.join(missing)}."
+        ),
+    }
+
+
+def cleanup_stale_runtime_state() -> dict[str, Any]:
+    killed: list[int] = []
+    errors: list[str] = []
+    if SESSION_DIR.exists():
+        for manifest in SESSION_DIR.glob("*.json"):
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+                owner_pid = _coerce_pid(payload.get("owner_pid"))
+                if owner_pid and _pid_is_running(owner_pid):
+                    continue
+                for pid in dict(payload.get("pids") or {}).values():
+                    pid_int = _coerce_pid(pid)
+                    if not pid_int:
+                        continue
+                    if _kill_pid(pid_int):
+                        killed.append(pid_int)
+                manifest.unlink(missing_ok=True)
+            except Exception as exc:
+                errors.append(str(exc))
+    return {"ok": not errors, "killed": killed, "errors": errors}
+
+
+def get_manager() -> LibreOfficeDesktopManager:
+    global _manager
+    try:
+        return _manager
+    except NameError:
+        _manager = LibreOfficeDesktopManager()
+        atexit.register(_manager.shutdown)
+        return _manager
+
+
+def _xpra_url(token: str) -> str:
+    return virtual_desktop.session_url(token, title="Desktop")
+
+
+def _xvfb_command(xvfb: str, session: DesktopSession) -> list[str]:
+    return [
+        xvfb,
+        f":{session.display}",
+        "-screen",
+        "0",
+        f"{MAX_SCREEN_WIDTH}x{MAX_SCREEN_HEIGHT}x24",
+        "+extension",
+        "GLX",
+        "+extension",
+        "RANDR",
+        "+extension",
+        "RENDER",
+        "+extension",
+        "Composite",
+        "-extension",
+        "DOUBLE-BUFFER",
+        "-nolisten",
+        "tcp",
+        "-noreset",
+        "-ac",
+    ]
+
+
+def _xpra_shadow_command(xpra: str, session: DesktopSession) -> list[str]:
+    return [
+        xpra,
+        "shadow",
+        f":{session.display}",
+        "--daemon=no",
+        "--mdns=no",
+        "--html=on",
+        "--tray=no",
+        "--system-tray=no",
+        "--notifications=no",
+        "--file-transfer=yes",
+        "--open-files=no",
+        "--open-url=no",
+        "--printing=yes",
+        "--audio=yes",
+        "--pulseaudio=auto",
+        "--speaker=on",
+        "--microphone=off",
+        f"--bind-tcp=127.0.0.1:{session.xpra_port}",
+        "--resize-display=yes",
+        f"--log-dir={session.profile_dir}",
+        "--log-file=xpra.log",
+    ]
+
+
+def _desktop_exec(*args: str | Path) -> str:
+    return " ".join(_desktop_exec_arg(str(arg)) for arg in args if str(arg))
+
+
+def _desktop_icon(*candidates: str) -> str:
+    for candidate in candidates:
+        if candidate.startswith("/") and Path(candidate).exists():
+            return candidate
+    return next(
+        (candidate for candidate in candidates if not candidate.startswith("/")),
+        candidates[-1],
+    )
+
+
+def _ensure_desktop_folder_link(desktop_dir: Path, label: str, target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    link = desktop_dir / label
+    try:
+        if link.is_symlink() or link.is_file():
+            link.unlink()
+        if not link.exists():
+            link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        return
+
+
+def _remove_path_if_owned(path: Path) -> None:
+    try:
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+    except OSError:
+        return
+
+
+def _desktop_exec_arg(value: str) -> str:
+    if not any(char.isspace() or char in '"\\' for char in value):
+        return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _write_desktop_launcher(
+    path: Path,
+    *,
+    name: str,
+    exec_line: str,
+    icon: str,
+    categories: str,
+    try_exec: str = "",
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "[Desktop Entry]",
+        "Version=1.0",
+        "Type=Application",
+        f"Name={name}",
+        f"Exec={exec_line}",
+    ]
+    if try_exec:
+        lines.append(f"TryExec={try_exec}")
+    lines.extend(
+        [
+            f"Icon={icon}",
+            "Terminal=false",
+            f"Categories={categories}",
+            "StartupNotify=true",
+            "X-XFCE-Trusted=true",
+            "",
+        ],
+    )
+    path.write_text("\n".join(lines), encoding="utf-8")
+    try:
+        path.chmod(0o755)
+    except OSError:
+        pass
+
+
+def _xfce_property(parent: ET.Element, name: str, property_type: str, value: str | None = None) -> ET.Element:
+    for child in parent.findall("property"):
+        if child.get("name") == name:
+            child.set("type", property_type)
+            if value is None:
+                child.attrib.pop("value", None)
+            else:
+                child.set("value", value)
+            return child
+    attributes = {"name": name, "type": property_type}
+    if value is not None:
+        attributes["value"] = value
+    return ET.SubElement(parent, "property", attributes)
+
+
+def _public_doc(doc: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "file_id": doc["file_id"],
+        "path": document_store.display_path(doc["path"]),
+        "basename": doc["basename"],
+        "extension": doc["extension"],
+        "size": doc["size"],
+        "version": document_store.item_version(doc),
+        "last_modified": doc["last_modified"],
+    }
+
+
+def _require_binary(name: str) -> str:
+    found = shutil.which(name)
+    if not found:
+        raise RuntimeError(f"{name} is required for official LibreOffice desktop sessions.")
+    return found
+
+
+def _running(process: subprocess.Popen[Any] | None) -> bool:
+    return bool(process and process.poll() is None)
+
+
+def _wait_for_port(
+    host: str,
+    port: int,
+    timeout: float = 15.0,
+    process: subprocess.Popen[Any] | None = None,
+) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if process and process.poll() is not None:
+            raise RuntimeError(f"Xpra exited before port {port} was ready.")
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                return
+        except OSError:
+            time.sleep(0.1)
+    raise TimeoutError(f"Timed out waiting for Xpra port {port}.")
+
+
+def _port_is_free(port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+
+
+def _terminate_process(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=2)
+        return
+    except Exception:
+        pass
+    try:
+        process.kill()
+        process.wait(timeout=2)
+    except Exception:
+        pass
+
+
+def _kill_pid(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 15)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return False
+
+
+def _coerce_pid(value: Any) -> int:
+    try:
+        pid = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return pid if pid > 0 else 0
+
+
+def _pid_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True

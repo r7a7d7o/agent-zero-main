@@ -1,2 +1,2 @@
-[OFFICE CANVAS]
+[DOCUMENT CANVAS]
 {{office_canvas}}
