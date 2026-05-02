@@ -1,8 +1,1 @@
-<div
-  class="right-canvas-surface-panel time-travel-canvas-surface"
-  data-surface-id="time-travel"
-  x-show="$store.rightCanvas && $store.rightCanvas.isOpen && $store.rightCanvas.activeSurfaceId === 'time-travel'"
-  style="display: none;"
->
-  <x-component path="/plugins/_time_travel/webui/time-travel-panel.html" mode="canvas"></x-component>
-</div>
+<!-- Time Travel is modal-only; the right canvas must not mount its panel. -->
