@@ -132,6 +132,92 @@ def test_collect_completed_response_falls_back_to_text_deltas():
     assert codex.collect_completed_response(FakeResponse()) == {"output": [], "output_text": "Hello"}
 
 
+def test_normalize_usage_payload_reads_codex_windows():
+    usage = codex.normalize_usage_payload(
+        {
+            "plan_type": "plus",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 39,
+                    "reset_at": 1_738_300_000,
+                    "limit_window_seconds": 18_000,
+                },
+                "secondary_window": {
+                    "used_percent": 15,
+                    "reset_at": 1_738_900_000,
+                    "limit_window_seconds": 604_800,
+                },
+            },
+            "credits": {"has_credits": True, "unlimited": False, "balance": 5.39},
+        }
+    )
+
+    assert usage["available"] is True
+    assert usage["plan_type"] == "plus"
+    assert usage["primary"]["used_percent"] == 39
+    assert usage["primary"]["remaining_percent"] == 61
+    assert usage["primary"]["label"] == "5h"
+    assert usage["secondary"]["used_percent"] == 15
+    assert usage["secondary"]["label"] == "7d"
+    assert usage["credits"]["balance"] == 5.39
+
+
+def test_normalize_usage_payload_accepts_zero_percent_headers():
+    usage = codex.normalize_usage_payload(
+        {},
+        {
+            "x-codex-primary-used-percent": "0",
+            "x-codex-primary-window-minutes": "300",
+        },
+    )
+
+    assert usage["available"] is True
+    assert usage["primary"]["used_percent"] == 0
+    assert usage["primary"]["remaining_percent"] == 100
+    assert usage["primary"]["label"] == "5h"
+
+
+def test_disconnect_auth_clears_chatgpt_tokens_and_preserves_api_key(tmp_path, monkeypatch):
+    private_auth = tmp_path / "private-auth.json"
+    shared_auth = tmp_path / "shared-auth.json"
+    private_auth.write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": None,
+                "tokens": {
+                    "access_token": "access",
+                    "refresh_token": "refresh",
+                    "id_token": "id",
+                    "account_id": "account",
+                },
+                "last_refresh": "2026-01-01T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    shared_auth.write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": "sk-keep",
+                "tokens": {"access_token": "access", "account_id": "account"},
+                "last_refresh": "2026-01-01T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(codex, "resolve_auth_file_candidates", lambda: [private_auth, shared_auth])
+
+    result = codex.disconnect_auth()
+
+    assert result["disconnected"] is True
+    assert str(private_auth) in result["removed_auth_files"]
+    assert not private_auth.exists()
+    preserved = json.loads(shared_auth.read_text(encoding="utf-8"))
+    assert preserved == {"OPENAI_API_KEY": "sk-keep"}
+
+
 def test_provider_config_uses_container_local_agent_zero_origin():
     provider_path = Path(__file__).resolve().parents[1] / "plugins/_oauth/conf/model_providers.yaml"
     provider_config = yaml.safe_load(provider_path.read_text(encoding="utf-8"))

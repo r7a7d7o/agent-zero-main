@@ -54,6 +54,16 @@
               <span class="material-symbols-outlined" x-text="$store.oauthConfig.loadingModels ? 'progress_activity' : 'view_list'"></span>
               <span>Check Models</span>
             </button>
+            <button
+              class="oauth-connect danger"
+              type="button"
+              @click="$store.oauthConfig.disconnectCodex()"
+              :disabled="$store.oauthConfig.disconnecting"
+              x-show="$store.oauthConfig.connected()"
+            >
+              <span class="material-symbols-outlined" x-text="$store.oauthConfig.disconnecting ? 'progress_activity' : 'link_off'"></span>
+              <span x-text="$store.oauthConfig.disconnecting ? 'Disconnecting' : 'Disconnect'"></span>
+            </button>
           </div>
         </section>
 
@@ -64,6 +74,24 @@
             <span class="material-symbols-outlined">close</span>
             <span>Cancel</span>
           </button>
+        </section>
+
+        <section class="oauth-usage" x-show="$store.oauthConfig.connected() && $store.oauthConfig.usageWindows().length">
+          <template x-for="window in $store.oauthConfig.usageWindows()" :key="window.key">
+            <div class="oauth-usage-window">
+              <div class="oauth-usage-head">
+                <span>
+                  <span x-text="window.title"></span>
+                  <small x-show="$store.oauthConfig.formatWindowLabel(window)" x-text="$store.oauthConfig.formatWindowLabel(window)"></small>
+                </span>
+                <strong x-text="$store.oauthConfig.formatRemainingPercent(window)"></strong>
+              </div>
+              <div class="oauth-usage-bar" aria-hidden="true">
+                <i :style="{ width: $store.oauthConfig.usageWidth(window) }"></i>
+              </div>
+              <p x-show="$store.oauthConfig.formatReset(window)" x-text="`Resets in ${$store.oauthConfig.formatReset(window)}`"></p>
+            </div>
+          </template>
         </section>
 
         <section class="oauth-status-row">
@@ -190,6 +218,13 @@
       line-height: 1.4;
     }
 
+    .oauth-primary {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
     .oauth-connect {
       display: inline-flex;
       align-items: center;
@@ -210,6 +245,12 @@
 
     .oauth-connect.secondary {
       background: color-mix(in srgb, var(--color-border) 60%, transparent);
+      color: var(--color-text);
+    }
+
+    .oauth-connect.danger {
+      border: 1px solid color-mix(in srgb, #f06464 40%, var(--color-border));
+      background: color-mix(in srgb, #f06464 16%, var(--color-panel));
       color: var(--color-text);
     }
 
@@ -238,6 +279,74 @@
     .oauth-device strong {
       font-size: 1.45rem;
       letter-spacing: 0;
+    }
+
+    .oauth-usage {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      padding: 12px 14px;
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+    }
+
+    .oauth-usage-window {
+      display: grid;
+      min-width: 0;
+      gap: 8px;
+    }
+
+    .oauth-usage-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .oauth-usage-head span {
+      display: inline-flex;
+      min-width: 0;
+      align-items: center;
+      gap: 6px;
+      color: var(--color-text-secondary);
+      font-size: 0.78rem;
+      font-weight: 750;
+    }
+
+    .oauth-usage-head small {
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-border) 55%, transparent);
+      color: var(--color-text-secondary);
+      font-size: 0.7rem;
+      line-height: 1;
+    }
+
+    .oauth-usage-head strong {
+      font-size: 0.92rem;
+      white-space: nowrap;
+    }
+
+    .oauth-usage-bar {
+      overflow: hidden;
+      height: 8px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-border) 54%, transparent);
+    }
+
+    .oauth-usage-bar i {
+      display: block;
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: #35d07f;
+      transition: width .22s ease;
+    }
+
+    .oauth-usage-window p {
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: 0.74rem;
     }
 
     .oauth-status-row {
@@ -372,6 +481,7 @@
     @media (max-width: 720px) {
       .oauth-hero,
       .oauth-device,
+      .oauth-usage,
       .oauth-status-row,
       .oauth-grid,
       .oauth-details div {

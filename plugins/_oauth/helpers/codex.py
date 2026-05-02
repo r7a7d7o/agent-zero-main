@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 import requests
@@ -25,6 +25,11 @@ REFRESH_INTERVAL = timedelta(minutes=55)
 FALLBACK_CODEX_VERSION = "0.124.0"
 OAUTH_ERROR_KEYS = {"error", "error_description"}
 DEVICE_CODE_TIMEOUT_SECONDS = 15 * 60
+USAGE_ENDPOINT_PATHS = (
+    "/backend-api/codex/usage",
+    "/backend-api/wham/usage",
+    "/api/codex/usage",
+)
 
 
 @dataclass(frozen=True)
@@ -306,7 +311,158 @@ def status() -> dict[str, Any]:
             "last_refresh": auth.last_refresh,
         }
     )
+    try:
+        result["usage"] = fetch_usage()
+    except Exception as exc:
+        result["usage"] = {"available": False, "error": str(exc)}
     return result
+
+
+def disconnect_auth() -> dict[str, Any]:
+    cleared_paths: list[str] = []
+    removed_paths: list[str] = []
+    preserved_paths: list[str] = []
+
+    for path in resolve_auth_file_candidates():
+        if not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except Exception:
+            continue
+        if not isinstance(data, dict) or not _contains_chatgpt_auth(data):
+            continue
+
+        cleaned = dict(data)
+        cleaned.pop("tokens", None)
+        cleaned.pop("last_refresh", None)
+        if _string(cleaned.get("auth_mode")).lower() == "chatgpt":
+            cleaned.pop("auth_mode", None)
+
+        cleared_paths.append(str(path))
+        if _has_meaningful_auth_data(cleaned):
+            write_auth_file(path, cleaned)
+            preserved_paths.append(str(path))
+            continue
+
+        path.unlink(missing_ok=True)
+        removed_paths.append(str(path))
+
+    return {
+        "disconnected": bool(cleared_paths),
+        "cleared_auth_files": cleared_paths,
+        "removed_auth_files": removed_paths,
+        "preserved_auth_files": preserved_paths,
+    }
+
+
+def fetch_usage() -> dict[str, Any]:
+    cfg = codex_config()
+    auth = load_auth()
+    errors: list[str] = []
+    headers = {
+        "Authorization": f"Bearer {auth.access_token}",
+        "ChatGPT-Account-Id": auth.account_id,
+        "Accept": "application/json",
+        "User-Agent": "codex-cli",
+    }
+
+    for url in usage_endpoint_candidates(cfg["upstream_base_url"]):
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=max(5, min(cfg["request_timeout_seconds"], 30)),
+            )
+        except Exception as exc:
+            errors.append(str(exc))
+            continue
+
+        if not response.ok:
+            errors.append(upstream_error_message(response, "Failed to load Codex usage."))
+            continue
+
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {}
+        usage = normalize_usage_payload(payload, response.headers)
+        if usage["available"]:
+            usage["endpoint_path"] = urlparse(url).path
+            return usage
+        errors.append("Usage endpoint returned no rate-limit data.")
+
+    suffix = f" {' '.join(errors[-2:])}" if errors else ""
+    raise RuntimeError(f"Failed to load Codex usage.{suffix}")
+
+
+def usage_endpoint_candidates(upstream_base_url: str) -> list[str]:
+    parsed = urlparse(upstream_base_url)
+    if not parsed.scheme or not parsed.netloc:
+        return []
+
+    root = f"{parsed.scheme}://{parsed.netloc}"
+    paths = list(USAGE_ENDPOINT_PATHS)
+    upstream_path = parsed.path.rstrip("/")
+    if upstream_path and upstream_path.endswith("/codex"):
+        paths.insert(0, f"{upstream_path}/usage")
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        url = urljoin(root.rstrip("/") + "/", path.lstrip("/"))
+        if url in seen:
+            continue
+        seen.add(url)
+        result.append(url)
+    return result
+
+
+def normalize_usage_payload(
+    payload: Mapping[str, Any] | None,
+    headers: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    body = payload if isinstance(payload, Mapping) else {}
+    rate_limit = _record(body.get("rate_limit")) or _record(body.get("rateLimits"))
+    header_usage = _normalize_usage_headers(headers or {})
+
+    primary = (
+        _normalize_usage_window(rate_limit.get("primary_window"))
+        or _normalize_usage_window(rate_limit.get("primary"))
+        or _normalize_usage_window(body.get("primary_window"))
+        or header_usage.get("primary")
+    )
+    secondary = (
+        _normalize_usage_window(rate_limit.get("secondary_window"))
+        or _normalize_usage_window(rate_limit.get("secondary"))
+        or _normalize_usage_window(body.get("secondary_window"))
+        or header_usage.get("secondary")
+    )
+    code_review = _normalize_code_review_usage(body.get("code_review_rate_limit"))
+    additional = _normalize_additional_rate_limits(rate_limit.get("additional_rate_limits"))
+    credits = _normalize_credits(body.get("credits"))
+    plan_type = (
+        _string(body.get("plan_type"))
+        or _string(body.get("planType"))
+        or _string(header_usage.get("plan_type"))
+    )
+
+    return {
+        "available": bool(primary or secondary or code_review or additional),
+        "plan_type": plan_type,
+        "primary": primary,
+        "secondary": secondary,
+        "code_review": code_review,
+        "additional": additional,
+        "credits": credits,
+        "rate_limit_reached_type": _string(
+            rate_limit.get("rate_limit_reached_type")
+            or rate_limit.get("rateLimitReachedType")
+            or body.get("rate_limit_reached_type")
+            or body.get("rateLimitReachedType")
+        ),
+    }
 
 
 def refresh_tokens(refresh_token: str) -> dict[str, str]:
@@ -867,3 +1023,227 @@ def _unique_paths(paths: list[Path]) -> list[Path]:
         seen.add(key)
         result.append(path)
     return result
+
+
+def _contains_chatgpt_auth(data: dict[str, Any]) -> bool:
+    tokens = _record(data.get("tokens"))
+    if _string(data.get("auth_mode")).lower() == "chatgpt":
+        return True
+    return any(
+        _string(tokens.get(key))
+        for key in ("access_token", "refresh_token", "id_token", "account_id")
+    )
+
+
+def _has_meaningful_auth_data(data: dict[str, Any]) -> bool:
+    for value in data.values():
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, (dict, list, tuple, set)) and not value:
+            continue
+        return True
+    return False
+
+
+def _normalize_usage_headers(headers: Mapping[str, Any]) -> dict[str, Any]:
+    lowered = {str(key).lower(): value for key, value in headers.items()}
+    primary = _normalize_usage_window(
+        {
+            "used_percent": lowered.get("x-codex-primary-used-percent"),
+            "window_minutes": lowered.get("x-codex-primary-window-minutes"),
+            "reset_at": lowered.get("x-codex-primary-resets-at")
+            or lowered.get("x-codex-primary-reset-at"),
+        }
+    )
+    secondary = _normalize_usage_window(
+        {
+            "used_percent": lowered.get("x-codex-secondary-used-percent"),
+            "window_minutes": lowered.get("x-codex-secondary-window-minutes"),
+            "reset_at": lowered.get("x-codex-secondary-resets-at")
+            or lowered.get("x-codex-secondary-reset-at"),
+        }
+    )
+    return {
+        "primary": primary,
+        "secondary": secondary,
+        "plan_type": _string(lowered.get("x-codex-plan-type")),
+    }
+
+
+def _normalize_code_review_usage(value: Any) -> dict[str, Any] | None:
+    data = _record(value)
+    if not data:
+        return None
+    window = (
+        _normalize_usage_window(data.get("primary_window"))
+        or _normalize_usage_window(data.get("primary"))
+        or _normalize_usage_window(data)
+    )
+    if window:
+        window["name"] = _string(data.get("name")) or "Code review"
+    return window
+
+
+def _normalize_additional_rate_limits(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in value:
+        data = _record(item)
+        if not data:
+            continue
+        window = (
+            _normalize_usage_window(data.get("primary_window"))
+            or _normalize_usage_window(data.get("primary"))
+            or _normalize_usage_window(data)
+        )
+        if not window:
+            continue
+        name = (
+            _string(data.get("name"))
+            or _string(data.get("model"))
+            or _string(data.get("limit_name"))
+            or _string(data.get("limitName"))
+            or _string(data.get("id"))
+        )
+        if name:
+            window["name"] = name
+        result.append(window)
+    return result
+
+
+def _normalize_usage_window(value: Any) -> dict[str, Any] | None:
+    data = _record(value)
+    used_percent = _number(
+        _first_present(
+            data.get("used_percent"),
+            data.get("usedPercent"),
+            data.get("utilization"),
+            data.get("usage_percent"),
+        )
+    )
+    if used_percent is None:
+        return None
+
+    window_seconds = _number(
+        _first_present(
+            data.get("limit_window_seconds"),
+            data.get("window_seconds"),
+            data.get("windowSeconds"),
+            data.get("windowDurationSeconds"),
+        )
+    )
+    window_minutes = _number(
+        _first_present(
+            data.get("window_minutes"),
+            data.get("windowMinutes"),
+            data.get("windowDurationMins"),
+        )
+    )
+    if window_seconds is None and window_minutes is not None:
+        window_seconds = window_minutes * 60
+    if window_minutes is None and window_seconds is not None:
+        window_minutes = window_seconds / 60
+
+    reset_at = _epoch_seconds(
+        _first_present(
+            data.get("reset_at"),
+            data.get("resets_at"),
+            data.get("resetsAt"),
+            data.get("resetAt"),
+        )
+    )
+    used = max(0.0, min(100.0, used_percent))
+    return {
+        "used_percent": _clean_number(used),
+        "remaining_percent": _clean_number(max(0.0, 100.0 - used)),
+        "reset_at": reset_at,
+        "resets_at_iso": _epoch_iso(reset_at),
+        "window_seconds": _clean_number(window_seconds) if window_seconds is not None else None,
+        "window_minutes": _clean_number(window_minutes) if window_minutes is not None else None,
+        "label": _usage_window_label(window_seconds, window_minutes),
+    }
+
+
+def _normalize_credits(value: Any) -> dict[str, Any] | None:
+    data = _record(value)
+    if not data:
+        return None
+    balance = _number(data.get("balance"))
+    return {
+        "has_credits": bool(data.get("has_credits") or data.get("hasCredits")),
+        "unlimited": bool(data.get("unlimited")),
+        "balance": _clean_number(balance) if balance is not None else None,
+    }
+
+
+def _usage_window_label(seconds: float | None, minutes: float | None) -> str:
+    if seconds is None and minutes is not None:
+        seconds = minutes * 60
+    if seconds is None:
+        return ""
+    if 17_940 <= seconds <= 18_060:
+        return "5h"
+    if 604_000 <= seconds <= 605_000:
+        return "7d"
+    if seconds >= 86_400 and seconds % 86_400 == 0:
+        return f"{int(seconds // 86_400)}d"
+    if seconds >= 3_600 and seconds % 3_600 == 0:
+        return f"{int(seconds // 3_600)}h"
+    if seconds >= 60 and seconds % 60 == 0:
+        return f"{int(seconds // 60)}m"
+    return ""
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip().rstrip("%")
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str) and value == "":
+            continue
+        return value
+    return None
+
+
+def _epoch_seconds(value: Any) -> float | None:
+    number = _number(value)
+    if number is None or number <= 0:
+        return None
+    if number > 1_000_000_000_000:
+        number = number / 1000
+    return number
+
+
+def _epoch_iso(value: float | None) -> str:
+    if value is None:
+        return ""
+    try:
+        return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+    except (OSError, ValueError):
+        return ""
+
+
+def _clean_number(value: float | None) -> int | float | None:
+    if value is None:
+        return None
+    if float(value).is_integer():
+        return int(value)
+    return round(float(value), 2)

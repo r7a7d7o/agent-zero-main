@@ -10,6 +10,7 @@ const STATUS_API = "/plugins/_oauth/status";
 const START_DEVICE_LOGIN_API = "/plugins/_oauth/start_device_login";
 const POLL_DEVICE_LOGIN_API = "/plugins/_oauth/poll_device_login";
 const MODELS_API = "/plugins/_oauth/models";
+const DISCONNECT_API = "/plugins/_oauth/disconnect";
 const MAX_POLL_MS = 120000;
 
 function ensureConfig(config) {
@@ -40,6 +41,7 @@ export const store = createStore("oauthConfig", {
   status: null,
   loadingStatus: false,
   connecting: false,
+  disconnecting: false,
   loadingModels: false,
   models: [],
   device: null,
@@ -77,6 +79,53 @@ export const store = createStore("oauthConfig", {
   statusLabel() {
     if (this.loadingStatus) return "Checking";
     return this.connected() ? "Connected" : "Not connected";
+  },
+
+  usage() {
+    return this.status?.codex?.usage || null;
+  },
+
+  usageWindows() {
+    const usage = this.usage();
+    if (!usage?.available) return [];
+    return [
+      { key: "primary", title: "Session", ...(usage.primary || {}) },
+      { key: "secondary", title: "Week", ...(usage.secondary || {}) },
+    ].filter((window) => Number.isFinite(this.remainingPercent(window)));
+  },
+
+  usageWidth(window) {
+    const value = Math.max(0, Math.min(100, this.remainingPercent(window)));
+    return `${value}%`;
+  },
+
+  remainingPercent(window) {
+    const remaining = Number(window?.remaining_percent);
+    if (Number.isFinite(remaining)) return remaining;
+    const used = Number(window?.used_percent);
+    if (Number.isFinite(used)) return 100 - used;
+    return Number.NaN;
+  },
+
+  formatRemainingPercent(window) {
+    const number = this.remainingPercent(window);
+    if (!Number.isFinite(number)) return "0%";
+    return `${Math.round(number * 10) / 10}% left`;
+  },
+
+  formatWindowLabel(window) {
+    return window?.label || "";
+  },
+
+  formatReset(window) {
+    const seconds = Number(window?.reset_at || 0);
+    if (!Number.isFinite(seconds) || seconds <= 0) return "";
+    const remainingMs = Math.max(0, seconds * 1000 - Date.now());
+    const minutes = Math.round(remainingMs / 60000);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 48) return `${hours}h`;
+    return `${Math.round(hours / 24)}d`;
   },
 
   endpointUrl() {
@@ -181,6 +230,29 @@ export const store = createStore("oauthConfig", {
       void toastFrontendError(messageOf(error), "OAuth Connections");
     } finally {
       this.loadingModels = false;
+    }
+  },
+
+  async disconnectCodex() {
+    if (this.disconnecting || !this.connected()) return;
+    const confirmed = window.confirm("Disconnect this OpenAI account and remove stored OAuth tokens?");
+    if (!confirmed) return;
+
+    this.disconnecting = true;
+    try {
+      const response = await callJsonApi(DISCONNECT_API, {});
+      if (!response?.ok) throw new Error(response?.error || "Could not disconnect the account.");
+      this.status = response.codex ? { ok: true, codex: response.codex } : this.status;
+      this.models = [];
+      this.device = null;
+      this.connecting = false;
+      this.stopPolling();
+      void toastFrontendSuccess("OpenAI account disconnected.", "OAuth Connections");
+      await this.loadStatus();
+    } catch (error) {
+      void toastFrontendError(messageOf(error), "OAuth Connections");
+    } finally {
+      this.disconnecting = false;
     }
   },
 
