@@ -20,6 +20,7 @@ except Exception:  # pragma: no cover
 
 MAX_ACTIVE_SKILLS = 20
 ACTIVE_SKILLS_PLUGIN_NAME = "_skills"
+AGENT_DATA_NAME_LOADED_SKILLS = "loaded_skills"
 CONTEXT_DATA_NAME_CHAT_ACTIVE_SKILLS = "skills_chat_active"
 CONTEXT_DATA_NAME_CHAT_DISABLED_SKILLS = "skills_chat_disabled"
 
@@ -703,6 +704,48 @@ def get_active_skills(agent: Agent | None) -> list[ActiveSkillEntry]:
     return _build_active_skills(agent, limit=get_max_active_skills())
 
 
+def get_loaded_skill_entries(agent: Agent | None) -> list[ActiveSkillEntry]:
+    if not agent:
+        return []
+
+    loaded = getattr(agent, "data", {}).get(AGENT_DATA_NAME_LOADED_SKILLS)
+    if not isinstance(loaded, list):
+        return []
+
+    return [
+        {"name": str(skill_name).strip()}
+        for skill_name in loaded
+        if str(skill_name).strip()
+    ]
+
+
+def unload_agent_skill(agent: Agent | None, entry: Any) -> bool:
+    normalized = _normalize_active_skill_entry(entry)
+    if not agent or not normalized:
+        return False
+
+    data = getattr(agent, "data", None)
+    if not isinstance(data, dict):
+        return False
+
+    loaded = data.get(AGENT_DATA_NAME_LOADED_SKILLS)
+    if not isinstance(loaded, list):
+        return False
+
+    next_loaded: list[str] = []
+    removed = False
+    for skill_name in loaded:
+        loaded_entry = _normalize_active_skill_entry(str(skill_name))
+        if loaded_entry and _entries_match(loaded_entry, normalized):
+            removed = True
+            continue
+        next_loaded.append(skill_name)
+
+    if removed:
+        data[AGENT_DATA_NAME_LOADED_SKILLS] = next_loaded
+    return removed
+
+
 def activate_chat_skill(agent: Agent, entry: Any) -> list[ActiveSkillEntry]:
     normalized = _normalize_active_skill_entry(entry)
     if not normalized:
@@ -712,18 +755,19 @@ def activate_chat_skill(agent: Agent, entry: Any) -> list[ActiveSkillEntry]:
     if not context:
         raise ValueError("A chat context is required.")
 
-    key = _entry_key(normalized)
     scope_entries = get_scope_active_skills(agent)
     chat_entries = [
-        item for item in get_chat_active_skills(context) if _entry_key(item) != key
+        item
+        for item in get_chat_active_skills(context)
+        if not _entries_match(item, normalized)
     ]
     disabled_entries = [
         item
         for item in get_chat_disabled_skills(context)
-        if _entry_key(item) != key
+        if not _entries_match(item, normalized)
     ]
 
-    if not any(_entry_key(item) == key for item in scope_entries):
+    if not any(_entries_match(item, normalized) for item in scope_entries):
         chat_entries.append(normalized)
 
     merged_entries = _build_active_skills(
@@ -759,18 +803,19 @@ def deactivate_chat_skill(agent: Agent, entry: Any) -> list[ActiveSkillEntry]:
     if not context:
         raise ValueError("A chat context is required.")
 
-    key = _entry_key(normalized)
     chat_entries = [
-        item for item in get_chat_active_skills(context) if _entry_key(item) != key
+        item
+        for item in get_chat_active_skills(context)
+        if not _entries_match(item, normalized)
     ]
     disabled_entries = [
         item
         for item in get_chat_disabled_skills(context)
-        if _entry_key(item) != key
+        if not _entries_match(item, normalized)
     ]
 
     is_scope_default = any(
-        _entry_key(item) == key for item in get_scope_active_skills(agent)
+        _entries_match(item, normalized) for item in get_scope_active_skills(agent)
     )
     if is_scope_default:
         disabled_entries.append(normalized)
@@ -877,6 +922,19 @@ def _entry_key(entry: ActiveSkillEntry) -> str:
     return str(entry.get("path") or entry.get("name") or "").strip().lower()
 
 
+def _entry_keys(entry: ActiveSkillEntry) -> set[str]:
+    keys: set[str] = set()
+    for value in (entry.get("path"), entry.get("name")):
+        key = str(value or "").strip().lower()
+        if key:
+            keys.add(key)
+    return keys
+
+
+def _entries_match(left: ActiveSkillEntry, right: ActiveSkillEntry) -> bool:
+    return bool(_entry_keys(left) & _entry_keys(right))
+
+
 def _get_agent_project_name(agent: Agent | None) -> str:
     context = getattr(agent, "context", None)
     if not context:
@@ -925,14 +983,17 @@ def _merge_active_skill_entries(
 ) -> list[ActiveSkillEntry]:
     merged: list[ActiveSkillEntry] = []
     seen: set[str] = set()
-    disabled_keys = {_entry_key(entry) for entry in disabled_entries if _entry_key(entry)}
+    disabled_keys = {
+        key for entry in disabled_entries for key in _entry_keys(entry)
+    }
 
     for entry in [*scope_entries, *dynamic_entries]:
+        keys = _entry_keys(entry)
         key = _entry_key(entry)
-        if not key or key in seen or key in disabled_keys:
+        if not key or keys & seen or keys & disabled_keys:
             continue
 
-        seen.add(key)
+        seen.update(keys)
         merged.append(entry)
         if limit is not None and limit >= 0 and len(merged) >= limit:
             break

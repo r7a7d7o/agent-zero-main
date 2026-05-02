@@ -41,6 +41,7 @@ class SkillsCatalog(ApiHandler):
         context = self._require_context(context_id)
         skill_entry = self._require_skill_entry(input)
         skills.deactivate_chat_skill(context.get_agent(), skill_entry)
+        skills.unload_agent_skill(context.get_agent(), skill_entry)
         save_tmp_chat(context)
         return self._build_state(context_id=context.id)
 
@@ -198,15 +199,7 @@ class SkillsCatalog(ApiHandler):
         if not agent:
             return []
 
-        loaded = getattr(agent, "data", {}).get("loaded_skills")
-        if not isinstance(loaded, list):
-            return []
-
-        return [
-            {"name": str(skill_name).strip()}
-            for skill_name in loaded
-            if str(skill_name).strip()
-        ]
+        return skills.get_loaded_skill_entries(agent)
 
     def _merge_entries(
         self,

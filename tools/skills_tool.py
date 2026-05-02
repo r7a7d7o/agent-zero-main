@@ -7,7 +7,7 @@ from helpers import skills as skills_helper
 from helpers.print_style import PrintStyle
 
 
-DATA_NAME_LOADED_SKILLS = "loaded_skills"
+DATA_NAME_LOADED_SKILLS = skills_helper.AGENT_DATA_NAME_LOADED_SKILLS
 
 
 class SkillsTool(Tool):

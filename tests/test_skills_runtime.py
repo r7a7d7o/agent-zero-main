@@ -136,6 +136,79 @@ def test_chat_activation_can_override_scope_defaults(monkeypatch):
     assert runtime.get_chat_disabled_skills(agent.context) == []
 
 
+def test_chat_deactivation_hides_name_only_scope_default_by_path(monkeypatch):
+    monkeypatch.setattr(
+        runtime.plugin_helpers,
+        "get_plugin_config",
+        lambda *args, **kwargs: _scope_config([{"name": "Pinned"}]),
+    )
+    agent = DummyAgent()
+
+    runtime.deactivate_chat_skill(
+        agent,
+        {"name": "Pinned", "path": "/a0/usr/skills/custom/pinned"},
+    )
+
+    assert runtime.get_active_skills(agent) == []
+    assert runtime.get_chat_disabled_skills(agent.context) == [
+        {"name": "Pinned", "path": "/a0/usr/skills/custom/pinned"}
+    ]
+
+
+def test_reactivating_name_only_scope_default_by_path_clears_hidden_override(monkeypatch):
+    monkeypatch.setattr(
+        runtime.plugin_helpers,
+        "get_plugin_config",
+        lambda *args, **kwargs: _scope_config([{"name": "Pinned"}]),
+    )
+    agent = DummyAgent()
+
+    runtime.deactivate_chat_skill(
+        agent,
+        {"name": "Pinned", "path": "/a0/usr/skills/custom/pinned"},
+    )
+    runtime.activate_chat_skill(
+        agent,
+        {"name": "Pinned", "path": "/a0/usr/skills/custom/pinned"},
+    )
+
+    assert runtime.get_active_skills(agent) == [{"name": "Pinned"}]
+    assert runtime.get_chat_active_skills(agent.context) == []
+    assert runtime.get_chat_disabled_skills(agent.context) == []
+
+
+def test_loaded_skill_entries_come_from_agent_data():
+    agent = DummyAgent()
+    agent.data[runtime.AGENT_DATA_NAME_LOADED_SKILLS] = [
+        "computer-use-remote",
+        "",
+        "a0-development",
+    ]
+
+    assert runtime.get_loaded_skill_entries(agent) == [
+        {"name": "computer-use-remote"},
+        {"name": "a0-development"},
+    ]
+
+
+def test_unload_agent_skill_removes_loaded_skill_by_name():
+    agent = DummyAgent()
+    agent.data[runtime.AGENT_DATA_NAME_LOADED_SKILLS] = [
+        "computer-use-remote",
+        "a0-development",
+    ]
+
+    removed = runtime.unload_agent_skill(
+        agent,
+        {"name": "computer-use-remote", "path": "/a0/skills/computer-use-remote"},
+    )
+
+    assert removed is True
+    assert agent.data[runtime.AGENT_DATA_NAME_LOADED_SKILLS] == [
+        "a0-development"
+    ]
+
+
 def test_clearing_chat_overrides_restores_scope_defaults(monkeypatch):
     monkeypatch.setattr(
         runtime.plugin_helpers,
