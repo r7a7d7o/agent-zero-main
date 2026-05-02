@@ -1,8 +1,10 @@
 ### browser
-direct Playwright browser control with visible WebUI viewer
+direct Playwright browser control with optional visible WebUI viewer
 use for web browsing, page inspection, forms, downloads, and browser-only tasks
 state stays open per chat context
 refs come from content as typed markers: [link 3], [button 6], [image 1], [input text 8]
+
+Browser tool actions must not open the right canvas automatically. Use the tool headlessly unless the user opens the Browser canvas or explicitly asks for a visible browser view; if the Browser canvas is already open, it may reflect the active page.
 
 actions: open list state navigate back forward reload content detail click type submit type_submit scroll evaluate close close_all
 common args: action browser_id url ref text selector selectors script

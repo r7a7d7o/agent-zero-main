@@ -19,15 +19,17 @@ allowed_tools:
 
 # Linux Desktop Interface
 
-Use the Desktop as a full Linux GUI when the user needs a visual workflow, an installed desktop app, or manual layout polish that is awkward through structured file edits alone. Use structured tools first for deterministic content changes, then use the Desktop for inspection, GUI-only actions, and final visual confirmation.
+Use the Desktop as a full Linux GUI when the user explicitly needs a visual workflow, an installed desktop app, or manual layout polish that is awkward through structured file edits alone. The Desktop is opt-in: do not launch it just because the user asks for a document. Use structured tools first for deterministic content changes, then use the Desktop for inspection, GUI-only actions, and final visual confirmation.
 
 ## Operating Model
 
 1. Prefer `document_artifact` for creating, reading, and editing Markdown, DOCX, XLSX, and PPTX files.
-2. Open the Desktop only when the user asks for the Desktop, a GUI app, or visual confirmation.
-3. Launch common apps from the Desktop icons, the header buttons, or `scripts/desktopctl.sh`.
-4. Use the external Agent Zero Browser for web browsing. Do not launch an operating-system browser in this version.
-5. Verify GUI work by observing the desktop state, checking window titles, and saving the file before reporting success.
+2. Treat Markdown as first-class. For writing, notes, reports, and drafts with no explicit binary Office requirement, create Markdown and use the custom Markdown editor when the user opens the canvas.
+3. Open the Desktop only when the user asks for the Desktop, a GUI app, binary Office visual work, or visual confirmation.
+4. Never open the Desktop/canvas automatically from a tool result if the user has not opened it.
+5. Launch common apps from the Desktop icons, the header buttons, or `scripts/desktopctl.sh`.
+6. Use the external Agent Zero Browser for web browsing. Do not launch an operating-system browser in this version.
+7. Verify GUI work by observing the desktop state, checking window titles, and saving the file before reporting success.
 
 ## Control Flow
 

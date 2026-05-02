@@ -20,7 +20,9 @@ allowed_tools:
 
 # Document Artifacts
 
-Use `document_artifact` for substantial deliverables that should remain editable in the canvas. Markdown is the default document format. Use DOCX only when the user explicitly asks for it or needs a Word-compatible binary file.
+Use `document_artifact` for substantial deliverables that should remain editable in the custom document canvas. Markdown is the first-class document format and the default for writing, notes, reports, briefs, and drafts. Use DOCX, XLSX, or PPTX only when the user explicitly asks for that binary format, provides an existing file in that format, or needs a Word/Excel/PowerPoint-compatible artifact.
+
+The canvas is user-owned UI. Creating, reading, or editing an artifact must save the file and update its state, but it must not open the canvas automatically if the user has not opened it. Provide an explicit document action/button path for the user instead.
 
 ## Workflow
 
@@ -126,6 +128,9 @@ Arguments:
 
 - Prefer `file_id` from canvas context or prior tool output; use `path` when that is all you have.
 - Use `read` before editing unless the current saved content is already known.
+- For document-style requests with no requested binary format, create Markdown and let the custom Markdown editor be the primary interactive surface.
+- Treat Desktop and LibreOffice as opt-in visual tools for explicit GUI requests, binary Office formats, or final layout inspection.
+- Never open the canvas automatically from a tool result. If the user has not opened the canvas, leave the saved artifact available through the normal UI affordance.
 - Do not create ODT, ODS, or ODP in this pass; return a clear unsupported response if asked.
 - Use native `create_chart` for embedded spreadsheet charts. Reach for Python/code execution only when the requested chart behavior is not supported by the tool.
 - Use `edit` for precise saved changes; use the visual document canvas for human/manual layout polish.

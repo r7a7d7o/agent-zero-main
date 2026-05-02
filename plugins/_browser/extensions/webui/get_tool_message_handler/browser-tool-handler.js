@@ -14,7 +14,7 @@ import {
 
 const BROWSER_MODAL = "/plugins/_browser/webui/main.html";
 const AUTO_OPEN_WINDOW_MS = 10 * 60 * 1000;
-const autoOpenedBrowsers = new Set();
+const syncedBrowserCanvases = new Set();
 
 export default async function registerBrowserToolHandler(extData) {
   if (extData?.tool_name === "browser") {
@@ -35,17 +35,6 @@ async function openBrowserCanvas(payload = {}) {
   if (window.openModal) {
     await window.openModal(BROWSER_MODAL);
   }
-}
-
-async function browserAllowsToolAutofocus() {
-  try {
-    if (browserStore.allowsToolAutofocus) {
-      return await browserStore.allowsToolAutofocus();
-    }
-  } catch (error) {
-    console.warn("Browser autofocus setting could not be checked", error);
-  }
-  return true;
 }
 
 function parseBrowserResult(content) {
@@ -86,28 +75,47 @@ function isFreshToolMessage(timestamp) {
   return Math.abs(Date.now() - messageMs) <= AUTO_OPEN_WINDOW_MS;
 }
 
-function shouldAutoOpenBrowser(args, result) {
+async function browserAllowsToolAutofocus() {
+  try {
+    if (browserStore.allowsToolAutofocus) {
+      return await browserStore.allowsToolAutofocus();
+    }
+  } catch (error) {
+    console.warn("Browser autofocus setting could not be checked", error);
+  }
+  return true;
+}
+
+function isBrowserCanvasAlreadyOpen() {
+  return Boolean(
+    rightCanvasStore?.isOpen
+    && rightCanvasStore?.activeSurfaceId === "browser"
+    && !rightCanvasStore?.isMobileMode,
+  );
+}
+
+function shouldSyncOpenBrowserCanvas(args, result) {
+  if (!isBrowserCanvasAlreadyOpen()) return false;
   if (!isFreshToolMessage(args?.timestamp)) return false;
   const action = String(args?.kvps?.action || "").trim().toLowerCase().replace("-", "_");
   if (["list", "content", "detail", "close", "close_all"].includes(action)) return false;
   return Boolean(browserIdFromResult(result, args?.kvps || {}) || action === "open" || action === "navigate");
 }
 
-function autoOpenBrowserCanvas(args, result) {
-  if (!shouldAutoOpenBrowser(args, result)) return;
+function syncOpenBrowserCanvas(args, result) {
+  if (!shouldSyncOpenBrowserCanvas(args, result)) return;
   const kvps = args?.kvps || {};
   const browserId = browserIdFromResult(result, kvps);
   const key = `${args.id || ""}:${kvps.action || ""}:${browserId || ""}:${result.currentUrl || result.state?.currentUrl || kvps.url || ""}`;
-  const persistedKey = `a0.browser.autoOpened.${key}`;
-  if (autoOpenedBrowsers.has(key) || sessionStorage.getItem(persistedKey)) return;
-  autoOpenedBrowsers.add(key);
-  sessionStorage.setItem(persistedKey, "1");
+  if (syncedBrowserCanvases.has(key)) return;
+  syncedBrowserCanvases.add(key);
   requestAnimationFrame(async () => {
+    if (!isBrowserCanvasAlreadyOpen()) return;
     if (!(await browserAllowsToolAutofocus())) return;
-    void openBrowserCanvas({
+    void rightCanvasStore.open("browser", {
       browserId,
       contextId: browserContextIdFromResult(result, kvps),
-      source: "tool",
+      source: "tool-sync",
     });
   });
 }
@@ -167,6 +175,6 @@ function drawBrowserTool({
     actionButtons: actionButtons.filter(Boolean),
     log: args,
   });
-  autoOpenBrowserCanvas(args, browserResult);
+  syncOpenBrowserCanvas(args, browserResult);
   return result;
 }

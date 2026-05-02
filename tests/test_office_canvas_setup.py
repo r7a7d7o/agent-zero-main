@@ -304,3 +304,19 @@ def test_right_canvas_requires_explicit_open_and_is_absent_on_mobile():
     assert "display: none !important" in canvas_css
     assert "autoOpenOfficeCanvas" not in handler
     assert "requestAnimationFrame" not in after_loop
+
+
+def test_office_skills_preserve_markdown_first_and_opt_in_desktop_policy():
+    office_skill = (
+        PROJECT_ROOT / "plugins" / "_office" / "skills" / "office-artifacts" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    desktop_skill = (
+        PROJECT_ROOT / "plugins" / "_office" / "skills" / "linux-desktop" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Markdown is the first-class document format" in office_skill
+    assert "custom document canvas" in office_skill
+    assert "must not open the canvas automatically" in office_skill
+    assert "The Desktop is opt-in" in desktop_skill
+    assert "custom Markdown editor" in desktop_skill
+    assert "Never open the Desktop/canvas automatically" in desktop_skill
