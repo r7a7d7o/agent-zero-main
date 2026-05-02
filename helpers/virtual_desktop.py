@@ -120,6 +120,9 @@ def session_url(token: str, *, title: str = "Desktop") -> str:
         {
             "path": base_path,
             "title": title,
+            "encoding": "jpeg",
+            "quality": "85",
+            "speed": "80",
             "sharing": "true",
             "clipboard": "true",
             "clipboard_direction": "both",
@@ -127,7 +130,7 @@ def session_url(token: str, *, title: str = "Desktop") -> str:
             "clipboard_preferred_format": "text/plain",
             "printing": "true",
             "file_transfer": "true",
-            "sound": "true",
+            "sound": "false",
             "offscreen": "false",
             "floating_menu": "false",
             "xpramenu": "false",

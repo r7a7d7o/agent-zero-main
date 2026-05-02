@@ -374,8 +374,6 @@ def test_official_libreoffice_desktop_status_and_url_contract(tmp_path, monkeypa
             "xfce4-terminal",
             "xfce4-settings-manager",
             "gio",
-            "pulseaudio",
-            "pactl",
         }
         else "",
     )
@@ -392,7 +390,10 @@ def test_official_libreoffice_desktop_status_and_url_contract(tmp_path, monkeypa
     assert "xpramenu=false" in url
     assert "floating_menu=false" in url
     assert "file_transfer=true" in url
-    assert "sound=true" in url
+    assert "sound=false" in url
+    assert "encoding=jpeg" in url
+    assert "quality=85" in url
+    assert "speed=80" in url
     assert "printing=true" in url
 
 
@@ -742,6 +743,48 @@ def test_cleanup_hook_reruns_when_stale_packages_exist_after_old_marker(tmp_path
     assert result["removed"] == ["coolwsd"]
 
 
+def test_cleanup_hook_removes_retired_supervisor_program_after_marker(tmp_path, monkeypatch):
+    marker = tmp_path / "state" / "cleanup.done"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(hooks, "APT_SOURCE_FILE", tmp_path / "missing.sources")
+    monkeypatch.setattr(hooks, "APT_KEYRING_FILE", tmp_path / "missing.gpg")
+    monkeypatch.setattr(hooks, "SUPERVISOR_FILE", tmp_path / "missing.conf")
+    monkeypatch.setattr(hooks, "RUNTIME_DIRS", [])
+    monkeypatch.setattr(hooks, "CLEANUP_MARKER", marker)
+    monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
+    monkeypatch.setattr(hooks, "_ensure_runtime_dependencies", lambda installed, errors: None)
+    monkeypatch.setattr(hooks, "_cleanup_desktop_sessions", lambda errors: None)
+    monkeypatch.setattr(hooks.shutil, "which", lambda name: "/usr/bin/supervisorctl" if name == "supervisorctl" else "")
+
+    def fake_supervisorctl(*args):
+        calls.append(args)
+        if args == ("status", hooks.SUPERVISOR_PROGRAM):
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout="a0_office_collabora BACKOFF can't find command\n",
+                stderr="",
+            )
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hooks, "_supervisorctl", fake_supervisorctl)
+
+    result = hooks.cleanup_stale_runtime_state()
+
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert result["errors"] == []
+    assert calls == [
+        ("status", hooks.SUPERVISOR_PROGRAM),
+        ("stop", hooks.SUPERVISOR_PROGRAM),
+        ("remove", hooks.SUPERVISOR_PROGRAM),
+        ("reread",),
+        ("update",),
+    ]
+
+
 def test_cleanup_hook_installs_missing_libreoffice_desktop_dependencies(monkeypatch):
     calls = []
     installed_state = {"xpra": False}
@@ -792,7 +835,7 @@ def test_cleanup_hook_enables_official_xpra_repo_when_kali_lacks_candidate(tmp_p
     def fake_run(command, **kwargs):
         calls.append(command)
         if command[:2] == ["apt-cache", "policy"]:
-            return types.SimpleNamespace(returncode=0, stdout="Candidate: (none)\n", stderr="")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
         if command[:2] == ["apt-get", "install"]:
             installed_state["xpra"] = True
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -810,6 +853,50 @@ def test_cleanup_hook_enables_official_xpra_repo_when_kali_lacks_candidate(tmp_p
     assert "Suites: sid" in source.read_text(encoding="utf-8")
     assert calls.count(["apt-get", "update"]) == 2
     assert calls[-1][:4] == ["apt-get", "install", "-y", "--no-install-recommends"]
+
+
+def test_cleanup_hook_uses_trixie_xpra_components_for_kali_arm64(tmp_path, monkeypatch):
+    calls = []
+    installed_state = {"xpra-server": False, "xpra-x11": False, "xpra-html5": False, "ca-certificates": True}
+    keyring = tmp_path / "keyrings" / "xpra.asc"
+    source = tmp_path / "sources.list.d" / "xpra.sources"
+
+    monkeypatch.setattr(hooks.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        hooks.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in {"apt-get", "dpkg-query", "apt-cache"} else "",
+    )
+    monkeypatch.setattr(hooks, "RUNTIME_PACKAGES", ("xpra-server", "xpra-x11", "xpra-html5"))
+    monkeypatch.setattr(hooks, "XPRA_KEYRING_FILE", keyring)
+    monkeypatch.setattr(hooks, "XPRA_SOURCE_FILE", source)
+    monkeypatch.setattr(hooks, "_download", lambda url: b"xpra-key")
+    monkeypatch.setattr(hooks, "_read_os_release", lambda: {"ID": "kali", "VERSION_CODENAME": "kali-rolling"})
+    monkeypatch.setattr(hooks, "_dpkg_architecture", lambda: "arm64")
+    monkeypatch.setattr(hooks, "_package_installed", lambda package: installed_state.get(package, False))
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:2] == ["apt-cache", "policy"]:
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        if command[:2] == ["apt-get", "install"]:
+            for package in command[4:]:
+                installed_state[package] = True
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    installed = []
+    errors = []
+
+    hooks._ensure_runtime_dependencies(installed, errors)
+
+    assert errors == []
+    assert installed == ["xpra-server", "xpra-x11", "xpra-html5"]
+    source_text = source.read_text(encoding="utf-8")
+    assert "URIs: https://xpra.org\n" in source_text
+    assert "Suites: trixie" in source_text
+    assert "xpra" not in calls[-1]
+    assert calls[-1][-3:] == ["xpra-server", "xpra-x11", "xpra-html5"]
 
 
 def test_self_update_launch_invokes_office_cleanup(monkeypatch, tmp_path):

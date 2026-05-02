@@ -228,7 +228,10 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert "xpramenu" in primitive
     assert "floating_menu" in primitive
     assert '"file_transfer": "true"' in primitive
-    assert '"sound": "true"' in primitive
+    assert '"sound": "false"' in primitive
+    assert '"encoding": "jpeg"' in primitive
+    assert '"quality": "85"' in primitive
+    assert '"speed": "80"' in primitive
     assert '"printing": "true"' in primitive
     assert "offscreen" in primitive
     assert "xpra" in desktop
@@ -245,9 +248,12 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert "--open-url=no" in desktop
     assert "--printing=yes" in desktop
     assert "--cursors=no" not in desktop
-    assert "--audio=yes" in desktop
-    assert "--speaker=on" in desktop
+    assert "--audio=no" in desktop
+    assert "--speaker=off" in desktop
     assert "--microphone=off" in desktop
+    assert "--encoding=jpeg" in desktop
+    assert "--quality=85" in desktop
+    assert "--speed=80" in desktop
     assert "_restart_xpra_shadow(session)" not in desktop
     assert 'result["reload"] = True' not in desktop
     assert "MAX_SCREEN_WIDTH}x{MAX_SCREEN_HEIGHT}x24" in desktop
@@ -287,7 +293,7 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert "libglib2.0-bin" in install
     assert "xfce4-terminal" in install
     assert "firefox-esr" not in install
-    assert "pulseaudio" in install
+    assert "pulseaudio" not in install
     assert "x11-xserver-utils" in install
     assert "xauth" in install
     assert "Linux Desktop Interface" in linux_desktop_skill

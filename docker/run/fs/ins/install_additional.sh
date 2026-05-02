@@ -101,8 +101,6 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   gvfs \
   libglib2.0-bin \
   xfce4-terminal \
-  pulseaudio \
-  pulseaudio-utils \
   x11-xserver-utils \
   xdotool \
   xauth \

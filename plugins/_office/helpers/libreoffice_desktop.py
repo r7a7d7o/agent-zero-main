@@ -1035,8 +1035,6 @@ def collect_desktop_status() -> dict[str, Any]:
         "xfce4-terminal": shutil.which("xfce4-terminal") or "",
         "xfce4-settings-manager": shutil.which("xfce4-settings-manager") or "",
         "gio": shutil.which("gio") or "",
-        "pulseaudio": shutil.which("pulseaudio") or "",
-        "pactl": shutil.which("pactl") or "",
     }
     missing = [
         name
@@ -1046,8 +1044,6 @@ def collect_desktop_status() -> dict[str, Any]:
             "xfce4-terminal",
             "xfce4-settings-manager",
             "gio",
-            "pulseaudio",
-            "pactl",
         )
         if not binaries[name]
     ]
@@ -1152,10 +1148,12 @@ def _xpra_shadow_command(xpra: str, session: DesktopSession) -> list[str]:
         "--open-files=no",
         "--open-url=no",
         "--printing=yes",
-        "--audio=yes",
-        "--pulseaudio=auto",
-        "--speaker=on",
+        "--audio=no",
+        "--speaker=off",
         "--microphone=off",
+        "--encoding=jpeg",
+        "--quality=85",
+        "--speed=80",
         f"--bind-tcp=127.0.0.1:{session.xpra_port}",
         "--resize-display=yes",
         f"--log-dir={session.profile_dir}",

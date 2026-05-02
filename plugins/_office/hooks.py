@@ -15,6 +15,7 @@ XPRA_SOURCE_FILE = Path("/etc/apt/sources.list.d/xpra.sources")
 XPRA_KEYRING_FILE = Path("/usr/share/keyrings/xpra.asc")
 XPRA_KEY_URL = "https://xpra.org/xpra.asc"
 SUPERVISOR_FILE = Path("/etc/supervisor/conf.d/a0_office_collabora.conf")
+SUPERVISOR_PROGRAM = "a0_office_collabora"
 RUNTIME_DIRS = [
     Path("/a0/tmp/_office/collabora"),
     Path("/a0/usr/plugins/_office/collabora"),
@@ -44,7 +45,9 @@ RUNTIME_PACKAGES = (
     "libreoffice-impress",
     "libreoffice-gtk3",
     "python3-uno",
-    "xpra",
+    "xpra-server",
+    "xpra-client",
+    "xpra-client-gtk3",
     "xpra-x11",
     "xpra-html5",
     "xfce4-session",
@@ -56,8 +59,6 @@ RUNTIME_PACKAGES = (
     "gvfs",
     "libglib2.0-bin",
     "xfce4-terminal",
-    "pulseaudio",
-    "pulseaudio-utils",
     "x11-xserver-utils",
     "xdotool",
     "xauth",
@@ -106,6 +107,7 @@ def cleanup_stale_runtime_state(force: bool = False) -> dict[str, Any]:
             except Exception as exc:
                 errors.append(f"{path}: {exc}")
 
+        _retire_supervisor_program(errors)
         _purge_packages(removed, errors, installed_packages=stale_packages)
 
         try:
@@ -122,6 +124,7 @@ def cleanup_stale_runtime_state(force: bool = False) -> dict[str, Any]:
     if retired_packages:
         _purge_packages(removed, errors, installed_packages=retired_packages)
 
+    _retire_supervisor_program(errors)
     _ensure_runtime_dependencies(installed, errors)
     _cleanup_desktop_sessions(errors)
 
@@ -156,6 +159,62 @@ def _kill_old_processes(errors: list[str]) -> None:
     )
     if result.returncode not in {0, 1}:
         errors.append((result.stderr or result.stdout or "pkill coolwsd failed").strip())
+
+
+def _retire_supervisor_program(errors: list[str]) -> None:
+    if not shutil.which("supervisorctl"):
+        return
+    status = _supervisorctl("status", SUPERVISOR_PROGRAM)
+    status_output = _supervisor_output(status)
+    if status.returncode != 0:
+        if _supervisor_absent(status_output):
+            return
+        errors.append(status_output or f"supervisorctl status {SUPERVISOR_PROGRAM} failed")
+        return
+
+    stopped = _supervisorctl("stop", SUPERVISOR_PROGRAM)
+    stopped_output = _supervisor_output(stopped)
+    if stopped.returncode != 0 and not _supervisor_absent(stopped_output):
+        errors.append(stopped_output or f"supervisorctl stop {SUPERVISOR_PROGRAM} failed")
+        return
+
+    removed = _supervisorctl("remove", SUPERVISOR_PROGRAM)
+    removed_output = _supervisor_output(removed)
+    if removed.returncode != 0 and not _supervisor_absent(removed_output):
+        errors.append(removed_output or f"supervisorctl remove {SUPERVISOR_PROGRAM} failed")
+        return
+
+    for command in (("reread",), ("update",)):
+        result = _supervisorctl(*command)
+        output = _supervisor_output(result)
+        if result.returncode != 0 and not _supervisor_absent(output):
+            errors.append(output or f"supervisorctl {' '.join(command)} failed")
+
+
+def _supervisorctl(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["supervisorctl", *args],
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+
+
+def _supervisor_output(result: subprocess.CompletedProcess[str]) -> str:
+    return (result.stderr or result.stdout or "").strip()
+
+
+def _supervisor_absent(output: str) -> bool:
+    normalized = output.lower()
+    return (
+        "no such process" in normalized
+        or "no such group" in normalized
+        or "not running" in normalized
+        or "unix:///var/run/supervisor.sock" in normalized
+        or "connection refused" in normalized
+        or "no such file" in normalized
+    )
 
 
 def _installed_packages(packages: tuple[str, ...]) -> list[str]:
@@ -210,7 +269,8 @@ def _ensure_runtime_dependencies(installed: list[str], errors: list[str]) -> Non
     if not _apt_update(errors):
         return
 
-    if "xpra" in missing and not _package_candidate_available("xpra"):
+    xpra_missing = [package for package in missing if package.startswith("xpra")]
+    if xpra_missing and not _package_candidates_available(xpra_missing):
         previous_error_count = len(errors)
         _ensure_xpra_repository(installed, errors)
         if len(errors) > previous_error_count or not _apt_update(errors):
@@ -260,7 +320,13 @@ def _package_candidate_available(package: str) -> bool:
     )
     if result.returncode != 0:
         return True
+    if not result.stdout.strip():
+        return False
     return "Candidate: (none)" not in result.stdout
+
+
+def _package_candidates_available(packages: list[str]) -> bool:
+    return all(_package_candidate_available(package) for package in packages)
 
 
 def _ensure_xpra_repository(installed: list[str], errors: list[str]) -> None:
@@ -303,12 +369,18 @@ def _xpra_repository_source() -> str:
     codename = os_release.get("VERSION_CODENAME", "")
     arch = _dpkg_architecture()
 
-    if os_id == "kali":
+    if os_id == "kali" and arch == "amd64":
         uri = "https://xpra.org/beta"
         suite = "sid"
-    elif codename in {"sid", "forky"}:
+    elif os_id == "kali":
+        uri = "https://xpra.org"
+        suite = "trixie"
+    elif codename in {"sid", "forky"} and arch == "amd64":
         uri = "https://xpra.org/beta"
         suite = codename
+    elif codename in {"sid", "forky"}:
+        uri = "https://xpra.org"
+        suite = "trixie"
     else:
         uri = "https://xpra.org"
         suite = codename or "trixie"
