@@ -110,9 +110,9 @@ def edit_artifact(
 
 def _refresh_open_editor_sessions(file_id: str) -> None:
     try:
-        from plugins._office.helpers import libreofficekit_sessions
+        from plugins._office.helpers import markdown_sessions
 
-        libreofficekit_sessions.get_manager().refresh_document(file_id)
+        markdown_sessions.get_manager().refresh_document(file_id)
     except Exception:
         # Direct artifact edits should never fail just because no canvas is open.
         return

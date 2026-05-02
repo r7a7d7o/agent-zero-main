@@ -1,6 +1,7 @@
 import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
 import { getNamespacedClient } from "/js/websocket.js";
+import { store as fileBrowserStore } from "/components/modals/file-browser/file-browser-store.js";
 
 const officeSocket = getNamespacedClient("/ws");
 officeSocket.addHandlers(["ws_webui"]);
@@ -22,20 +23,6 @@ function currentContextId() {
   }
 }
 
-function formatBytes(value) {
-  const size = Number(value || 0);
-  if (!Number.isFinite(size) || size <= 0) return "";
-  const units = ["B", "KB", "MB", "GB"];
-  let amount = size;
-  let index = 0;
-  while (amount >= 1024 && index < units.length - 1) {
-    amount /= 1024;
-    index += 1;
-  }
-  const digits = amount >= 10 || index === 0 ? 0 : 1;
-  return `${amount.toFixed(digits)} ${units[index]}`;
-}
-
 function basename(path = "") {
   const value = String(path || "").split("?")[0].split("#")[0];
   return value.split("/").filter(Boolean).pop() || "Untitled";
@@ -49,163 +36,6 @@ function extensionOf(path = "") {
 
 function uniqueTabId(session = {}) {
   return String(session.file_id || session.session_id || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
-}
-
-function escapeHtml(value = "") {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function inlineMarkdown(value = "") {
-  return escapeHtml(value)
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-}
-
-function markdownToHtml(markdown = "") {
-  const normalized = String(markdown || "").replace(/\r\n?/g, "\n");
-  const lines = normalized.split("\n");
-  const html = [];
-  let paragraph = [];
-  let list = [];
-
-  const flushParagraph = () => {
-    if (!paragraph.length) return;
-    html.push(`<p>${inlineMarkdown(paragraph.join(" "))}</p>`);
-    paragraph = [];
-  };
-  const flushList = () => {
-    if (!list.length) return;
-    html.push(`<ul>${list.map((line) => `<li>${inlineMarkdown(line)}</li>`).join("")}</ul>`);
-    list = [];
-  };
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const raw = lines[index];
-    const line = raw.trimEnd();
-    if (!line.trim()) {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-    const heading = /^(#{1,4})\s+(.+)$/.exec(line);
-    if (heading) {
-      flushParagraph();
-      flushList();
-      const level = Math.min(4, heading[1].length);
-      html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
-      continue;
-    }
-    const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
-    if (bullet) {
-      flushParagraph();
-      list.push(bullet[1]);
-      continue;
-    }
-    flushList();
-    paragraph.push(line.trim());
-  }
-
-  flushParagraph();
-  flushList();
-  if (!html.length || /\n\s*$/.test(normalized)) {
-    html.push("<p><br></p>");
-  }
-  return html.join("") || "<p></p>";
-}
-
-function htmlToMarkdown(root) {
-  if (!root) return "";
-
-  const walk = (node) => {
-    if (node.nodeType === Node.TEXT_NODE) return node.textContent || "";
-    if (node.nodeType !== Node.ELEMENT_NODE) return "";
-    const tag = node.tagName.toLowerCase();
-    const childText = () => Array.from(node.childNodes).map(walk).join("");
-
-    if (tag === "br") return "\n";
-    if (tag === "strong" || tag === "b") return `**${childText().trim()}**`;
-    if (tag === "em" || tag === "i") return `*${childText().trim()}*`;
-    if (tag === "code") return `\`${childText().trim()}\``;
-    if (tag === "a") {
-      const href = node.getAttribute("href") || "";
-      const label = childText().trim() || href;
-      return href ? `[${label}](${href})` : label;
-    }
-    if (/^h[1-6]$/.test(tag)) return `\n${"#".repeat(Number(tag[1]))} ${childText().trim()}\n\n`;
-    if (tag === "li") return `- ${childText().trim()}\n`;
-    if (tag === "ul" || tag === "ol") return `\n${childText()}\n`;
-    if (tag === "tr") {
-      const cells = Array.from(node.children).map((cell) => cell.textContent?.trim() || "");
-      return `| ${cells.join(" | ")} |\n`;
-    }
-    if (tag === "table") return `\n${Array.from(node.querySelectorAll("tr")).map(walk).join("")}\n`;
-    if (tag === "p" || tag === "div" || tag === "section" || tag === "article") {
-      const text = childText().trim();
-      return text ? `${text}\n\n` : "";
-    }
-    return childText();
-  };
-
-  return Array.from(root.childNodes)
-    .map(walk)
-    .join("")
-    .replace(/\n{3,}/g, "\n\n")
-    .trimEnd();
-}
-
-function textToPageHtml(text = "") {
-  const paragraphs = String(text || "")
-    .replace(/\r\n?/g, "\n")
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const lines = paragraphs.length ? paragraphs : [""];
-  const pages = [];
-  for (let index = 0; index < lines.length; index += 18) {
-    pages.push(lines.slice(index, index + 18));
-  }
-  return pages
-    .map((page, index) => (
-      `<section class="office-docx-page" data-page="${index + 1}">`
-      + page.map((line) => `<p>${escapeHtml(line)}</p>`).join("")
-      + "</section>"
-    ))
-    .join("");
-}
-
-function nativeTilesToHtml(tiles = []) {
-  return tiles
-    .filter((tile) => tile?.image)
-    .map((tile) => {
-      const twips = encodeURIComponent(JSON.stringify(tile.twips || {}));
-      const width = Number(tile.width || 1);
-      const height = Number(tile.height || 1);
-      return (
-        `<section class="office-docx-page is-native-tile" data-tile-index="${Number(tile.index || 0)}" data-twips="${twips}">`
-        + `<img src="${escapeHtml(tile.image)}" width="${width}" height="${height}" alt="" draggable="false">`
-        + "</section>"
-      );
-    })
-    .join("");
-}
-
-function docxEditorText(element) {
-  if (!element) return "";
-  const pages = Array.from(element.querySelectorAll(".office-docx-page"));
-  if (!pages.length) return element.innerText || "";
-  return pages
-    .map((page) => Array.from(page.querySelectorAll("p"))
-      .map((p) => p.innerText.trim())
-      .filter(Boolean)
-      .join("\n"))
-    .filter(Boolean)
-    .join("\n\n");
 }
 
 function editorContainsFocus(element) {
@@ -263,9 +93,6 @@ function normalizeSession(payload = {}) {
     title: payload.title || document.title || document.basename || basename(document.path),
     tab_id: uniqueTabId(payload),
     text: String(payload.text || ""),
-    tiles: Array.isArray(payload.tiles) ? payload.tiles : [],
-    preview: payload.preview || document.preview || {},
-    native: payload.native || {},
     desktop: payload.desktop || null,
     desktop_session_id: payload.desktop_session_id || payload.desktop?.session_id || "",
     dirty: false,
@@ -306,8 +133,6 @@ function isOfficeSocketData(data) {
     || Object.prototype.hasOwnProperty.call(data, "ok")
     || Object.prototype.hasOwnProperty.call(data, "session_id")
     || Object.prototype.hasOwnProperty.call(data, "document")
-    || Object.prototype.hasOwnProperty.call(data, "tiles")
-    || Object.prototype.hasOwnProperty.call(data, "native")
     || Object.prototype.hasOwnProperty.call(data, "desktop")
     || Object.prototype.hasOwnProperty.call(data, "closed")
   );
@@ -315,8 +140,6 @@ function isOfficeSocketData(data) {
 
 const model = {
   status: null,
-  recent: [],
-  openDocuments: [],
   tabs: [],
   activeTabId: "",
   session: null,
@@ -325,22 +148,16 @@ const model = {
   dirty: false,
   error: "",
   message: "",
-  sourceMode: false,
   editorText: "",
-  zoom: 1,
   _root: null,
   _mode: "canvas",
   _saveMessageTimer: null,
   _inputTimer: null,
   _history: [],
   _historyIndex: -1,
-  _rendering: false,
   _pendingFocus: false,
   _pendingFocusEnd: true,
   _focusAttempts: 0,
-  _richEditor: null,
-  _docxEditor: null,
-  _nativeEventQueue: Promise.resolve(),
   _floatingCleanup: null,
   _desktopHeartbeatTimer: null,
   _desktopHeartbeatSessionId: "",
@@ -404,22 +221,10 @@ const model = {
     if (this._mode === "modal") this._root = null;
   },
 
-  bindEditorElement(element, type) {
-    if (type === "markdown") this._richEditor = element;
-    if (type === "docx") this._docxEditor = element;
-    this.queueRender();
-  },
-
   async refresh() {
     try {
-      const [status, recent, openDocuments] = await Promise.all([
-        callOffice("status"),
-        callOffice("recent"),
-        callOffice("open_documents"),
-      ]);
+      const status = await callOffice("status");
       this.status = status || {};
-      this.recent = (recent?.documents || []).map(normalizeDocument);
-      this.openDocuments = (openDocuments?.documents || []).map(normalizeDocument);
       this.error = "";
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
@@ -485,17 +290,20 @@ const model = {
     });
   },
 
-  async openPrompt() {
-    let defaultPath = "/a0/usr/workdir/";
+  async openFileBrowser() {
+    let workdirPath = "/a0/usr/workdir";
     try {
-      const home = await callOffice("home");
-      defaultPath = home?.path || defaultPath;
+      const response = await callJsonApi("settings_get", null);
+      workdirPath = response?.settings?.workdir_path || workdirPath;
     } catch {
-      // The prompt still works with the static fallback.
+      try {
+        const home = await callOffice("home");
+        workdirPath = home?.path || workdirPath;
+      } catch {
+        // The file browser can still open with the static fallback.
+      }
     }
-    const path = globalThis.prompt?.("Path", defaultPath);
-    if (!path) return;
-    await this.openPath(path);
+    await fileBrowserStore.open(workdirPath);
   },
 
   async openPath(path) {
@@ -560,7 +368,6 @@ const model = {
           basename: "Desktop",
           title: "Desktop",
           extension: "desktop",
-          preview: {},
         },
         dirty: false,
       };
@@ -569,7 +376,6 @@ const model = {
     const desktopTabId = desktopTab.tab_id;
     this.session = { ...session, tab_id: session.tab_id || uniqueTabId(session) };
     this.activeTabId = desktopTabId;
-    this.sourceMode = false;
     this.editorText = "";
     this.dirty = false;
     this.resetHistory("");
@@ -581,7 +387,6 @@ const model = {
     const tab = this.tabs.find((item) => item.tab_id === tabId) || this.tabs[0] || null;
     this.session = tab;
     this.activeTabId = tab?.tab_id || "";
-    this.sourceMode = false;
     this.editorText = String(tab?.text || "");
     this.dirty = Boolean(tab?.dirty);
     this.resetHistory(this.editorText);
@@ -596,41 +401,6 @@ const model = {
 
   isActiveTab(tab) {
     return Boolean(tab && tab.tab_id === this.activeTabId);
-  },
-
-  async closeFile() {
-    if (!this.session) return;
-    if (this.isDesktopOfficeDocument(this.session) && !this.tabs.some((tab) => tab.tab_id === this.session.tab_id)) {
-      await this.closeDesktopDocumentSession(this.session);
-      return;
-    }
-    await this.closeTab(this.session.tab_id);
-  },
-
-  async closeDesktopDocumentSession(session) {
-    try {
-      await callOffice("desktop_save", {
-        desktop_session_id: session.desktop_session_id || session.session_id,
-        file_id: session.file_id || "",
-      }).catch(() => null);
-      await callOffice("close", {
-        session_id: session.store_session_id || "",
-        file_id: session.file_id || "",
-      });
-    } catch (error) {
-      console.warn("Desktop document close skipped", error);
-    }
-    this.session = null;
-    this.activeTabId = "";
-    this.editorText = "";
-    this.dirty = false;
-    const desktopTab = this.tabs.find((tab) => this.isDesktopSession(tab));
-    if (desktopTab) {
-      this.selectTab(desktopTab.tab_id, { focus: false });
-    } else {
-      await this.ensureDesktopSession({ select: true });
-    }
-    await this.refresh();
   },
 
   async closeTab(tabId) {
@@ -705,14 +475,12 @@ const model = {
       }
       return;
     }
-    if (this.hasNativeDocxTiles()) await this.awaitNativeEvents();
-    if (!this.hasNativeDocxTiles()) this.syncEditorText();
+    this.syncEditorText();
     this.saving = true;
     this.error = "";
     try {
       let response;
-      const payload = { session_id: this.session.session_id };
-      if (!this.hasNativeDocxTiles()) payload.text = this.editorText;
+      const payload = { session_id: this.session.session_id, text: this.editorText };
       try {
         response = await requestOffice("office_save", payload, 10000);
       } catch (_socketError) {
@@ -727,8 +495,6 @@ const model = {
         document,
         path: document.path || this.session.path,
         file_id: document.file_id || this.session.file_id,
-        tiles: Array.isArray(response.tiles) ? response.tiles : this.session.tiles,
-        native: response.native || this.session.native || {},
         version: document.version || response.version || this.session.version,
       };
       this.replaceActiveSession(updated);
@@ -739,26 +505,6 @@ const model = {
       this.error = error instanceof Error ? error.message : String(error);
     } finally {
       this.saving = false;
-    }
-  },
-
-  async exportPdf() {
-    if (!this.session) return;
-    if (this.isDesktopSession()) return;
-    this.loading = true;
-    this.error = "";
-    try {
-      const response = await callOffice("export", {
-        file_id: this.session.file_id,
-        path: this.session.path,
-        target_format: "pdf",
-      });
-      if (response?.ok === false) throw new Error(response.error || "Export failed.");
-      this.setMessage(response.path ? `Exported ${response.path}` : "Exported");
-    } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error);
-    } finally {
-      this.loading = false;
     }
   },
 
@@ -835,32 +581,9 @@ const model = {
     this.scheduleInputPush();
   },
 
-  onRichInput(element) {
-    if (this._rendering) return;
-    this.editorText = htmlToMarkdown(element);
-    this.markDirty();
-    this.pushHistory(this.editorText);
-    this.scheduleInputPush();
-  },
-
-  onDocxInput(element) {
-    if (this.hasNativeDocxTiles()) return;
-    if (this._rendering) return;
-    this.editorText = docxEditorText(element);
-    this.markDirty();
-    this.pushHistory(this.editorText);
-    this.scheduleInputPush();
-  },
-
   syncEditorText() {
     if (!this.session) return;
     if (this.hasOfficialOffice()) return;
-    if (this.hasNativeDocxTiles()) return;
-    if (this.isMarkdown() && !this.sourceMode && this._richEditor) {
-      this.editorText = htmlToMarkdown(this._richEditor);
-    } else if (this.isDocx() && this._docxEditor) {
-      this.editorText = docxEditorText(this._docxEditor);
-    }
     this.session.text = this.editorText;
   },
 
@@ -883,98 +606,10 @@ const model = {
     }, 3000).catch(() => {});
   },
 
-  toggleSource() {
-    if (!this.isMarkdown()) return;
-    if (!this.sourceMode) this.syncEditorText();
-    this.sourceMode = !this.sourceMode;
-    this.queueRender({ force: true, focus: true });
-  },
-
   format(command) {
     if (!this.session) return;
-    if (this.sourceMode) {
-      this.applySourceFormat(command);
-      return;
-    }
-    const editor = this.isDocx() ? this._docxEditor : this._richEditor;
-    editor?.focus?.();
-    const uno = this.unoCommand(command);
-    if (this.isDocx() && uno) {
-      void this.dispatchUnoCommand(uno.command, uno.arguments);
-      if (this.hasNativeDocxTiles()) {
-        this.markDirty();
-        return;
-      }
-    }
-    if (command === "bold") document.execCommand?.("bold");
-    if (command === "italic") document.execCommand?.("italic");
-    if (command === "underline") document.execCommand?.("underline");
-    if (command === "list") document.execCommand?.("insertUnorderedList");
-    if (command === "numbered") document.execCommand?.("insertOrderedList");
-    if (command === "alignLeft") document.execCommand?.("justifyLeft");
-    if (command === "alignCenter") document.execCommand?.("justifyCenter");
-    if (command === "alignRight") document.execCommand?.("justifyRight");
-    if (command === "table") {
-      document.execCommand?.(
-        "insertHTML",
-        false,
-        '<table><tbody><tr><th>Column</th><th>Value</th></tr><tr><td></td><td></td></tr></tbody></table>',
-      );
-    }
-    this.syncEditorText();
-    this.markDirty();
-    this.pushHistory(this.editorText);
-    this.scheduleInputPush();
-  },
-
-  unoCommand(command) {
-    const commands = {
-      bold: { command: ".uno:Bold" },
-      italic: { command: ".uno:Italic" },
-      underline: { command: ".uno:Underline" },
-      list: { command: ".uno:DefaultBullet" },
-      numbered: { command: ".uno:DefaultNumbering" },
-      alignLeft: { command: ".uno:LeftPara" },
-      alignCenter: { command: ".uno:CenterPara" },
-      alignRight: { command: ".uno:RightPara" },
-    };
-    return commands[command] || null;
-  },
-
-  async dispatchUnoCommand(command, argumentsPayload = null) {
-    if (!this.session?.session_id || !command) return null;
-    return await this.queueNativeEvent(async () => {
-      try {
-        let response;
-        try {
-          response = await requestOffice("office_command", {
-            session_id: this.session.session_id,
-            command,
-            arguments: argumentsPayload,
-            notify: true,
-          }, 5000);
-        } catch (_socketError) {
-          response = await callOffice("command", {
-            session_id: this.session.session_id,
-            command,
-            arguments: argumentsPayload,
-            notify: true,
-          });
-        }
-        if (response?.ok === false) throw new Error(response.error || `${command} failed.`);
-        if (response?.metadata && this.session) {
-          this.session.native = { ...(this.session.native || {}), ...response.metadata, available: true };
-        }
-        if (Array.isArray(response?.tiles) && this.session) {
-          this.session.tiles = response.tiles;
-          this.queueRender({ force: true, focus: true });
-        }
-        return response;
-      } catch (error) {
-        console.warn("LibreOffice command skipped", command, error);
-        return null;
-      }
-    });
+    if (!this.isMarkdown()) return;
+    this.applySourceFormat(command);
   },
 
   applySourceFormat(command) {
@@ -999,18 +634,6 @@ const model = {
     });
   },
 
-  zoomIn() {
-    this.zoom = Math.min(1.6, Math.round((this.zoom + 0.1) * 10) / 10);
-  },
-
-  zoomOut() {
-    this.zoom = Math.max(0.7, Math.round((this.zoom - 0.1) * 10) / 10);
-  },
-
-  zoomLabel() {
-    return `${Math.round(this.zoom * 100)}%`;
-  },
-
   queueRender(options = {}) {
     const force = Boolean(options.force);
     if (options.focus) {
@@ -1019,7 +642,6 @@ const model = {
       this._focusAttempts = 0;
     }
     const render = () => {
-      this.renderEditors(force);
       if (this._pendingFocus && this.focusEditor({ end: this._pendingFocusEnd })) {
         this._pendingFocus = false;
         this._focusAttempts = 0;
@@ -1035,46 +657,22 @@ const model = {
     }
   },
 
-  renderEditors(force = false) {
-    if (!this.session) return;
-    if (this.hasOfficialOffice()) return;
-    this._rendering = true;
-    try {
-      if (this._richEditor && this.isMarkdown() && (!editorContainsFocus(this._richEditor) || force)) {
-        this._richEditor.innerHTML = markdownToHtml(this.editorText);
-      }
-      if (this._docxEditor && this.isDocx() && this.hasNativeDocxTiles() && (!editorContainsFocus(this._docxEditor) || force)) {
-        this._docxEditor.innerHTML = nativeTilesToHtml(this.session.tiles || []);
-      } else if (this._docxEditor && this.isDocx() && (!editorContainsFocus(this._docxEditor) || force)) {
-        this._docxEditor.innerHTML = textToPageHtml(this.editorText);
-      }
-    } finally {
-      this._rendering = false;
-    }
-  },
-
   focusEditor(options = {}) {
-    if (!this.session || this.isPreviewOnly()) return false;
+    if (!this.session) return false;
     if (this.hasOfficialOffice()) {
       return this.focusDesktopFrame(this.desktopFrame(), { arm: true });
     }
     const source = this._root?.querySelector?.("[data-office-source]");
-    const editor = this.sourceMode ? source : (this.isDocx() ? this._docxEditor : this._richEditor);
-    if (!editor) return false;
-    editor.focus?.({ preventScroll: true });
-    if (!editorContainsFocus(editor)) return false;
-    if (options.end !== false) placeCaretAtEnd(editor);
+    if (!this.isMarkdown() || !source) return false;
+    source.focus?.({ preventScroll: true });
+    if (!editorContainsFocus(source)) return false;
+    if (options.end !== false) placeCaretAtEnd(source);
     return true;
   },
 
   isMarkdown(tab = this.session) {
     const ext = String(tab?.extension || tab?.document?.extension || "").toLowerCase();
     return ext === "md";
-  },
-
-  isDocx(tab = this.session) {
-    const ext = String(tab?.extension || tab?.document?.extension || "").toLowerCase();
-    return ext === "docx";
   },
 
   isBinaryOffice(tab = this.session) {
@@ -1964,123 +1562,6 @@ const model = {
     await this.refresh();
   },
 
-  hasNativeDocxTiles() {
-    return Boolean(
-      this.isDocx()
-      && this.session?.native?.available
-      && Array.isArray(this.session?.tiles)
-      && this.session.tiles.some((tile) => tile?.image),
-    );
-  },
-
-  async onNativeDocxClick(event) {
-    if (!this.hasNativeDocxTiles()) return;
-    const page = event.target?.closest?.(".office-docx-page.is-native-tile");
-    const image = page?.querySelector?.("img");
-    if (!page || !image) return;
-    const twips = this.decodeTileTwips(page);
-    const rect = image.getBoundingClientRect();
-    const ratioX = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
-    const ratioY = Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height)));
-    const x = Math.round((twips.x || 0) + ratioX * (twips.width || 0));
-    const y = Math.round((twips.y || 0) + ratioY * (twips.height || 0));
-    this._docxEditor?.focus?.({ preventScroll: true });
-    await this.sendNativeMouse({ type: "down", x, y, count: 1, buttons: 1, modifier: 0 });
-    await this.sendNativeMouse({ type: "up", x, y, count: 1, buttons: 1, modifier: 0 });
-  },
-
-  onNativeDocxKeydown(event) {
-    if (!this.hasNativeDocxTiles()) return;
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
-    const key = event.key || "";
-    if (key.length === 1) {
-      event.preventDefault();
-      void this.sendNativeKey({ text: key });
-      return;
-    }
-    const special = {
-      Enter: { text: "\n" },
-      Tab: { text: "\t" },
-      Backspace: { char_code: 0, key_code: 8 },
-      Delete: { char_code: 0, key_code: 127 },
-      ArrowLeft: { char_code: 0, key_code: 37 },
-      ArrowUp: { char_code: 0, key_code: 38 },
-      ArrowRight: { char_code: 0, key_code: 39 },
-      ArrowDown: { char_code: 0, key_code: 40 },
-    }[key];
-    if (!special) return;
-    event.preventDefault();
-    if (special.text != null) {
-      void this.sendNativeKey({ text: special.text });
-    } else {
-      void this.sendNativeKey({ type: "down", ...special }).then(() => this.sendNativeKey({ type: "up", ...special }));
-    }
-  },
-
-  decodeTileTwips(page) {
-    try {
-      return JSON.parse(decodeURIComponent(page?.dataset?.twips || "{}"));
-    } catch {
-      return {};
-    }
-  },
-
-  async sendNativeKey(key) {
-    if (!this.session?.session_id) return null;
-    return await this.queueNativeEvent(async () => {
-      const response = await this.sendNativeEvent("office_key", "key", key, "key");
-      if (response?.ok) this.markDirty();
-      return response;
-    });
-  },
-
-  async sendNativeMouse(mouse) {
-    if (!this.session?.session_id) return null;
-    return await this.queueNativeEvent(() => this.sendNativeEvent("office_mouse", "mouse", mouse, "mouse"));
-  },
-
-  async queueNativeEvent(task) {
-    const run = this._nativeEventQueue.catch(() => null).then(task);
-    this._nativeEventQueue = run.catch(() => null);
-    return await run;
-  },
-
-  async awaitNativeEvents() {
-    await this._nativeEventQueue.catch(() => null);
-  },
-
-  async sendNativeEvent(socketEvent, apiAction, payload, key) {
-    try {
-      let response;
-      try {
-        response = await requestOffice(socketEvent, {
-          session_id: this.session.session_id,
-          [key]: payload,
-        }, 7000);
-      } catch (_socketError) {
-        response = await callOffice(apiAction, {
-          session_id: this.session.session_id,
-          [key]: payload,
-        });
-      }
-      if (response?.metadata && this.session) {
-        this.session.native = { ...(this.session.native || {}), ...response.metadata, available: true };
-      }
-      if (Array.isArray(response?.tiles) && this.session) {
-        this.session.tiles = response.tiles;
-        this.queueRender({ force: true, focus: true });
-      }
-      return response;
-    } catch (error) {
-      console.warn("LibreOffice native event skipped", socketEvent, error);
-      return null;
-    }
-  },
-
-  isPreviewOnly() {
-    return Boolean(this.session && !this.hasOfficialOffice() && !this.isMarkdown() && !this.isDocx());
-  },
-
   defaultTitle(kind, fmt) {
     const date = new Date().toISOString().slice(0, 10);
     if (fmt === "md") return `Document ${date}`;
@@ -2107,70 +1588,6 @@ const model = {
     if (ext === "xlsx") return "table_chart";
     if (ext === "pptx") return "co_present";
     return "draft";
-  },
-
-  documentPath() {
-    return this.session?.document?.path || this.session?.path || "";
-  },
-
-  documentMeta(doc = this.session?.document || this.session || {}) {
-    const parts = [String(doc.extension || "").toUpperCase(), formatBytes(doc.size)].filter(Boolean);
-    return parts.join(" · ");
-  },
-
-  openCards() {
-    return this.visibleTabs()
-      .filter((tab) => !this.isDesktopSession(tab))
-      .map((tab) => normalizeDocument({
-        ...tab.document,
-        ...tab,
-        open: true,
-      }));
-  },
-
-  recentCards() {
-    const openIds = new Set(this.tabs.map((tab) => tab.file_id).filter(Boolean));
-    return this.recent.filter((doc) => !openIds.has(doc.file_id)).slice(0, 8);
-  },
-
-  previewKind(doc = {}) {
-    const ext = String(doc.extension || "").toLowerCase();
-    if (ext === "xlsx") return "spreadsheet";
-    if (ext === "pptx") return "presentation";
-    if (ext === "md") return "markdown";
-    return "document";
-  },
-
-  hasPreview(doc = {}) {
-    const preview = doc.preview || {};
-    return Boolean(
-      (Array.isArray(preview.lines) && preview.lines.length)
-      || (Array.isArray(preview.rows) && preview.rows.length)
-      || (Array.isArray(preview.slides) && preview.slides.length)
-    );
-  },
-
-  previewLines(doc = {}) {
-    const preview = doc.preview || {};
-    return (preview.lines || []).slice(0, 8);
-  },
-
-  previewRows(doc = {}) {
-    const preview = doc.preview || {};
-    return (preview.rows || []).slice(0, 6);
-  },
-
-  previewSlides(doc = {}) {
-    const preview = doc.preview || {};
-    return (preview.slides || []).slice(0, 3);
-  },
-
-  dashboardTitle(doc = {}) {
-    return doc.title || doc.basename || basename(doc.path);
-  },
-
-  dashboardMeta(doc = {}) {
-    return [String(doc.extension || "").toUpperCase(), doc.open ? "Open" : "", formatBytes(doc.size)].filter(Boolean).join(" · ");
   },
 
   setupFloatingModal(element = null) {

@@ -59,10 +59,6 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   libreoffice-calc \
   libreoffice-impress \
   libreoffice-gtk3 \
-  libreofficekit-data \
-  libreofficekit-dev \
-  gir1.2-lokdocview-0.1 \
-  python3-gi \
   python3-uno \
   xpra \
   xpra-x11 \

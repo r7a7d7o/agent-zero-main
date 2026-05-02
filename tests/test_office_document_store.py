@@ -7,6 +7,7 @@ import os
 import sys
 import types
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -23,9 +24,7 @@ from plugins._office.helpers import (
     document_store,
     libreoffice,
     libreoffice_desktop,
-    libreofficekit_native,
-    libreofficekit_sessions,
-    libreofficekit_worker,
+    markdown_sessions,
 )
 
 
@@ -87,9 +86,10 @@ def test_blank_docx_includes_editable_body_paragraph(office_state):
     doc = document_store.create_document("document", "Blank Memo", "docx", "")
     with zipfile.ZipFile(doc["path"]) as archive:
         xml = archive.read("word/document.xml").decode("utf-8")
-        root = document_store.ET.fromstring(xml)
+        root = ET.fromstring(xml)
 
-    assert len(list(root.iter(document_store._qn(document_store.W_NS, "p")))) >= 2
+    word_ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    assert len(list(root.iter(f"{{{word_ns}}}p"))) >= 2
     assert 'xml:space="preserve">&#160;</w:t>' in xml
 
 
@@ -239,16 +239,14 @@ def test_non_project_creation_uses_configured_workdir(office_state):
     assert Path(spreadsheet["path"]).parent == office_state.documents
 
 
-def test_sessions_recent_preview_and_canvas_context_are_neutral(office_state):
+def test_sessions_and_canvas_context_are_neutral(office_state):
     doc = document_store.create_document("document", "Canvas Context", "md", "Private body text.")
     session = document_store.create_session(doc["file_id"], "user-a", "write", "http://localhost:32080")
 
     open_docs = document_store.get_open_documents()
-    recent = document_store.get_recent_documents()
     context = canvas_context.build_context()
 
     assert open_docs[0]["file_id"] == doc["file_id"]
-    assert recent[0]["preview"]["lines"]
     assert "document artifacts" in context
     assert "Private body text" not in context
     assert document_store.close_session(session_id=session["session_id"]) == 1
@@ -266,8 +264,8 @@ def test_markdown_save_tracks_version_history(office_state):
 
 
 def test_direct_markdown_edits_refresh_open_canvas_session(office_state, monkeypatch):
-    manager = libreofficekit_sessions.LibreOfficeKitSessionManager()
-    monkeypatch.setattr(libreofficekit_sessions, "_manager", manager, raising=False)
+    manager = markdown_sessions.MarkdownSessionManager()
+    monkeypatch.setattr(markdown_sessions, "_manager", manager, raising=False)
     doc = document_store.create_document("document", "Receiver", "md", "First")
     session = manager.open(doc)
 
@@ -276,64 +274,12 @@ def test_direct_markdown_edits_refresh_open_canvas_session(office_state, monkeyp
     assert manager._sessions[session["session_id"]].text == "# Receiver\n\nSecond"
 
 
-def test_docx_session_dispatches_native_uno_commands(office_state, monkeypatch):
-    calls = []
+def test_markdown_session_rejects_office_binaries(office_state):
+    manager = markdown_sessions.MarkdownSessionManager()
+    doc = document_store.create_document("document", "Desktop Only", "docx", "Native text")
 
-    class FakeNativeDocument:
-        def metadata(self):
-            return {"available": True, "doctype": 0, "parts": 1, "width_twips": 100, "height_twips": 200}
-
-        def post_uno_command(self, command, arguments=None, notify=True):
-            calls.append((command, arguments, notify))
-            return {"ok": True, "native": True, "command": command}
-
-        def command_values(self, command):
-            return {"ok": True, "native": True, "command": command, "values": {"commandName": command}}
-
-        def close(self):
-            calls.append(("close", None, None))
-
-    monkeypatch.setattr(libreofficekit_native, "open_document", lambda path: FakeNativeDocument())
-
-    manager = libreofficekit_sessions.LibreOfficeKitSessionManager()
-    doc = document_store.create_document("document", "Native", "docx", "Native text")
-    session = manager.open(doc)
-    result = manager.command(session["session_id"], ".uno:Bold", notify=True)
-    values = manager.command_values(session["session_id"], ".uno:StyleApply")
-    manager.close(session["session_id"])
-
-    assert session["native"]["available"] is True
-    assert result["ok"] is True
-    assert result["native"] is True
-    assert values["values"]["commandName"] == ".uno:StyleApply"
-    assert calls[0] == (".uno:Bold", None, True)
-    assert calls[-1] == ("close", None, None)
-
-
-def test_lok_worker_serializes_concurrent_rpc_calls():
-    import concurrent.futures
-    import threading
-    import time
-
-    document = object.__new__(libreofficekit_worker.WorkerLokDocument)
-    document._lock = threading.RLock()
-    active = 0
-    max_active = 0
-
-    def fake_request_unlocked(action, payload=None, timeout=18):
-        nonlocal active, max_active
-        active += 1
-        max_active = max(max_active, active)
-        time.sleep(0.01)
-        active -= 1
-        return {"ok": True, "action": action, "payload": payload}
-
-    document._request_unlocked = fake_request_unlocked
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-        results = list(pool.map(lambda index: document._request("key", {"index": index}), range(12)))
-
-    assert all(result["ok"] is True for result in results)
-    assert max_active == 1
+    with pytest.raises(ValueError, match="Open .docx files in the Desktop"):
+        manager.open(doc)
 
 
 def test_official_libreoffice_desktop_status_and_url_contract(tmp_path, monkeypatch):

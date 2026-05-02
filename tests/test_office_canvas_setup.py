@@ -14,8 +14,10 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
         encoding="utf-8",
     )
 
-    assert "office-rich-editor" in panel
-    assert "office-docx-pages" in panel
+    assert "office-source-editor" in panel
+    assert "data-office-source" in panel
+    assert "office-rich-editor" not in panel
+    assert "office-docx-pages" not in panel
     assert "office-desktop-frame" in panel
     assert "data-office-desktop-frame" in panel
     assert 'title="LibreOffice desktop"' not in panel
@@ -28,12 +30,14 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "office-modal-resizer" in panel
     assert "resize: both" not in panel
     assert 'tabindex="0"' in panel
-    assert "format_underlined" in panel
-    assert "format_align_center" in panel
-    assert "is-native-tile" in panel
+    assert "format_underlined" not in panel
+    assert "format_align_center" not in panel
+    assert "is-native-tile" not in panel
     assert "hasOfficialOffice()" in panel
     assert "office_save" in store
     assert "desktop_save" in store
+    assert "--office-zoom" not in panel
+    assert "zoom: 1" not in store
     assert 'callOffice("desktop")' in store
     assert "ensureDesktopSession" in store
     assert "handleOfficialOfficeClosed" in store
@@ -82,16 +86,16 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "officialOfficeUrl" in store
     assert "hasOfficialOffice" in store
     assert "isOfficeSocketData" in store
-    assert "office_command" in store
-    assert "office_key" in store
-    assert "office_mouse" in store
-    assert ".uno:Bold" in store
-    assert "nativeTilesToHtml" in store
+    assert "office_command" not in store
+    assert "office_key" not in store
+    assert "office_mouse" not in store
+    assert ".uno:Bold" not in store
+    assert "nativeTilesToHtml" not in store
     assert "editorContainsFocus" in store
     assert "_focusAttempts" in store
-    assert "_nativeEventQueue" in store
-    assert "await this.awaitNativeEvents()" in store
-    assert "<p><br></p>" in store
+    assert "_nativeEventQueue" not in store
+    assert "await this.awaitNativeEvents()" not in store
+    assert "<p><br></p>" not in store
     assert "setupTitle()" not in panel
     assert "Setup in progress" not in store
     assert "office-log" not in panel
@@ -112,7 +116,7 @@ def test_desktop_xpra_canvas_scroll_is_forwarded_to_the_remote_session():
     assert "getModifierState: { value: getModifierState }" in store
 
 
-def test_office_dashboard_uses_cards_and_filters_tabs_to_desktop_and_markdown():
+def test_office_surface_filters_tabs_to_desktop_and_markdown_without_dashboard():
     panel = (PROJECT_ROOT / "plugins" / "_office" / "webui" / "office-panel.html").read_text(
         encoding="utf-8",
     )
@@ -120,14 +124,14 @@ def test_office_dashboard_uses_cards_and_filters_tabs_to_desktop_and_markdown():
         encoding="utf-8",
     )
 
-    assert "office-card-grid" in panel
-    assert "office-document-card" in panel
+    assert "office-card-grid" not in panel
+    assert "office-document-card" not in panel
     assert "visibleTabs()" in panel
-    assert "openCards()" in panel
-    assert "recentCards()" in panel
+    assert "openCards()" not in panel
+    assert "recentCards()" not in panel
     assert "office-editor-head" not in panel
     assert "office-recent-row" not in panel
-    assert "open_documents" in store
+    assert "open_documents" not in store
     assert "installDesktopDocumentSession" in store
     assert "isDesktopOfficeDocument" in store
     assert "isVisibleOfficeTab" in store
@@ -248,6 +252,9 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert "DESKTOP_FOLDER_LINKS" in desktop
     assert "HIDDEN_XPRA_DESKTOP_ENTRIES" in desktop
     assert "libreoffice-gtk3" in install
+    assert "libreofficekit" not in install
+    assert "gir1.2-lokdocview" not in install
+    assert "python3-gi" not in install
     assert "xpra" in install
     assert "xpra-x11" in install
     assert "xpra-html5" in install

@@ -3,10 +3,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import zipfile
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +28,6 @@ def collect_status() -> dict[str, Any]:
         "state": "healthy" if soffice else "missing",
         "healthy": bool(soffice),
         "soffice": soffice,
-        "libreofficekit": _libreofficekit_available(),
         "message": "LibreOffice is available." if soffice else "LibreOffice is not installed in this runtime.",
     }
     try:
@@ -40,29 +37,6 @@ def collect_status() -> dict[str, Any]:
     except Exception as exc:
         status["desktop"] = {"ok": False, "healthy": False, "error": str(exc)}
     return status
-
-
-@lru_cache(maxsize=1)
-def _libreofficekit_available() -> bool:
-    system_dist_packages = Path("/usr/lib/python3/dist-packages")
-    if system_dist_packages.exists() and str(system_dist_packages) not in sys.path:
-        sys.path.append(str(system_dist_packages))
-    try:
-        import gi  # type: ignore
-
-        gi.require_version("LOKDocView", "0.1")
-        return True
-    except Exception:
-        return _lokdocview_typelib_available()
-
-
-def _lokdocview_typelib_available() -> bool:
-    candidates = [
-        Path("/usr/lib/x86_64-linux-gnu/girepository-1.0/LOKDocView-0.1.typelib"),
-        Path("/usr/lib/aarch64-linux-gnu/girepository-1.0/LOKDocView-0.1.typelib"),
-        Path("/usr/share/gir-1.0/LOKDocView-0.1.gir"),
-    ]
-    return any(path.exists() for path in candidates)
 
 
 def validate_docx(path: str | Path) -> dict[str, Any]:

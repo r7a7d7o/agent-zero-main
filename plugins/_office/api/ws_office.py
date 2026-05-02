@@ -4,12 +4,12 @@ from typing import Any
 
 from helpers.ws import WsHandler
 from helpers.ws_manager import WsResult
-from plugins._office.helpers import document_store, libreofficekit_sessions
+from plugins._office.helpers import document_store, markdown_sessions
 
 
 class WsOffice(WsHandler):
     async def on_disconnect(self, sid: str) -> None:
-        libreofficekit_sessions.get_manager().close_sid(sid)
+        markdown_sessions.get_manager().close_sid(sid)
 
     async def process(self, event: str, data: dict[str, Any], sid: str) -> dict[str, Any] | WsResult | None:
         if not event.startswith("office_"):
@@ -18,53 +18,18 @@ class WsOffice(WsHandler):
             if event == "office_open":
                 return self._open(data, sid)
             if event == "office_input":
-                return libreofficekit_sessions.get_manager().input(
+                return markdown_sessions.get_manager().input(
                     str(data.get("session_id") or ""),
                     text=data.get("text") if "text" in data else None,
                     patch=data.get("patch") if isinstance(data.get("patch"), dict) else None,
                 )
-            if event == "office_key":
-                return libreofficekit_sessions.get_manager().key(
-                    str(data.get("session_id") or ""),
-                    data.get("key") if isinstance(data.get("key"), dict) else {},
-                )
-            if event == "office_mouse":
-                return libreofficekit_sessions.get_manager().mouse(
-                    str(data.get("session_id") or ""),
-                    data.get("mouse") if isinstance(data.get("mouse"), dict) else {},
-                )
-            if event == "office_cursor":
-                return libreofficekit_sessions.get_manager().cursor(
-                    str(data.get("session_id") or ""),
-                    data.get("cursor") if isinstance(data.get("cursor"), dict) else {},
-                )
-            if event == "office_selection":
-                return libreofficekit_sessions.get_manager().selection(
-                    str(data.get("session_id") or ""),
-                    data.get("selection") if isinstance(data.get("selection"), dict) else {},
-                )
-            if event == "office_invalidated_tiles":
-                session_id = str(data.get("session_id") or "")
-                return {"session_id": session_id, "tiles": libreofficekit_sessions.get_manager().tiles(session_id)}
-            if event == "office_command":
-                return libreofficekit_sessions.get_manager().command(
-                    str(data.get("session_id") or ""),
-                    str(data.get("command") or ""),
-                    arguments=data.get("arguments"),
-                    notify=bool(data.get("notify", True)),
-                )
-            if event == "office_command_values":
-                return libreofficekit_sessions.get_manager().command_values(
-                    str(data.get("session_id") or ""),
-                    str(data.get("command") or ""),
-                )
             if event == "office_save":
-                return libreofficekit_sessions.get_manager().save(
+                return markdown_sessions.get_manager().save(
                     str(data.get("session_id") or ""),
                     text=data.get("text") if "text" in data else None,
                 )
             if event == "office_close":
-                return libreofficekit_sessions.get_manager().close(str(data.get("session_id") or ""))
+                return markdown_sessions.get_manager().close(str(data.get("session_id") or ""))
         except FileNotFoundError as exc:
             return WsResult.error(code="OFFICE_SESSION_NOT_FOUND", message=str(exc), correlation_id=data.get("correlationId"))
         except Exception as exc:
@@ -92,4 +57,4 @@ class WsOffice(WsHandler):
                 content=str(data.get("content") or ""),
                 context_id=context_id,
             )
-        return libreofficekit_sessions.get_manager().open(doc, sid=sid)
+        return markdown_sessions.get_manager().open(doc, sid=sid)
