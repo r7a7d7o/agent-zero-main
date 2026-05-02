@@ -99,7 +99,7 @@ The Browser also supports Chrome extensions installed from the Chrome Web Store 
 
 Agent Zero can now connect to your OpenAI Codex plan through the new OAuth flow. Sign in with your account, pick the Codex-backed provider, and let Agent Zero use the plan you already have.
 
-<img width="1184" height="604" alt="OAuth LLM plans in Agent Zero" src="docs/res/oauth_llm_plans-ok.png" />
+<img alt="OAuth LLM plans in Agent Zero" src="docs/res/codex-screenshot.png" />
 <br>
 
 Click "Connect", enter the device code in the OpenAI page. Choose your model after checking the list, and you're all set.
