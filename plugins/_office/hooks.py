@@ -71,6 +71,13 @@ RUNTIME_PACKAGES = (
     "fonts-noto-cjk",
     "fonts-noto-color-emoji",
 )
+# The browser-hosted Desktop needs the server, X11, and html5 pieces. Local
+# Xpra GUI clients are useful extras, but can pull codec packages that are not
+# consistently available across architectures.
+OPTIONAL_RUNTIME_PACKAGES = (
+    "xpra-client",
+    "xpra-client-gtk3",
+)
 RETIRED_RUNTIME_PACKAGES = (
     "firefox-esr",
 )
@@ -269,8 +276,9 @@ def _ensure_runtime_dependencies(installed: list[str], errors: list[str]) -> Non
     if not _apt_update(errors):
         return
 
-    xpra_missing = [package for package in missing if package.startswith("xpra")]
-    if xpra_missing and not _package_candidates_available(xpra_missing):
+    required_missing, optional_missing = _split_runtime_packages(missing)
+    required_xpra_missing = [package for package in required_missing if package.startswith("xpra")]
+    if required_xpra_missing and not _package_candidates_available(required_xpra_missing):
         previous_error_count = len(errors)
         _ensure_xpra_repository(installed, errors)
         if len(errors) > previous_error_count or not _apt_update(errors):
@@ -278,9 +286,33 @@ def _ensure_runtime_dependencies(installed: list[str], errors: list[str]) -> Non
         missing = [package for package in RUNTIME_PACKAGES if not _package_installed(package)]
         if not missing:
             return
+        required_missing, optional_missing = _split_runtime_packages(missing)
 
+    if required_missing and not _install_runtime_packages(required_missing, installed, errors):
+        return
+
+    if optional_missing:
+        optional_xpra_missing = [package for package in optional_missing if package.startswith("xpra")]
+        if optional_xpra_missing and not _package_candidates_available(optional_xpra_missing):
+            return
+        _install_runtime_packages(optional_missing, installed, errors, optional=True)
+
+
+def _split_runtime_packages(packages: list[str]) -> tuple[list[str], list[str]]:
+    optional = [package for package in packages if package in OPTIONAL_RUNTIME_PACKAGES]
+    required = [package for package in packages if package not in OPTIONAL_RUNTIME_PACKAGES]
+    return required, optional
+
+
+def _install_runtime_packages(
+    packages: list[str],
+    installed: list[str],
+    errors: list[str],
+    *,
+    optional: bool = False,
+) -> bool:
     result = subprocess.run(
-        ["apt-get", "install", "-y", "--no-install-recommends", *missing],
+        ["apt-get", "install", "-y", "--no-install-recommends", *packages],
         check=False,
         text=True,
         capture_output=True,
@@ -288,9 +320,18 @@ def _ensure_runtime_dependencies(installed: list[str], errors: list[str]) -> Non
         env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
     )
     if result.returncode == 0:
-        installed.extend(missing)
-        return
-    errors.append((result.stderr or result.stdout or "apt-get install failed").strip())
+        installed.extend(packages)
+        return True
+    output = (result.stderr or result.stdout or "apt-get install failed").strip()
+    if optional and _is_xpra_codec_dependency_gap(output):
+        return False
+    errors.append(output)
+    return False
+
+
+def _is_xpra_codec_dependency_gap(output: str) -> bool:
+    normalized = output.lower()
+    return "xpra-codecs" in normalized and "libvpx9" in normalized
 
 
 def _apt_update(errors: list[str]) -> bool:

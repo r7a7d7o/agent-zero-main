@@ -899,6 +899,88 @@ def test_cleanup_hook_uses_trixie_xpra_components_for_kali_arm64(tmp_path, monke
     assert calls[-1][-3:] == ["xpra-server", "xpra-x11", "xpra-html5"]
 
 
+def test_cleanup_hook_skips_optional_xpra_client_codec_conflict(monkeypatch):
+    calls = []
+    installed_state = {
+        "xpra-server": True,
+        "xpra-client": False,
+        "xpra-client-gtk3": False,
+        "xpra-x11": True,
+        "xpra-html5": True,
+    }
+    codec_error = (
+        "E: Unable to satisfy dependencies. Reached two conflicting assignments:\n"
+        "   1. xpra-codecs:arm64=6.4.3-r0-1 is selected for install\n"
+        "   2. xpra-codecs:arm64 Depends libvpx9 (>= 1.12.0)\n"
+        "      but none of the choices are installable: [no choices]"
+    )
+
+    monkeypatch.setattr(hooks.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        hooks.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in {"apt-get", "dpkg-query", "apt-cache"} else "",
+    )
+    monkeypatch.setattr(
+        hooks,
+        "RUNTIME_PACKAGES",
+        ("xpra-server", "xpra-client", "xpra-client-gtk3", "xpra-x11", "xpra-html5"),
+    )
+    monkeypatch.setattr(hooks, "_package_installed", lambda package: installed_state.get(package, False))
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:2] == ["apt-cache", "policy"]:
+            return types.SimpleNamespace(returncode=0, stdout="Candidate: 6.4.3-r0-1\n", stderr="")
+        if command[:2] == ["apt-get", "install"]:
+            return types.SimpleNamespace(returncode=100, stdout="", stderr=codec_error)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    installed = []
+    errors = []
+
+    hooks._ensure_runtime_dependencies(installed, errors)
+
+    assert installed == []
+    assert errors == []
+    assert calls[-1][-2:] == ["xpra-client", "xpra-client-gtk3"]
+
+
+def test_cleanup_hook_reports_required_xpra_codec_conflict(monkeypatch):
+    codec_error = (
+        "E: Unable to satisfy dependencies. Reached two conflicting assignments:\n"
+        "   1. xpra-codecs:arm64=6.4.3-r0-1 is selected for install\n"
+        "   2. xpra-codecs:arm64 Depends libvpx9 (>= 1.12.0)\n"
+        "      but none of the choices are installable: [no choices]"
+    )
+
+    monkeypatch.setattr(hooks.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        hooks.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in {"apt-get", "dpkg-query", "apt-cache"} else "",
+    )
+    monkeypatch.setattr(hooks, "RUNTIME_PACKAGES", ("xpra-server",))
+    monkeypatch.setattr(hooks, "_package_installed", lambda package: False)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["apt-cache", "policy"]:
+            return types.SimpleNamespace(returncode=0, stdout="Candidate: 6.4.3-r0-1\n", stderr="")
+        if command[:2] == ["apt-get", "install"]:
+            return types.SimpleNamespace(returncode=100, stdout="", stderr=codec_error)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    installed = []
+    errors = []
+
+    hooks._ensure_runtime_dependencies(installed, errors)
+
+    assert installed == []
+    assert errors == [codec_error]
+
+
 def test_self_update_launch_invokes_office_cleanup(monkeypatch, tmp_path):
     manager = load_self_update_manager()
     calls = []

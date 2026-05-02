@@ -48,7 +48,7 @@ install_xpra_repo() {
   if ! xpra_install_check; then
     if [ "$arch" != "amd64" ]; then
       echo "xpra packages are not installable from ${uri} ${suite} for ${arch}; falling back to https://xpra.org trixie"
-      XPRA_PACKAGES=(xpra-server xpra-client xpra-client-gtk3 xpra-x11 xpra-html5)
+      XPRA_PACKAGES=(xpra-server xpra-x11 xpra-html5)
       configure_xpra_repo "https://xpra.org" "trixie" "$arch"
       apt-get update
       if ! xpra_install_check; then
