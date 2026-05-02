@@ -9,7 +9,6 @@ export const switcherState = {
   switcherAllowed: false,
   switcherOverride: null,
   switcherPresets: [],
-  switcherActiveModels: { main: null, utility: null },
   switcherLoading: true,
   agentProfiles: [],
   agentProfilesLoading: true,
@@ -18,33 +17,6 @@ export const switcherState = {
 };
 
 export const switcherMethods = {
-  normalizeActiveModel(model) {
-    if (!model || typeof model !== "object") return null;
-    const provider = String(model.provider || "").trim();
-    const name = String(model.name || "").trim();
-    if (!provider && !name) return null;
-    return { provider, name };
-  },
-
-  normalizeActiveModels(models = {}) {
-    return {
-      main: this.normalizeActiveModel(models.main),
-      utility: this.normalizeActiveModel(models.utility),
-    };
-  },
-
-  hasModelNames(models) {
-    return !!(models?.main?.name || models?.utility?.name);
-  },
-
-  modelsFromPreset(preset) {
-    if (!preset) return { main: null, utility: null };
-    return this.normalizeActiveModels({
-      main: preset.chat,
-      utility: preset.utility,
-    });
-  },
-
   async loadAgentProfiles(force = false) {
     if (!force && this.agentProfiles.length > 0 && this.agentProfileSettings) return this.agentProfiles;
     this.agentProfilesLoading = true;
@@ -72,7 +44,7 @@ export const switcherMethods = {
   },
 
   async loadSwitcherState(contextId) {
-    const result = { allowed: false, presets: [], override: null, activeModels: { main: null, utility: null } };
+    const result = { allowed: false, presets: [], override: null };
     try {
       await this.loadGlobalPresets();
       result.presets = this.globalPresets.filter(p => p.name);
@@ -85,7 +57,6 @@ export const switcherMethods = {
         const overData = await overRes.json();
         result.allowed = !!overData.allowed;
         result.override = overData.override || null;
-        result.activeModels = this.normalizeActiveModels(overData.active_models || {});
       }
     } catch (e) {
       console.error("Model switcher load failed:", e);
@@ -100,10 +71,10 @@ export const switcherMethods = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "set_preset", context_id: contextId, preset_name: presetName }),
       });
-      return await res.json();
+      return !!(await res.json()).ok;
     } catch (e) {
       console.error("Failed to set preset override:", e);
-      return { ok: false };
+      return false;
     }
   },
 
@@ -114,10 +85,10 @@ export const switcherMethods = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "clear", context_id: contextId }),
       });
-      return await res.json();
+      return !!(await res.json()).ok;
     } catch (e) {
       console.error("Failed to clear override:", e);
-      return { ok: false };
+      return false;
     }
   },
 
@@ -223,7 +194,6 @@ export const switcherMethods = {
       this.switcherAllowed = state.allowed;
       this.switcherPresets = state.presets;
       this.switcherOverride = state.override;
-      this.switcherActiveModels = state.activeModels;
     } catch (e) {
       console.error('Model switcher refresh failed:', e);
     } finally {
@@ -232,24 +202,15 @@ export const switcherMethods = {
   },
 
   async selectPresetSwitch(contextId, presetName) {
-    const data = await this.setPresetOverride(contextId, presetName);
-    if (data?.ok) {
-      this.switcherOverride = { preset_name: data.preset_name || presetName };
-      const activeModels = this.normalizeActiveModels(data.active_models || {});
-      this.switcherActiveModels = this.hasModelNames(activeModels)
-        ? activeModels
-        : this.modelsFromPreset(this.switcherPresets.find(p => p.name === presetName));
-    }
-    return !!data?.ok;
+    const ok = await this.setPresetOverride(contextId, presetName);
+    if (ok) this.switcherOverride = { preset_name: presetName };
+    return ok;
   },
 
   async clearOverrideSwitch(contextId) {
-    const data = await this.clearOverride(contextId);
-    if (data?.ok) {
-      this.switcherOverride = null;
-      this.switcherActiveModels = this.normalizeActiveModels(data.active_models || {});
-    }
-    return !!data?.ok;
+    const ok = await this.clearOverride(contextId);
+    if (ok) this.switcherOverride = null;
+    return ok;
   },
 
   getSwitcherLabel() {
@@ -265,11 +226,11 @@ export const switcherMethods = {
   },
 
   getActiveModels() {
-    if (this.hasModelNames(this.switcherActiveModels)) return this.switcherActiveModels;
-    return this.modelsFromPreset(this.getActivePreset());
-  },
-
-  hasActiveModelNames() {
-    return this.hasModelNames(this.getActiveModels());
+    const preset = this.getActivePreset();
+    if (!preset) return { main: null, utility: null };
+    return {
+      main: preset.chat?.name ? { provider: preset.chat.provider, name: preset.chat.name } : null,
+      utility: preset.utility?.name ? { provider: preset.utility.provider, name: preset.utility.name } : null,
+    };
   },
 };
