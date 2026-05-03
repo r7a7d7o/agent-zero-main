@@ -271,21 +271,23 @@ class LibreOfficeDesktopManager:
         session = self.get(session_id)
         if not session:
             return {"ok": False, "error": "LibreOffice desktop session not found."}
+        is_system_desktop = session.session_id == SYSTEM_SESSION_ID and session.extension == "desktop"
         result = virtual_desktop.resize_display(
             display=session.display,
             width=width,
             height=height,
             max_width=MAX_SCREEN_WIDTH,
             max_height=MAX_SCREEN_HEIGHT,
-            window_class="libreoffice",
-            keys=("Escape",),
+            window_class="" if is_system_desktop else "libreoffice",
+            keys=() if is_system_desktop else ("Escape",),
             xauthority=self._xauthority(session),
             home=str(session.profile_dir),
         )
         if result.get("ok"):
             session.width = int(result["width"])
             session.height = int(result["height"])
-            self._dismiss_blocking_dialogs(session)
+            if not is_system_desktop:
+                self._dismiss_blocking_dialogs(session)
         return result
 
     def proxy_for_token(self, token: str) -> tuple[str, int] | None:

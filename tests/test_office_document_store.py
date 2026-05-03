@@ -684,7 +684,7 @@ def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeyp
     assert marker.exists()
 
 
-def test_office_startup_bootstraps_persistent_desktop_runtime(monkeypatch):
+def test_office_startup_defers_persistent_desktop_runtime(monkeypatch):
     calls = []
     routes_module = types.ModuleType("plugins._office.helpers.libreoffice_desktop_routes")
     routes_module.install_route_hooks = lambda: calls.append("routes")
@@ -697,25 +697,16 @@ def test_office_startup_bootstraps_persistent_desktop_runtime(monkeypatch):
 
     from plugins._office.extensions.python.startup_migration import _20_office_routes as office_startup
 
-    class Manager:
-        def ensure_system_desktop(self):
-            calls.append("desktop")
-            return {"available": True, "session_id": "agent-zero-desktop"}
-
     monkeypatch.setattr(
         office_startup.hooks,
         "cleanup_stale_runtime_state",
         lambda: {"ok": True, "errors": [], "installed": [], "removed": []},
     )
-    monkeypatch.setattr(
-        office_startup.libreoffice_desktop,
-        "get_manager",
-        lambda: Manager(),
-    )
 
     office_startup.OfficeStartupCleanup(agent=None).execute()
 
-    assert calls == ["routes", "desktop"]
+    assert calls == ["routes"]
+    assert not hasattr(office_startup, "libreoffice_desktop")
 
 
 def test_cleanup_hook_reruns_when_stale_packages_exist_after_old_marker(tmp_path, monkeypatch):

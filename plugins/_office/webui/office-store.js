@@ -12,6 +12,7 @@ const SAVE_MESSAGE_MS = 1800;
 const INPUT_PUSH_DELAY_MS = 650;
 const DESKTOP_HEARTBEAT_MS = 3500;
 const DESKTOP_RESIZE_DELAY_MS = 80;
+const DESKTOP_START_MESSAGE = "Starting Agent Zero Desktop environment";
 const XPRA_DESKTOP_PRIME_INTERVAL_MS = 220;
 const XPRA_DESKTOP_PRIME_ATTEMPTS = 120;
 const SYSTEM_DESKTOP_FILE_ID = "system-desktop";
@@ -219,8 +220,11 @@ const model = {
   _desktopResizeTarget: null,
   _desktopResizeTimer: null,
   _desktopResizeKey: "",
+  _desktopResizePendingKey: "",
   _desktopResizeSuspended: false,
   _desktopResizePending: false,
+  _desktopViewportSyncTimers: [],
+  _desktopHostVisible: false,
   _desktopPrimeTimer: null,
   _desktopPrimeAttempts: 0,
   _desktopKeyboardActive: false,
@@ -237,10 +241,12 @@ const model = {
   async onMount(element = null, options = {}) {
     if (element) this._root = element;
     this._mode = options?.mode === "modal" ? "modal" : "canvas";
-    if (this._mode === "modal") this.setupFloatingModal(element);
-    await this.refresh();
-    await this.ensureDesktopSession({ select: !this.session });
-    this.ensureActiveTab();
+    if (this._mode === "modal") {
+      this._desktopHostVisible = true;
+      this.setupFloatingModal(element);
+      await this.onOpen({ source: "modal" });
+      return;
+    }
     this.queueRender();
   },
 
@@ -259,7 +265,9 @@ const model = {
   },
 
   beforeHostHidden(options = {}) {
+    this._desktopHostVisible = false;
     this.flushInput();
+    this.clearDesktopViewportSyncTimers();
     this.unloadDesktopFrames();
   },
 
@@ -267,6 +275,7 @@ const model = {
     this.flushInput();
     this.stopDesktopMonitor();
     this.stopDesktopResizeObserver();
+    this.clearDesktopViewportSyncTimers();
     this.stopXpraDesktopPrime();
     this.stopDesktopKeyboardBridge();
     this.stopDesktopClipboardBridge();
@@ -292,10 +301,23 @@ const model = {
       this.updateDesktopMonitor();
       return existing;
     }
-    if (this._desktopStarting) return await this._desktopStarting;
+    const showProgress = options.progress !== false;
+    const progressMessage = String(options.message || DESKTOP_START_MESSAGE);
+    if (this._desktopStarting) {
+      if (showProgress) {
+        this.loading = true;
+        this.message = progressMessage;
+      }
+      return await this._desktopStarting;
+    }
 
     this._desktopStarting = (async () => {
       try {
+        if (showProgress) {
+          this.loading = true;
+          this.message = progressMessage;
+          this.error = "";
+        }
         const response = await callOffice("desktop");
         if (response?.ok === false) throw new Error(response.error || "Desktop session could not be opened.");
         const session = normalizeSession(response);
@@ -327,6 +349,10 @@ const model = {
         this.error = error instanceof Error ? error.message : String(error);
         return null;
       } finally {
+        if (showProgress) {
+          this.loading = false;
+          if (this.message === progressMessage) this.message = "";
+        }
         this._desktopStarting = null;
       }
     })();
@@ -493,7 +519,7 @@ const model = {
       this.ensureActiveTab();
     }
     this.updateDesktopMonitor();
-    await this.ensureDesktopSession({ select: !this.session });
+    this.ensureActiveTab();
     await this.refresh();
   },
 
@@ -836,7 +862,36 @@ const model = {
   },
 
   officialOfficeUrl(tab = this.session) {
-    return tab?.desktop?.url || "";
+    const url = tab?.desktop?.url || "";
+    if (!url) return "";
+    try {
+      const parsed = new URL(url, window.location.href);
+      const secureContext = globalThis.isSecureContext === true;
+      parsed.searchParams.set("offscreen", secureContext ? "true" : "false");
+      parsed.searchParams.set("clipboard_poll", secureContext ? "true" : "false");
+      if (parsed.origin === window.location.origin) return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+      return parsed.href;
+    } catch {
+      return url;
+    }
+  },
+
+  isDesktopHostVisible() {
+    if (this._mode === "modal") return true;
+    const canvas = globalThis.Alpine?.store?.("rightCanvas") || rightCanvasStore;
+    return Boolean(canvas?.isOpen && canvas.activeSurfaceId === "office");
+  },
+
+  setDesktopHostVisible(visible) {
+    const next = Boolean(visible);
+    if (!next && this._mode === "modal") return;
+    if (this._desktopHostVisible === next) return;
+    this._desktopHostVisible = next;
+    if (next) {
+      this.afterDesktopHostShown({ source: "canvas-visibility" });
+    } else {
+      this.beforeHostHidden({ reason: "hidden" });
+    }
   },
 
   desktopFrames() {
@@ -879,6 +934,7 @@ const model = {
   },
 
   restoreDesktopFrames() {
+    if (!this.isDesktopHostVisible()) return;
     const url = this.officialOfficeUrl();
     if (!url) return;
     for (const frame of this.desktopFrames()) {
@@ -892,22 +948,21 @@ const model = {
 
   afterDesktopHostShown() {
     if (!this.hasOfficialOffice()) return;
+    this._desktopHostVisible = true;
     this._desktopResizeKey = "";
+    this._desktopResizePendingKey = "";
     this._desktopResizeSuspended = false;
     this._desktopResizePending = false;
     this.restoreDesktopFrames();
     this.requestDesktopViewportSync({ force: true, frame: this.desktopFrame() });
-    for (const delay of [720, 1280]) {
-      globalThis.setTimeout(() => {
-        this.requestDesktopViewportSync({ force: true, frame: this.desktopFrame() });
-      }, delay);
-    }
   },
 
   beforeDesktopHostHandoff() {
     this.stopDesktopResizeObserver();
+    this.clearDesktopViewportSyncTimers();
     this.stopXpraDesktopPrime();
     this._desktopResizeKey = "";
+    this._desktopResizePendingKey = "";
     this._desktopResizeSuspended = true;
     this._desktopResizePending = true;
   },
@@ -920,6 +975,7 @@ const model = {
 
   onDesktopFrameLoaded(event = null) {
     if (event?.target?.getAttribute?.("src") === "about:blank") return;
+    if (!this.isDesktopHostVisible()) return;
     this.error = "";
     this.queueDesktopFrameFocus(event?.target || null);
     this.requestDesktopViewportSync({ force: true, frame: event?.target || null });
@@ -955,7 +1011,7 @@ const model = {
   },
 
   updateDesktopMonitor() {
-    if (!this.hasOfficialOffice()) {
+    if (!this.hasOfficialOffice() || !this.isDesktopHostVisible()) {
       this.stopDesktopMonitor();
       this.stopDesktopResizeObserver();
       this._desktopKeyboardActive = false;
@@ -975,7 +1031,7 @@ const model = {
   },
 
   startDesktopResizeObserver() {
-    if (!this.hasOfficialOffice()) {
+    if (!this.hasOfficialOffice() || !this.isDesktopHostVisible()) {
       this.stopDesktopResizeObserver();
       return;
     }
@@ -1017,6 +1073,7 @@ const model = {
     this._desktopResizeCleanup = null;
     this._desktopResizeTarget = null;
     this._desktopResizeKey = "";
+    this._desktopResizePendingKey = "";
     this._desktopResizeSuspended = false;
     this._desktopResizePending = false;
   },
@@ -1027,6 +1084,7 @@ const model = {
       globalThis.clearTimeout(this._desktopResizeTimer);
       this._desktopResizeTimer = null;
     }
+    this._desktopResizePendingKey = "";
   },
 
   resumeDesktopResize() {
@@ -1046,7 +1104,15 @@ const model = {
     );
   },
 
+  clearDesktopViewportSyncTimers() {
+    for (const timer of this._desktopViewportSyncTimers.splice(0)) {
+      globalThis.clearTimeout(timer);
+    }
+  },
+
   requestDesktopViewportSync(options = {}) {
+    if (!this.hasOfficialOffice() || !this.isDesktopHostVisible()) return;
+    if (options.force) this.clearDesktopViewportSyncTimers();
     const run = (force = false) => {
       this.syncDesktopViewport({ ...options, force });
     };
@@ -1055,13 +1121,16 @@ const model = {
     } else {
       globalThis.setTimeout(() => run(Boolean(options.force)), 0);
     }
-    for (const delay of [140, 420]) {
-      globalThis.setTimeout(() => run(false), delay);
-    }
+    if (options.followup === false) return;
+    const timer = globalThis.setTimeout(() => {
+      this._desktopViewportSyncTimers = this._desktopViewportSyncTimers.filter((item) => item !== timer);
+      run(false);
+    }, options.force ? 260 : 180);
+    this._desktopViewportSyncTimers.push(timer);
   },
 
   syncDesktopViewport(options = {}) {
-    if (!this.hasOfficialOffice()) return false;
+    if (!this.hasOfficialOffice() || !this.isDesktopHostVisible()) return false;
     const frame = this.desktopFrame(options.frame || null);
     if (!frame) return false;
     this.startDesktopResizeObserver();
@@ -1554,7 +1623,7 @@ const model = {
   },
 
   queueDesktopResize(options = {}) {
-    if (!this.hasOfficialOffice()) return;
+    if (!this.hasOfficialOffice() || !this.isDesktopHostVisible()) return;
     const token = this.session?.desktop?.token || "";
     const frame = this.desktopFrame(options.frame || null);
     const target = frame?.parentElement || frame;
@@ -1565,18 +1634,33 @@ const model = {
     const width = Math.round(rect.width);
     const height = Math.round(rect.height);
     if (width < 320 || height < 220) return;
-    this.applyXpraDesktopFrameMode(frame, { requestServerResize: false, requestRefresh: false });
+    const key = `${token}:${width}x${height}`;
+    const refreshFrameOnly = () => {
+      this.applyXpraDesktopFrameMode(frame, { requestServerResize: false, requestRefresh: false });
+    };
+    if (!serverResize) {
+      refreshFrameOnly();
+      return;
+    }
+    if (key === this._desktopResizeKey || key === this._desktopResizePendingKey) {
+      refreshFrameOnly();
+      return;
+    }
+    refreshFrameOnly();
     if (!force && this.shouldDeferDesktopResize()) {
       this._desktopResizePending = true;
       return;
     }
-    const key = `${token}:${width}x${height}`;
-    if (!serverResize) return;
-    if (!force && key === this._desktopResizeKey) return;
     if (this._desktopResizeTimer) globalThis.clearTimeout(this._desktopResizeTimer);
+    this._desktopResizePendingKey = key;
     this._desktopResizeTimer = globalThis.setTimeout(async () => {
       this._desktopResizeTimer = null;
+      if (!this.hasOfficialOffice() || !this.isDesktopHostVisible()) {
+        if (this._desktopResizePendingKey === key) this._desktopResizePendingKey = "";
+        return;
+      }
       if (!force && this.shouldDeferDesktopResize()) {
+        if (this._desktopResizePendingKey === key) this._desktopResizePendingKey = "";
         this._desktopResizePending = true;
         return;
       }
@@ -1603,6 +1687,8 @@ const model = {
         }
       } catch (error) {
         console.warn("Desktop resize skipped", error);
+      } finally {
+        if (this._desktopResizePendingKey === key) this._desktopResizePendingKey = "";
       }
     }, DESKTOP_RESIZE_DELAY_MS);
   },
@@ -1711,7 +1797,7 @@ const model = {
 
   startDesktopMonitor() {
     this.stopDesktopMonitor();
-    if (!this.hasOfficialOffice()) return;
+    if (!this.hasOfficialOffice() || !this.isDesktopHostVisible()) return;
     const tabId = this.session?.tab_id || "";
     const sessionId = this.session?.desktop_session_id || this.session?.session_id || "";
     if (!tabId || !sessionId) return;
@@ -1720,7 +1806,7 @@ const model = {
     this._desktopHeartbeatMisses = 0;
 
     const tick = async () => {
-      if (!this.session || this.session.tab_id !== tabId || !this.hasOfficialOffice()) return;
+      if (!this.session || this.session.tab_id !== tabId || !this.hasOfficialOffice() || !this.isDesktopHostVisible()) return;
       try {
         const response = await callOffice("desktop_sync", {
           desktop_session_id: sessionId,
@@ -1773,8 +1859,12 @@ const model = {
     this.stopDesktopMonitor();
     this.stopDesktopResizeObserver();
     this.stopXpraDesktopPrime();
-    this.setMessage("Desktop is restarting");
-    await this.ensureDesktopSession({ force: true, select: this.activeTabId === tabId || Boolean(hiddenDesktopDocument) });
+    this.message = "Desktop is restarting";
+    await this.ensureDesktopSession({
+      force: true,
+      select: this.activeTabId === tabId || Boolean(hiddenDesktopDocument),
+      message: "Desktop is restarting",
+    });
     target._desktopClosed = false;
     await this.refresh();
   },

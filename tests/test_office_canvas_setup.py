@@ -13,6 +13,9 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     store = (PROJECT_ROOT / "plugins" / "_office" / "webui" / "office-store.js").read_text(
         encoding="utf-8",
     )
+    canvas_panel = (
+        PROJECT_ROOT / "plugins" / "_office" / "extensions" / "webui" / "right-canvas-panels" / "office-panel.html"
+    ).read_text(encoding="utf-8")
 
     assert "office-source-editor" in panel
     assert "data-office-source" in panel
@@ -47,10 +50,18 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "zoom: 1" not in store
     assert 'callOffice("desktop")' in store
     assert "ensureDesktopSession" in store
+    assert 'await this.onOpen({ source: "modal" });' in store
+    assert "setDesktopHostVisible" in store
+    assert "isDesktopHostVisible" in store
+    assert "clearDesktopViewportSyncTimers" in store
+    assert "setDesktopHostVisible" in canvas_panel
+    assert "Starting Agent Zero Desktop environment" in store
     assert "handleOfficialOfficeClosed" in store
     assert "ResizeObserver" in store
     assert "_desktopResizeSuspended" in store
     assert "_desktopResizePending" in store
+    assert "_desktopResizePendingKey" in store
+    assert "_desktopViewportSyncTimers" in store
     assert "shouldDeferDesktopResize" in store
     assert "right-canvas-resize-start" in store
     assert "right-canvas-resize-end" in store
@@ -91,6 +102,8 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "_desktopHeartbeatTimer" in store
     assert "office-modal-focus-button" in store
     assert "officialOfficeUrl" in store
+    assert 'parsed.searchParams.set("offscreen", secureContext ? "true" : "false")' in store
+    assert 'parsed.searchParams.set("clipboard_poll", secureContext ? "true" : "false")' in store
     assert "hasOfficialOffice" in store
     assert "isOfficeSocketData" in store
     assert "office_command" not in store
@@ -233,7 +246,7 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert '"quality": "85"' in primitive
     assert '"speed": "80"' in primitive
     assert '"printing": "true"' in primitive
-    assert "offscreen" in primitive
+    assert '"offscreen": "true"' in primitive
     assert "xpra" in desktop
     assert "xpra-html5" in desktop
     assert "Xvfb" in desktop

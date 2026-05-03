@@ -131,7 +131,7 @@ def session_url(token: str, *, title: str = "Desktop") -> str:
             "printing": "true",
             "file_transfer": "true",
             "sound": "false",
-            "offscreen": "false",
+            "offscreen": "true",
             "floating_menu": "false",
             "xpramenu": "false",
         },
