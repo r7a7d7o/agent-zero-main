@@ -1,4 +1,5 @@
 import asyncio
+import errno
 from dataclasses import dataclass
 import re
 import shlex
@@ -13,6 +14,17 @@ from helpers import plugins
 
 from plugins._code_execution.helpers.shell_local import LocalInteractiveSession
 from plugins._code_execution.helpers.shell_ssh import SSHInteractiveSession
+
+
+def _is_closed_pty_error(exc: BaseException) -> bool:
+    if isinstance(exc, RuntimeError) and "TTYSpawn PTY is closed" in str(exc):
+        return True
+    if isinstance(exc, OSError) and exc.errno in (errno.EBADF, errno.EIO, errno.EINVAL):
+        return True
+    cause = getattr(exc, "__cause__", None)
+    if cause and cause is not exc:
+        return _is_closed_pty_error(cause)
+    return False
 
 
 @dataclass
@@ -194,12 +206,12 @@ class CodeExecution(Tool):
                 )
 
             except Exception as e:
-                if i == 1:
-                    PrintStyle.error(str(e))
+                if _is_closed_pty_error(e) and i == 0:
+                    PrintStyle.warning(f"Terminal session {session} was closed; resetting and retrying once.")
                     await self.prepare_state(cfg, reset=True, session=session)
                     continue
-                else:
-                    raise e
+                PrintStyle.error(str(e))
+                raise
 
     def format_command_for_output(self, command: str):
         short_cmd = command[:250]
@@ -245,9 +257,19 @@ class CodeExecution(Tool):
 
         while True:
             await asyncio.sleep(sleep_time)
-            full_output, partial_output = await self.state.shells[session].session.read_output(
-                timeout=1, reset_full_output=reset_full_output
-            )
+            try:
+                full_output, partial_output = await self.state.shells[session].session.read_output(
+                    timeout=1, reset_full_output=reset_full_output
+                )
+            except Exception as e:
+                if _is_closed_pty_error(e):
+                    await self.prepare_state(cfg, reset=True, session=session)
+                    self.mark_session_idle(session)
+                    sysinfo = "Terminal session was closed and has been reset. Please run the command again."
+                    response = self.agent.read_prompt("fw.code.info.md", info=sysinfo)
+                    self.log.update(content=prefix + response)
+                    return response
+                raise
             reset_full_output = False  # only reset once
 
             await self.agent.handle_intervention()
@@ -364,9 +386,16 @@ class CodeExecution(Tool):
         prompt_patterns = cfg["prompt_patterns"]
         dialog_patterns = cfg["dialog_patterns"]
 
-        full_output, _ = await self.state.shells[session].session.read_output(
-            timeout=1, reset_full_output=reset_full_output
-        )
+        try:
+            full_output, _ = await self.state.shells[session].session.read_output(
+                timeout=1, reset_full_output=reset_full_output
+            )
+        except Exception as e:
+            if _is_closed_pty_error(e):
+                await self.prepare_state(cfg, reset=True, session=session)
+                self.mark_session_idle(session)
+                return None
+            raise
         truncated_output = self.fix_full_output(full_output)
         self.set_progress(truncated_output)
         heading = self.get_heading_from_output(truncated_output, 0)
