@@ -686,6 +686,8 @@ def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeyp
 
 def test_office_startup_defers_persistent_desktop_runtime(monkeypatch):
     calls = []
+    cleanup_calls = []
+    started_threads = []
     routes_module = types.ModuleType("plugins._office.helpers.libreoffice_desktop_routes")
     routes_module.install_route_hooks = lambda: calls.append("routes")
     monkeypatch.setitem(sys.modules, "plugins._office.helpers.libreoffice_desktop_routes", routes_module)
@@ -700,13 +702,34 @@ def test_office_startup_defers_persistent_desktop_runtime(monkeypatch):
     monkeypatch.setattr(
         office_startup.hooks,
         "cleanup_stale_runtime_state",
-        lambda: {"ok": True, "errors": [], "installed": [], "removed": []},
+        lambda: cleanup_calls.append("cleanup") or {"ok": True, "errors": [], "installed": [], "removed": []},
     )
+
+    class FakeThread:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+
+        def is_alive(self):
+            return False
+
+        def start(self):
+            started_threads.append(self)
+
+    monkeypatch.setattr(office_startup.threading, "Thread", FakeThread)
 
     office_startup.OfficeStartupCleanup(agent=None).execute()
 
     assert calls == ["routes"]
+    assert cleanup_calls == []
+    assert len(started_threads) == 1
+    assert started_threads[0].name == "a0-office-runtime-preparation"
+    assert started_threads[0].daemon is True
     assert not hasattr(office_startup, "libreoffice_desktop")
+
+    started_threads[0].target()
+    assert cleanup_calls == ["cleanup"]
 
 
 def test_cleanup_hook_reruns_when_stale_packages_exist_after_old_marker(tmp_path, monkeypatch):
