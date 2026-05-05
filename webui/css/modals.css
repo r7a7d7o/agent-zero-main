@@ -91,7 +91,9 @@ the old and the new system. */
 /* Modal Header */
 .modal-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: auto;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
@@ -150,7 +152,14 @@ the old and the new system. */
   background: color-mix(in srgb, var(--color-background-hover) 72%, transparent);
 }
 
-.modal-dock-button {
+.modal-surface-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.modal-dock-button,
+.modal-surface-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -168,14 +177,25 @@ the old and the new system. */
   transition: background-color 0.16s ease, border-color 0.16s ease, opacity 0.16s ease;
 }
 
-.modal-dock-button:hover {
+.modal-dock-button:hover,
+.modal-surface-button:hover,
+.modal-surface-button.is-active {
   opacity: 1;
   border-color: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
   background: color-mix(in srgb, var(--color-background-hover) 72%, transparent);
 }
 
-.modal-dock-button .material-symbols-outlined {
+.modal-dock-button .material-symbols-outlined,
+.modal-surface-button .material-symbols-outlined {
   font-size: 19px;
+}
+
+.modal-surface-image {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  object-fit: cover;
 }
 
 /* Modal Description */

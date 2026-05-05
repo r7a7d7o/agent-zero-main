@@ -30,8 +30,8 @@ body.right-canvas-resizing {
   display: flex;
   flex: 0 0 auto;
   height: 100%;
-  min-width: 52px;
-  max-width: min(900px, 58vw);
+  min-width: 0;
+  max-width: none;
   overflow: hidden;
   border-left: 1px solid var(--right-canvas-border);
   background: var(--right-canvas-chrome);

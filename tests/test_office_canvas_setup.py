@@ -416,7 +416,12 @@ def test_right_canvas_requires_explicit_open_and_is_absent_on_mobile():
     assert "right-canvas-resize-end" in canvas_store
     assert "dispatchResizeEvent" in canvas_store
     assert "this.isOpen = false;" in canvas_store
-    assert "wasMobileMode && this.width <= MIN_WIDTH" in canvas_store
+    assert "wasMobileMode && this.width < MIN_WIDTH" in canvas_store
+    assert "const MIN_WIDTH = 0" in canvas_store
+    assert "const MAX_WIDTH" not in canvas_store
+    assert "0.58" not in canvas_store
+    assert "min(900px, 58vw)" not in canvas_css
+    assert "max-width: none" in canvas_css
     assert "if (this.isMobileMode && !surface.actionOnly)" in canvas_store
     assert "if (this.isMobileMode)" in canvas_store
     assert "shouldRender()" in canvas_store

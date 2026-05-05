@@ -670,6 +670,7 @@ def test_browser_and_desktop_surface_buttons_remember_latest_window_mode():
         encoding="utf-8"
     )
     modals_js = (PROJECT_ROOT / "webui" / "js" / "modals.js").read_text(encoding="utf-8")
+    modals_css = (PROJECT_ROOT / "webui" / "css" / "modals.css").read_text(encoding="utf-8")
 
     assert "surfaceModes: {}" in canvas_store
     assert "recordSurfaceMode(surfaceId" in canvas_store
@@ -685,11 +686,21 @@ def test_browser_and_desktop_surface_buttons_remember_latest_window_mode():
     assert '@click="$store.rightCanvas.open(surface.id)"' in canvas_html
 
     assert 'rightCanvasStore.recordSurfaceMode?.(metadata.surfaceId, "modal")' in modals_js
+    assert "configureModalSurfaceSwitcher" in modals_js
+    assert "modal-surface-switcher" in modals_js
+    assert "modal-surface-button" in modals_js
+    assert "rightCanvasStore.panelSurfaces" in modals_js
+    assert 'rightCanvasStore.recordSurfaceMode?.(surface.id, "modal")' in modals_js
+    assert "await closeModal(modal.path)" in modals_js
     assert "modalRequiresExplicitClose" in modals_js
     assert '"plugins/_browser/webui/main.html"' in modals_js
     assert '"plugins/_office/webui/main.html"' in modals_js
     assert "&& !modalRequiresExplicitClose(newModal)" in modals_js
     assert "if (modalRequiresExplicitClose(modalStack[modalStack.length - 1])) return;" in modals_js
+    assert ".modal-surface-switcher" in modals_css
+    assert ".modal-surface-button.is-active" in modals_css
+    assert ".modal-surface-image" in modals_css
+    assert "grid-auto-flow: column" in modals_css
 
 
 def test_browser_tool_does_not_auto_open_canvas_policy_is_documented():

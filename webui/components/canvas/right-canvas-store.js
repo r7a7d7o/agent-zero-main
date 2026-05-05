@@ -3,8 +3,7 @@ import { callJsExtensions } from "/js/extensions.js";
 
 const STORAGE_KEY = "a0.rightCanvas";
 const DEFAULT_WIDTH = 720;
-const MIN_WIDTH = 420;
-const MAX_WIDTH = 900;
+const MIN_WIDTH = 0;
 const DESKTOP_BREAKPOINT = 1200;
 const MOBILE_BREAKPOINT = 768;
 const SURFACE_MODE_CANVAS = "canvas";
@@ -16,6 +15,12 @@ function clamp(value, min, max) {
 
 function viewportWidth() {
   return Math.max(document.documentElement.clientWidth || 0, globalThis.innerWidth || 0);
+}
+
+function normalizeWidth(value, fallback = DEFAULT_WIDTH) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const width = Number(value);
+  return Number.isFinite(width) ? Math.max(MIN_WIDTH, Math.round(width)) : fallback;
 }
 
 function normalizeSurfaceMode(mode = "") {
@@ -306,15 +311,22 @@ const model = {
 
   setWidth(px, options = {}) {
     const { persist = true } = options;
-    const max = this.maxWidth();
-    const next = clamp(Number(px) || DEFAULT_WIDTH, MIN_WIDTH, max);
+    const next = clamp(normalizeWidth(px), MIN_WIDTH, this.maxWidth());
     this.width = next;
     this.applyLayoutState();
     if (persist) this.persist();
   },
 
   maxWidth() {
-    return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.floor(viewportWidth() * 0.58)));
+    if (this.isOverlayMode) {
+      return Math.max(MIN_WIDTH, viewportWidth() - 44);
+    }
+
+    const container = this._rootElement?.closest(".container");
+    const rightPanel = document.getElementById("right-panel");
+    const containerRight = container?.getBoundingClientRect().right ?? viewportWidth();
+    const panelLeft = rightPanel?.getBoundingClientRect().left ?? 0;
+    return Math.max(MIN_WIDTH, Math.floor(containerRight - panelLeft));
   },
 
   defaultWidth() {
@@ -387,7 +399,7 @@ const model = {
           normalizeSurfaceMode(mode),
         ]),
       );
-      if (saved.width) this.width = Number(saved.width);
+      if (Number.isFinite(Number(saved.width))) this.width = Number(saved.width);
     } catch (error) {
       console.warn("Could not restore right canvas state", error);
     }
@@ -409,7 +421,7 @@ const model = {
           surface.close?.({ ...payload, reason: "mobile" });
         }, 0);
       }
-    } else if (wasMobileMode && this.width <= MIN_WIDTH) {
+    } else if (wasMobileMode && this.width < MIN_WIDTH) {
       this.width = this.defaultWidth();
     }
   },

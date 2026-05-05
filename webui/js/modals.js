@@ -14,6 +14,10 @@ function normalizeModalPath(modalPath = "") {
   return String(modalPath || "").replace(/^\/+/, "");
 }
 
+function sameModalPath(left = "", right = "") {
+  return normalizeModalPath(left) === normalizeModalPath(right);
+}
+
 function modalRequiresExplicitClose(modalOrElement) {
   const element = modalOrElement?.element || modalOrElement;
   const path = normalizeModalPath(modalOrElement?.path || element?.path || "");
@@ -23,7 +27,7 @@ function modalRequiresExplicitClose(modalOrElement) {
 }
 
 function findModalIndexByPath(modalPath) {
-  return modalStack.findIndex((modal) => modal.path === modalPath);
+  return modalStack.findIndex((modal) => sameModalPath(modal.path, modalPath));
 }
 
 function focusModal(modalPath) {
@@ -201,8 +205,102 @@ function getDockMetadata(doc, modalPath) {
   };
 }
 
-function configureModalDockButton(modal, doc) {
+function getModalSwitchSurfaces(metadata) {
+  if (!metadata) return [];
+  const surfaces = Array.isArray(rightCanvasStore.panelSurfaces)
+    ? rightCanvasStore.panelSurfaces
+    : [];
+  const modalSurfaces = surfaces.filter((surface) => (
+    surface?.id
+    && surface?.modalPath
+    && !surface.actionOnly
+  ));
+
+  if (modalSurfaces.some((surface) => surface.id === metadata.surfaceId)) {
+    return modalSurfaces;
+  }
+
+  return [
+    {
+      id: metadata.surfaceId,
+      title: metadata.title,
+      icon: metadata.icon,
+      modalPath: metadata.modalPath,
+    },
+    ...modalSurfaces,
+  ];
+}
+
+function createModalSurfaceButton(surface, metadata, modal) {
+  const title = surface.title || surface.id;
+  const targetModalPath = surface.modalPath || "";
+  const isActive = surface.id === metadata.surfaceId || sameModalPath(targetModalPath, modal.path);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "modal-surface-button";
+  button.dataset.canvasSurface = surface.id;
+  button.title = title;
+  button.setAttribute("aria-label", title);
+  button.setAttribute("aria-pressed", isActive.toString());
+  if (isActive) button.classList.add("is-active");
+
+  if (surface.image) {
+    const image = document.createElement("img");
+    image.className = "modal-surface-image";
+    image.src = surface.image;
+    image.alt = "";
+    image.setAttribute("aria-hidden", "true");
+    button.appendChild(image);
+  } else {
+    const icon = document.createElement("span");
+    icon.className = "material-symbols-outlined";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = surface.icon || "web_asset";
+    button.appendChild(icon);
+  }
+
+  button.addEventListener("click", async () => {
+    if (button.disabled || isActive || !targetModalPath) return;
+    button.disabled = true;
+    try {
+      rightCanvasStore.recordSurfaceMode?.(surface.id, "modal");
+      const openPromise = ensureModalOpen(targetModalPath);
+      if (openPromise?.catch) {
+        openPromise.catch((error) => console.error(`Modal surface ${surface.id} failed to open`, error));
+      }
+      await closeModal(modal.path);
+    } finally {
+      if (document.contains(button)) button.disabled = false;
+    }
+  });
+
+  return button;
+}
+
+function configureModalSurfaceSwitcher(modal, doc) {
   const metadata = getDockMetadata(doc, modal.path);
+  if (!metadata || !modal.header || modal.header.querySelector(".modal-surface-switcher")) {
+    return metadata;
+  }
+
+  const surfaces = getModalSwitchSurfaces(metadata);
+  if (surfaces.length <= 1) return metadata;
+
+  const switcher = document.createElement("div");
+  switcher.className = "modal-surface-switcher";
+  switcher.setAttribute("role", "group");
+  switcher.setAttribute("aria-label", "Modal surfaces");
+
+  for (const surface of surfaces) {
+    switcher.appendChild(createModalSurfaceButton(surface, metadata, modal));
+  }
+
+  modal.close?.insertAdjacentElement("beforebegin", switcher);
+  return metadata;
+}
+
+function configureModalDockButton(modal, doc) {
+  const metadata = configureModalSurfaceSwitcher(modal, doc);
   if (!metadata || !modal.header || modal.header.querySelector(".modal-dock-button")) {
     return;
   }
