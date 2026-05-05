@@ -14,22 +14,48 @@ class Browser(Tool):
         browser_id: int | str | None = None,
         url: str = "",
         ref: int | str | None = None,
+        target_ref: int | str | None = None,
         text: str = "",
         selector: str = "",
         selectors: list[str] | None = None,
         script: str = "",
         modifiers: list[str] | str | None = None,
         keys: list[str] | None = None,
+        key: str = "",
         include_content: bool = False,
         focus_popup: bool | None = None,
         event_type: str = "",
         x: float = 0.0,
         y: float = 0.0,
+        to_x: float = 0.0,
+        to_y: float = 0.0,
+        offset_x: float = 0.0,
+        offset_y: float = 0.0,
+        target_offset_x: float = 0.0,
+        target_offset_y: float = 0.0,
+        delta_x: float = 0.0,
+        delta_y: float = 0.0,
         button: str = "left",
+        quality: int = 80,
+        full_page: bool = False,
+        path: str = "",
+        paths: list[str] | None = None,
+        value: str = "",
+        values: list[str] | None = None,
+        checked: bool | None = None,
+        width: int = 0,
+        height: int = 0,
         calls: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> Response:
-        action = str(action or self.method or "state").strip().lower().replace("-", "_")
+        method_action = str(self.method or "").strip().lower().replace("-", "_")
+        requested_action = str(action or "").strip().lower().replace("-", "_")
+        clipboard_action = ""
+        if method_action == "clipboard" and requested_action in {"copy", "cut", "paste"}:
+            clipboard_action = requested_action
+            action = "clipboard"
+        else:
+            action = str(action or self.method or "state").strip().lower().replace("-", "_")
         runtime = await get_runtime(self.agent.context.id)
 
         if isinstance(modifiers, str):
@@ -40,6 +66,14 @@ class Browser(Tool):
         try:
             if action == "open":
                 result = await runtime.call("open", url or "")
+            elif action == "screenshot":
+                result = await runtime.call(
+                    "screenshot_file",
+                    browser_id,
+                    quality=quality,
+                    full_page=full_page,
+                    path=path,
+                )
             elif action == "list":
                 result = await runtime.call("list", include_content=bool(include_content))
             elif action == "state":
@@ -86,6 +120,115 @@ class Browser(Tool):
                 if not keys:
                     raise ValueError("key_chord requires non-empty 'keys' list")
                 result = await runtime.call("key_chord", browser_id, list(keys))
+            elif action == "hover":
+                result = await runtime.call(
+                    "hover",
+                    browser_id,
+                    ref=ref,
+                    x=x,
+                    y=y,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                )
+            elif action == "double_click":
+                result = await runtime.call(
+                    "double_click",
+                    browser_id,
+                    ref=ref,
+                    x=x,
+                    y=y,
+                    button=button or "left",
+                    modifiers=modifiers,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                )
+            elif action == "right_click":
+                result = await runtime.call(
+                    "right_click",
+                    browser_id,
+                    ref=ref,
+                    x=x,
+                    y=y,
+                    modifiers=modifiers,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                )
+            elif action == "drag":
+                result = await runtime.call(
+                    "drag",
+                    browser_id,
+                    ref=ref,
+                    target_ref=target_ref,
+                    x=x,
+                    y=y,
+                    to_x=to_x,
+                    to_y=to_y,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                    target_offset_x=target_offset_x,
+                    target_offset_y=target_offset_y,
+                )
+            elif action == "wheel":
+                result = await runtime.call(
+                    "wheel",
+                    browser_id,
+                    x,
+                    y,
+                    delta_x,
+                    delta_y,
+                )
+            elif action == "keyboard":
+                result = await runtime.call(
+                    "keyboard",
+                    browser_id,
+                    key=key,
+                    text=text,
+                )
+            elif action == "clipboard":
+                normalized_clipboard_action = clipboard_action or str(
+                    kwargs.get("clipboard_action")
+                    or kwargs.get("operation")
+                    or event_type
+                    or ""
+                ).strip().lower()
+                result = await runtime.call(
+                    "clipboard",
+                    browser_id,
+                    action=normalized_clipboard_action,
+                    text=text,
+                )
+            elif action in {"copy", "cut", "paste"}:
+                result = await runtime.call(
+                    "clipboard",
+                    browser_id,
+                    action=action,
+                    text=text,
+                )
+            elif action == "set_viewport":
+                result = await runtime.call("set_viewport", browser_id, width, height)
+            elif action == "select_option":
+                result = await runtime.call(
+                    "select_option",
+                    browser_id,
+                    self._require_ref(ref),
+                    value=value,
+                    values=values,
+                )
+            elif action == "set_checked":
+                result = await runtime.call(
+                    "set_checked",
+                    browser_id,
+                    self._require_ref(ref),
+                    checked=True if checked is None else bool(checked),
+                )
+            elif action == "upload_file":
+                result = await runtime.call(
+                    "upload_file",
+                    browser_id,
+                    self._require_ref(ref),
+                    path=path,
+                    paths=paths,
+                )
             elif action == "mouse":
                 result = await runtime.call(
                     "mouse", browser_id, event_type or "click", x, y,

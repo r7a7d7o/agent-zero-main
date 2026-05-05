@@ -733,8 +733,30 @@ def test_browser_tool_does_not_auto_open_canvas_policy_is_documented():
     assert "must not open the right canvas automatically" in prompt
     assert "Use the tool headlessly unless the user opens the Browser canvas" in prompt
     assert "optional visible WebUI viewer" in prompt
+    assert "screenshot" in prompt
+    assert "vision_load" in prompt
+    assert "select_option" in prompt
+    assert "set_checked" in prompt
+    assert "upload_file" in prompt
+    assert "browser-forms" in prompt
+    assert "does not automatically load screenshots" in prompt
     assert "already open" in config
     assert "already-open Browser canvas" in config_html
+
+
+def test_browser_forms_skill_is_plugin_owned_and_discoverable():
+    skill_path = PROJECT_ROOT / "plugins" / "_browser" / "skills" / "browser-forms" / "SKILL.md"
+    assert skill_path.exists()
+    skill = skill_path.read_text(encoding="utf-8")
+    assert skill.startswith("---\n")
+    frontmatter = skill.split("---", 2)[1]
+    assert "name: browser-forms" in frontmatter
+    assert "description:" in frontmatter
+    assert "select_option" in skill
+    assert "set_checked" in skill
+    assert "upload_file" in skill
+    assert "browser:screenshot" in skill
+    assert "vision_load" in skill
 
 
 def test_browser_canvas_uses_plain_panel_without_debug_probe():
@@ -1014,8 +1036,24 @@ def test_browser_runtime_and_content_helper_expose_annotation_target():
     assert "function annotate(payload = null)" in helper
     assert "annotate," in helper
     assert "boundingBoxFor," in helper
+    assert "pointFor," in helper
+    assert "select(referenceId, valueOrValues)" in helper
+    assert "setChecked(referenceId, checked)" in helper
+    assert "fileInputFor," in helper
     assert "sanitizeAnnotationDom" in helper
     assert "password" in helper
+
+
+def test_browser_content_helper_keeps_label_wrapped_controls_referenceable():
+    helper = (
+        PROJECT_ROOT / "plugins" / "_browser" / "assets" / "browser-page-content.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'const VERSION = "11"' in helper
+    assert "function renderControlLabelReferences" in helper
+    assert "getLabelElementText(labelElement, element)" in helper
+    assert "return renderControlLabelReferences(node, context);" in helper
+    assert "return renderControlLabelReferences(element, context);" in helper
 
 
 def test_browser_runtime_requires_current_content_helper_for_modifier_clicks():
@@ -1346,6 +1384,164 @@ async def test_browser_tool_dispatches_direct_actions(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_browser_tool_dispatches_v1_agent_actions(monkeypatch):
+    calls = []
+
+    class FakeRuntime:
+        async def call(self, method, *args, **kwargs):
+            calls.append((method, args, kwargs))
+            return {"ok": True, "method": method, "args": args, "kwargs": kwargs}
+
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx"
+        return FakeRuntime()
+
+    monkeypatch.setattr(browser_tool_module, "get_runtime", fake_get_runtime)
+    agent = SimpleNamespace(context=SimpleNamespace(id="ctx"))
+
+    async def execute(**kwargs):
+        tool = browser_tool_module.Browser(
+            agent=agent,
+            name="browser",
+            method=kwargs.pop("_method", None),
+            args={},
+            message="",
+            loop_data=None,
+        )
+        response = await tool.execute(**kwargs)
+        assert response.break_loop is False
+
+    await execute(action="screenshot", browser_id=1, quality=91, full_page=True, path="/tmp/a.jpg")
+    await execute(action="hover", browser_id=1, ref=2, offset_x=3, offset_y=4)
+    await execute(action="double_click", browser_id=1, x=10, y=20, button="left", modifiers=["Shift"])
+    await execute(action="right_click", browser_id=1, ref=3, modifiers="Control")
+    await execute(action="drag", browser_id=1, ref=4, target_ref=5, target_offset_x=6, target_offset_y=7)
+    await execute(action="wheel", browser_id=1, x=8, y=9, delta_x=1, delta_y=2)
+    await execute(action="keyboard", browser_id=1, key="Enter")
+    await execute(_method="clipboard", action="paste", browser_id=1, text="hello")
+    await execute(action="copy", browser_id=1)
+    await execute(action="set_viewport", browser_id=1, width=1280, height=720)
+    await execute(action="select_option", browser_id=1, ref=6, value="CA")
+    await execute(action="set_checked", browser_id=1, ref=7, checked=False)
+    await execute(action="upload_file", browser_id=1, ref=8, paths=["/tmp/a.txt"])
+
+    assert calls == [
+        ("screenshot_file", (1,), {"quality": 91, "full_page": True, "path": "/tmp/a.jpg"}),
+        ("hover", (1,), {"ref": 2, "x": 0.0, "y": 0.0, "offset_x": 3, "offset_y": 4}),
+        (
+            "double_click",
+            (1,),
+            {
+                "ref": None,
+                "x": 10,
+                "y": 20,
+                "button": "left",
+                "modifiers": ["Shift"],
+                "offset_x": 0.0,
+                "offset_y": 0.0,
+            },
+        ),
+        (
+            "right_click",
+            (1,),
+            {
+                "ref": 3,
+                "x": 0.0,
+                "y": 0.0,
+                "modifiers": ["Control"],
+                "offset_x": 0.0,
+                "offset_y": 0.0,
+            },
+        ),
+        (
+            "drag",
+            (1,),
+            {
+                "ref": 4,
+                "target_ref": 5,
+                "x": 0.0,
+                "y": 0.0,
+                "to_x": 0.0,
+                "to_y": 0.0,
+                "offset_x": 0.0,
+                "offset_y": 0.0,
+                "target_offset_x": 6,
+                "target_offset_y": 7,
+            },
+        ),
+        ("wheel", (1, 8, 9, 1, 2), {}),
+        ("keyboard", (1,), {"key": "Enter", "text": ""}),
+        ("clipboard", (1,), {"action": "paste", "text": "hello"}),
+        ("clipboard", (1,), {"action": "copy", "text": ""}),
+        ("set_viewport", (1, 1280, 720), {}),
+        ("select_option", (1, 6), {"value": "CA", "values": None}),
+        ("set_checked", (1, 7), {"checked": False}),
+        ("upload_file", (1, 8), {"path": "", "paths": ["/tmp/a.txt"]}),
+    ]
+
+
+@pytest.mark.anyio
+async def test_browser_multi_dispatch_accepts_v1_actions():
+    calls = []
+    core = _BrowserRuntimeCore("ctx")
+
+    async def record(method):
+        async def inner(*args, **kwargs):
+            calls.append((method, args, kwargs))
+            return {"method": method}
+        return inner
+
+    for method in (
+        "screenshot_file",
+        "hover",
+        "double_click",
+        "right_click",
+        "drag",
+        "wheel",
+        "keyboard",
+        "clipboard",
+        "set_viewport",
+        "select_option",
+        "set_checked",
+        "upload_file",
+    ):
+        setattr(core, method, await record(method))
+
+    results = await core.multi(
+        [
+            {"action": "screenshot", "browser_id": 1, "quality": 5, "full_page": True},
+            {"action": "hover", "browser_id": 1, "ref": 2},
+            {"action": "double_click", "browser_id": 1, "x": 1, "y": 2},
+            {"action": "right_click", "browser_id": 1, "ref": 3},
+            {"action": "drag", "browser_id": 1, "ref": 4, "target_ref": 5},
+            {"action": "wheel", "browser_id": 1, "delta_y": 100},
+            {"action": "keyboard", "browser_id": 1, "key": "Enter"},
+            {"action": "paste", "browser_id": 1, "text": "x"},
+            {"action": "set_viewport", "browser_id": 1, "width": 640, "height": 480},
+            {"action": "select_option", "browser_id": 1, "ref": 6, "values": ["a", "b"]},
+            {"action": "set_checked", "browser_id": 1, "ref": 7, "checked": False},
+            {"action": "upload_file", "browser_id": 1, "ref": 8, "path": "/tmp/file.txt"},
+        ]
+    )
+
+    assert all(result["ok"] for result in results)
+    assert [call[0] for call in calls] == [
+        "screenshot_file",
+        "hover",
+        "double_click",
+        "right_click",
+        "drag",
+        "wheel",
+        "keyboard",
+        "clipboard",
+        "set_viewport",
+        "select_option",
+        "set_checked",
+        "upload_file",
+    ]
+
+
+@pytest.mark.anyio
 async def test_browser_viewer_subscribe_unregisters_stream(monkeypatch):
     class FakeRuntime:
         def __init__(self) -> None:
@@ -1639,6 +1835,137 @@ async def test_browser_runtime_remounts_initial_changed_viewport():
     ]
     assert stopped == [7]
     assert settled == [True]
+
+
+@pytest.mark.anyio
+async def test_browser_runtime_screenshot_file_writes_without_base64(monkeypatch, tmp_path):
+    screenshot_calls = []
+
+    def fake_get_abs_path(*parts):
+        return str(tmp_path.joinpath(*parts))
+
+    def fake_normalize_a0_path(path):
+        return "/a0/" + str(Path(path).relative_to(tmp_path)).replace("\\", "/")
+
+    monkeypatch.setattr(browser_runtime_module.files, "get_abs_path", fake_get_abs_path)
+    monkeypatch.setattr(browser_runtime_module.files, "normalize_a0_path", fake_normalize_a0_path)
+
+    class FakePage:
+        url = "about:blank"
+        viewport_size = {"width": 1024, "height": 768}
+
+        async def screenshot(self, **kwargs):
+            screenshot_calls.append(kwargs)
+            Path(kwargs["path"]).parent.mkdir(parents=True, exist_ok=True)
+            Path(kwargs["path"]).write_bytes(b"image-bytes")
+            return b"image-bytes"
+
+        async def title(self):
+            return "Blank"
+
+        async def evaluate(self, script, payload=None):
+            return 1
+
+    core = _BrowserRuntimeCore("ctx/id")
+    core.context = object()
+    core.pages[5] = browser_runtime_module.BrowserPage(id=5, page=FakePage())
+
+    result = await core.screenshot_file(5, quality=500)
+
+    path = Path(result["path"])
+    assert path.exists()
+    assert path.parent == tmp_path / "tmp" / "browser" / "screenshots" / "ctx_id"
+    assert path.name.startswith("browser-5-")
+    assert path.suffix == ".jpg"
+    assert result["a0_path"].startswith("/a0/tmp/browser/screenshots/ctx_id/browser-5-")
+    assert result["mime"] == "image/jpeg"
+    assert result["vision_load"] == {
+        "tool_name": "vision_load",
+        "tool_args": {"paths": [result["path"]]},
+    }
+    assert "image" not in result
+    assert screenshot_calls[-1]["type"] == "jpeg"
+    assert screenshot_calls[-1]["quality"] == 95
+    assert screenshot_calls[-1]["full_page"] is False
+
+    png_path = tmp_path / "custom.png"
+    png_result = await core.screenshot_file(5, quality=1, full_page=True, path=str(png_path))
+
+    assert png_result["path"] == str(png_path)
+    assert png_result["mime"] == "image/png"
+    assert screenshot_calls[-1] == {
+        "path": str(png_path),
+        "type": "png",
+        "full_page": True,
+    }
+
+
+@pytest.mark.anyio
+async def test_browser_runtime_ref_point_resolution_applies_offsets():
+    eval_payloads = []
+    moves = []
+
+    class FakeMouse:
+        async def move(self, x, y, **kwargs):
+            moves.append((x, y, kwargs))
+
+    class FakePage:
+        url = "about:blank"
+
+        def __init__(self):
+            self.mouse = FakeMouse()
+
+        async def evaluate(self, script, payload=None):
+            eval_payloads.append((script, payload))
+            if payload and "offsets" in payload:
+                return {
+                    "x": 10 + payload["offsets"]["offset_x"],
+                    "y": 20 + payload["offsets"]["offset_y"],
+                    "rect": {"x": 10, "y": 20, "width": 100, "height": 40},
+                    "selector": "#target",
+                }
+            return 1
+
+        async def title(self):
+            return "Blank"
+
+    core = _BrowserRuntimeCore("ctx")
+    core.context = object()
+    core.pages[7] = browser_runtime_module.BrowserPage(id=7, page=FakePage())
+    core._ensure_content_helper = lambda _page: asyncio.sleep(0)
+
+    result = await core.hover(7, ref=4, offset_x=3, offset_y=5)
+
+    assert moves == [(13.0, 25.0, {})]
+    assert result["action"]["point"]["selector"] == "#target"
+    assert eval_payloads[0][1] == {
+        "ref": 4,
+        "offsets": {
+            "offset_x": 3.0,
+            "offset_y": 5.0,
+            "useOffsets": True,
+        },
+    }
+
+
+def test_browser_runtime_upload_path_normalization(monkeypatch, tmp_path):
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("one", encoding="utf-8")
+    second.write_text("two", encoding="utf-8")
+
+    monkeypatch.setattr(
+        browser_runtime_module.files,
+        "get_abs_path",
+        lambda *parts: str(tmp_path.joinpath(*parts)),
+    )
+
+    assert _BrowserRuntimeCore._normalize_upload_paths(path=str(first)) == [str(first)]
+    assert _BrowserRuntimeCore._normalize_upload_paths(paths=["second.txt"]) == [str(second)]
+    assert _BrowserRuntimeCore._normalize_upload_paths(path=str(first), paths=["second.txt"]) == [
+        str(second),
+        str(first),
+    ]
 
 
 @pytest.mark.anyio

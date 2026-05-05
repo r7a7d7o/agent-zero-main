@@ -1,7 +1,7 @@
 (() => {
   const GLOBAL_KEY = "__spaceBrowserPageContent__";
   const DOM_HELPER_KEY = "__spaceBrowserDomHelper__";
-  const VERSION = "9";
+  const VERSION = "11";
   const BLOCK_TAGS = new Set([
     "ADDRESS",
     "ARTICLE",
@@ -779,6 +779,44 @@
     return INTERACTIVE_ROLES.has(role) || hasInteractiveEventHandler(element);
   }
 
+  function isFileInputElement(element) {
+    return getTagName(element) === "INPUT"
+      && String(element.getAttribute?.("type") || element.type || "").toLowerCase() === "file";
+  }
+
+  function getAssociatedLabelFileInput(labelElement) {
+    if (getTagName(labelElement) !== "LABEL") {
+      return null;
+    }
+
+    if (isFileInputElement(labelElement.control)) {
+      return labelElement.control;
+    }
+
+    const descendantInput = labelElement.querySelector?.("input[type='file']");
+    if (isFileInputElement(descendantInput)) {
+      return descendantInput;
+    }
+
+    const forId = normalizeAttributeText(labelElement.getAttribute?.("for"));
+    if (!forId) {
+      return null;
+    }
+
+    return isFileInputElement(labelElement.ownerDocument?.getElementById?.(forId))
+      ? labelElement.ownerDocument.getElementById(forId)
+      : null;
+  }
+
+  function isFileInputLabel(element) {
+    if (getTagName(element) !== "LABEL" || isHiddenElement(element)) {
+      return false;
+    }
+
+    const input = getAssociatedLabelFileInput(element);
+    return Boolean(input && isHiddenElement(input));
+  }
+
   function getComputedStyleSafe(element) {
     try {
       return globalThis.getComputedStyle?.(element) || null;
@@ -1048,6 +1086,33 @@
     return readableText || normalizeText(element?.textContent || "");
   }
 
+  function isLabelableControlForText(element) {
+    return ["BUTTON", "INPUT", "METER", "OUTPUT", "PROGRESS", "SELECT", "TEXTAREA"].includes(getTagName(element));
+  }
+
+  function getLabelElementText(labelElement, controlElement = null) {
+    const collect = (node) => {
+      if (isTextNode(node)) {
+        return node.textContent || "";
+      }
+
+      if (!isElementNode(node) || isHiddenElement(node)) {
+        return "";
+      }
+
+      if (node !== labelElement && (node === controlElement || isLabelableControlForText(node))) {
+        return "";
+      }
+
+      return getReadableChildNodes(node)
+        .map((childNode) => collect(childNode))
+        .filter(Boolean)
+        .join(" ");
+    };
+
+    return normalizeText(collect(labelElement)) || getElementText(labelElement);
+  }
+
   function collectLabelCandidates(element, options = {}) {
     const includeAlt = options.includeAlt !== false;
     const includeDescendantImageAlt = options.includeDescendantImageAlt !== false;
@@ -1058,7 +1123,7 @@
     try {
       if (Array.isArray(element?.labels) || typeof element?.labels?.forEach === "function") {
         element.labels.forEach((labelElement) => {
-          const text = getElementText(labelElement);
+          const text = getLabelElementText(labelElement, element);
           if (text) {
             collectedLabels.push(text);
           }
@@ -1191,6 +1256,10 @@
       }
 
       return `input ${inputType || "text"}`;
+    }
+
+    if (tagName === "LABEL" && isFileInputLabel(element)) {
+      return "file input label";
     }
 
     if (String(element.getAttribute?.("contenteditable") || "").toLowerCase() === "true") {
@@ -1493,7 +1562,47 @@
   }
 
   function isReferenceableElement(element) {
-    return isInteractiveElement(element) || getTagName(element) === "IMG";
+    return isInteractiveElement(element) || getTagName(element) === "IMG" || isFileInputLabel(element);
+  }
+
+  function collectLabelControlElements(labelElement) {
+    const controls = [];
+    const seen = new Set();
+    const addControl = (element) => {
+      if (!isElementNode(element) || seen.has(element) || !isReferenceableElement(element)) {
+        return;
+      }
+
+      seen.add(element);
+      controls.push(element);
+    };
+
+    [
+      "input",
+      "textarea",
+      "select",
+      "button",
+      "summary",
+      "a[href]",
+      "[role]",
+      "[contenteditable='true']",
+      "[contenteditable='']"
+    ].forEach((selector) => {
+      try {
+        [...(labelElement.querySelectorAll?.(selector) || [])].forEach(addControl);
+      } catch {
+        // Ignore unsupported selectors in unusual DOMs.
+      }
+    });
+
+    return controls;
+  }
+
+  function renderControlLabelReferences(labelElement, context) {
+    return collectLabelControlElements(labelElement)
+      .map((controlElement) => renderReference(controlElement, context))
+      .filter(Boolean)
+      .join("\n");
   }
 
   function renderInlineNode(node, context) {
@@ -1517,7 +1626,7 @@
     const tagName = getTagName(node);
 
     if (tagName === "LABEL" && (node.getAttribute?.("for") || node.querySelector?.("input, textarea, select, button"))) {
-      return "";
+      return renderControlLabelReferences(node, context);
     }
 
     if (tagName === "BR") {
@@ -1693,7 +1802,7 @@
     const tagName = getTagName(element);
 
     if (tagName === "LABEL" && (element.getAttribute?.("for") || element.querySelector?.("input, textarea, select, button"))) {
-      return "";
+      return renderControlLabelReferences(element, context);
     }
 
     if (/^H[1-6]$/u.test(tagName)) {
@@ -2173,6 +2282,443 @@
       height: hasBox ? r.height : 0,
       selector: selector || null
     };
+  }
+
+  function pointFor(referenceId, offsets = {}) {
+    const entry = requireReferenceEntry(referenceId, {
+      actionLabel: "point",
+      requireConnected: true
+    });
+    if (entry.helperBacked || !entry.element) {
+      throw createNamedError(
+        "BrowserPageContentActionError",
+        `Browser page content cannot resolve point for helper-backed reference "${entry.referenceId}".`,
+        {
+          code: "browser_page_content_point_helper_backed"
+        }
+      );
+    }
+
+    const element = entry.element;
+    scrollElementIntoView(element);
+    const rect = getElementRectSafe(element);
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      throw createNamedError(
+        "BrowserPageContentActionError",
+        `Browser page content reference "${entry.referenceId}" has no visible viewport box.`,
+        {
+          code: "browser_page_content_point_no_box"
+        }
+      );
+    }
+
+    const offsetX = Number(offsets?.offset_x ?? offsets?.offsetX ?? 0) || 0;
+    const offsetY = Number(offsets?.offset_y ?? offsets?.offsetY ?? 0) || 0;
+    const useOffsets = offsets?.useOffsets === true || offsetX !== 0 || offsetY !== 0;
+    return {
+      rect,
+      selector: computeStableSelector(element),
+      x: rect.x + (useOffsets ? offsetX : rect.width / 2),
+      y: rect.y + (useOffsets ? offsetY : rect.height / 2)
+    };
+  }
+
+  function normalizeActionValues(valueOrValues) {
+    if (Array.isArray(valueOrValues)) {
+      return valueOrValues.map((value) => String(value ?? ""));
+    }
+
+    if (valueOrValues === null || valueOrValues === undefined) {
+      return [];
+    }
+
+    return [String(valueOrValues)];
+  }
+
+  function optionMatchesValue(option, value) {
+    const normalizedValue = normalizeText(value);
+    const candidates = [
+      option?.value,
+      option?.label,
+      option?.textContent,
+      option?.getAttribute?.("aria-label"),
+      option?.getAttribute?.("data-value"),
+      option?.getAttribute?.("id")
+    ].map((candidate) => normalizeText(candidate));
+    return candidates.some((candidate) => candidate === normalizedValue);
+  }
+
+  function findNativeSelectOption(selectElement, value) {
+    const options = [...(selectElement.options || [])];
+    return options.find((option) => optionMatchesValue(option, value)) || null;
+  }
+
+  function setNativeChecked(element, checked) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis.HTMLInputElement?.prototype || {}, "checked");
+    if (typeof descriptor?.set === "function") {
+      descriptor.set.call(element, Boolean(checked));
+    } else {
+      element.checked = Boolean(checked);
+    }
+  }
+
+  async function selectNativeElement(entry, values) {
+    const element = entry.element;
+    const beforeSnapshot = captureActionEffectSnapshot(element);
+    const requestedValues = values.length ? values : [""];
+    const appliedValues = [];
+
+    const {
+      observedMutations
+    } = await withObservedActionWindow(beforeSnapshot.observationRoot, async () => {
+      scrollElementIntoView(element);
+      focusElement(element);
+
+      if (element.multiple) {
+        const matchedOptions = requestedValues.map((requestedValue) => {
+          const option = findNativeSelectOption(element, requestedValue);
+          if (!option) {
+            throw createNamedError(
+              "BrowserPageContentActionError",
+              `Browser page content could not find select option "${requestedValue}".`,
+              {
+                code: "browser_page_content_select_option_not_found"
+              }
+            );
+          }
+          return option;
+        });
+        const matchedSet = new Set(matchedOptions);
+        [...(element.options || [])].forEach((option) => {
+          option.selected = matchedSet.has(option);
+        });
+        matchedOptions.forEach((option) => appliedValues.push(option.value));
+      } else {
+        const option = findNativeSelectOption(element, requestedValues[0]);
+        if (!option) {
+          throw createNamedError(
+            "BrowserPageContentActionError",
+            `Browser page content could not find select option "${requestedValues[0]}".`,
+            {
+              code: "browser_page_content_select_option_not_found"
+            }
+          );
+        }
+        appliedValues.push(setNativeValue(element, option.value));
+      }
+
+      dispatchDomEvent(element, "input", "InputEvent", {
+        inputType: "insertReplacementText"
+      });
+      dispatchDomEvent(element, "change");
+      return appliedValues.slice();
+    });
+
+    refreshReferenceEntry(entry);
+    return buildActionResult(entry, {
+      ...buildActionEffectResult(entry, beforeSnapshot, captureActionEffectSnapshot(element), observedMutations),
+      values: appliedValues.slice()
+    });
+  }
+
+  function ariaOptionMatchesValue(option, value) {
+    const normalizedValue = normalizeText(value);
+    const candidates = [
+      option?.getAttribute?.("aria-label"),
+      option?.getAttribute?.("data-value"),
+      option?.getAttribute?.("value"),
+      option?.getAttribute?.("id"),
+      getElementText(option)
+    ].map((candidate) => normalizeText(candidate));
+    return candidates.some((candidate) => candidate === normalizedValue);
+  }
+
+  function visibleAriaOptions(root) {
+    const scope = isElementNode(root) && String(root.getAttribute?.("role") || "").trim().toLowerCase() === "listbox"
+      ? root
+      : globalThis.document;
+    try {
+      return [...(scope.querySelectorAll?.("[role='option']") || [])]
+        .filter((option) => isElementNode(option) && !isHiddenElement(option));
+    } catch {
+      return [];
+    }
+  }
+
+  function findAriaOption(root, value) {
+    const matches = visibleAriaOptions(root).filter((option) => ariaOptionMatchesValue(option, value));
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  async function selectAriaElement(entry, values) {
+    const element = entry.element;
+    const role = String(element.getAttribute?.("role") || "").trim().toLowerCase();
+    if (!["combobox", "listbox"].includes(role)) {
+      throw createNamedError(
+        "BrowserPageContentActionError",
+        `Browser page content cannot select options on <${getTagName(element).toLowerCase()}>.`,
+        {
+          code: "browser_page_content_select_unsupported"
+        }
+      );
+    }
+
+    const beforeSnapshot = captureActionEffectSnapshot(element);
+    const requestedValues = values.length ? values : [""];
+    const appliedValues = [];
+    const {
+      observedMutations
+    } = await withObservedActionWindow(beforeSnapshot.observationRoot, async () => {
+      scrollElementIntoView(element);
+      focusElement(element);
+      if (role === "combobox") {
+        dispatchDomEvent(element, "mousedown", "MouseEvent", { button: 0 });
+        if (typeof element.click === "function") {
+          element.click();
+        } else {
+          dispatchDomEvent(element, "click", "MouseEvent", { button: 0 });
+        }
+        await delayMs(80);
+      }
+
+      for (const requestedValue of requestedValues) {
+        const option = findAriaOption(element, requestedValue);
+        if (!option) {
+          throw createNamedError(
+            "BrowserPageContentActionError",
+            `Browser page content could not safely find one ARIA option "${requestedValue}".`,
+            {
+              code: "browser_page_content_aria_option_not_found"
+            }
+          );
+        }
+        scrollElementIntoView(option);
+        dispatchDomEvent(option, "mousedown", "MouseEvent", { button: 0 });
+        if (typeof option.click === "function") {
+          option.click();
+        } else {
+          dispatchDomEvent(option, "click", "MouseEvent", { button: 0 });
+        }
+        appliedValues.push(requestedValue);
+        await delayMs(40);
+      }
+    });
+
+    refreshReferenceEntry(entry);
+    return buildActionResult(entry, {
+      ...buildActionEffectResult(entry, beforeSnapshot, captureActionEffectSnapshot(element), observedMutations),
+      values: appliedValues.slice()
+    });
+  }
+
+  async function selectReference(referenceId, valueOrValues) {
+    const entry = requireReferenceEntry(referenceId, {
+      actionLabel: "select"
+    });
+    if (entry.helperBacked) {
+      throw createNamedError(
+        "BrowserPageContentActionError",
+        `Browser page content cannot select helper-backed reference "${entry.referenceId}".`,
+        {
+          code: "browser_page_content_select_helper_backed"
+        }
+      );
+    }
+
+    const element = entry.element;
+    const values = normalizeActionValues(valueOrValues);
+    if (getTagName(element) === "SELECT") {
+      return selectNativeElement(entry, values);
+    }
+
+    return selectAriaElement(entry, values);
+  }
+
+  function checkedStateForElement(element) {
+    const tagName = getTagName(element);
+    const role = String(element.getAttribute?.("role") || "").trim().toLowerCase();
+    if (tagName === "INPUT") {
+      const inputType = String(element.getAttribute?.("type") || element.type || "").toLowerCase();
+      if (["checkbox", "radio"].includes(inputType)) {
+        return Boolean(element.checked);
+      }
+    }
+    if (["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role)) {
+      return String(element.getAttribute?.("aria-checked") || "").trim().toLowerCase() === "true";
+    }
+    if (role === "button" && element.hasAttribute?.("aria-pressed")) {
+      return String(element.getAttribute?.("aria-pressed") || "").trim().toLowerCase() === "true";
+    }
+    return null;
+  }
+
+  async function setCheckedReference(referenceId, checked = true) {
+    const entry = requireReferenceEntry(referenceId, {
+      actionLabel: "setChecked"
+    });
+    if (entry.helperBacked) {
+      throw createNamedError(
+        "BrowserPageContentActionError",
+        `Browser page content cannot set helper-backed reference "${entry.referenceId}".`,
+        {
+          code: "browser_page_content_checked_helper_backed"
+        }
+      );
+    }
+
+    const element = entry.element;
+    const beforeSnapshot = captureActionEffectSnapshot(element);
+    const desiredChecked = Boolean(checked);
+    const tagName = getTagName(element);
+    const role = String(element.getAttribute?.("role") || "").trim().toLowerCase();
+    const currentChecked = checkedStateForElement(element);
+    if (currentChecked === null) {
+      throw createNamedError(
+        "BrowserPageContentActionError",
+        `Browser page content cannot set checked state on <${tagName.toLowerCase()}>.`,
+        {
+          code: "browser_page_content_checked_unsupported"
+        }
+      );
+    }
+
+    const {
+      observedMutations
+    } = await withObservedActionWindow(beforeSnapshot.observationRoot, async () => {
+      scrollElementIntoView(element);
+      focusElement(element);
+
+      if (tagName === "INPUT") {
+        setNativeChecked(element, desiredChecked);
+        dispatchDomEvent(element, "input", "InputEvent", {
+          inputType: "insertReplacementText"
+        });
+        dispatchDomEvent(element, "change");
+      } else if (["checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio"].includes(role)) {
+        if (currentChecked !== desiredChecked) {
+          if (typeof element.click === "function") {
+            element.click();
+          } else {
+            dispatchDomEvent(element, "click", "MouseEvent", {
+              button: 0
+            });
+          }
+          await delayMs(40);
+        }
+        if (checkedStateForElement(element) !== desiredChecked) {
+          element.setAttribute("aria-checked", desiredChecked ? "true" : "false");
+          dispatchDomEvent(element, "input", "InputEvent", {
+            inputType: "insertReplacementText"
+          });
+          dispatchDomEvent(element, "change");
+        }
+      } else if (role === "button" && element.hasAttribute?.("aria-pressed")) {
+        if (currentChecked !== desiredChecked) {
+          if (typeof element.click === "function") {
+            element.click();
+          } else {
+            dispatchDomEvent(element, "click", "MouseEvent", {
+              button: 0
+            });
+          }
+          await delayMs(40);
+        }
+        if (checkedStateForElement(element) !== desiredChecked) {
+          element.setAttribute("aria-pressed", desiredChecked ? "true" : "false");
+        }
+      }
+    });
+
+    refreshReferenceEntry(entry);
+    return buildActionResult(entry, {
+      ...buildActionEffectResult(entry, beforeSnapshot, captureActionEffectSnapshot(element), observedMutations),
+      checked: desiredChecked
+    });
+  }
+
+  function resolveFileInputElement(referenceId) {
+    const entry = requireReferenceEntry(referenceId, {
+      actionLabel: "fileInput"
+    });
+    if (entry.helperBacked) {
+      throw createNamedError(
+        "BrowserPageContentActionError",
+        `Browser page content cannot upload files through helper-backed reference "${entry.referenceId}".`,
+        {
+          code: "browser_page_content_file_input_helper_backed"
+        }
+      );
+    }
+
+    const element = entry.element;
+    const isFileInput = (candidate) => {
+      return getTagName(candidate) === "INPUT"
+        && String(candidate.getAttribute?.("type") || candidate.type || "").toLowerCase() === "file";
+    };
+
+    if (isFileInput(element)) {
+      return element;
+    }
+
+    if (getTagName(element) === "LABEL") {
+      if (isFileInput(element.control)) {
+        return element.control;
+      }
+      const labelledInput = element.querySelector?.("input[type='file']");
+      if (isFileInput(labelledInput)) {
+        return labelledInput;
+      }
+      const forId = normalizeAttributeText(element.getAttribute?.("for"));
+      if (forId) {
+        const byId = element.ownerDocument?.getElementById?.(forId);
+        if (isFileInput(byId)) {
+          return byId;
+        }
+      }
+    }
+
+    const descendantInput = element.querySelector?.("input[type='file']");
+    if (isFileInput(descendantInput)) {
+      return descendantInput;
+    }
+
+    const closestLabel = element.closest?.("label");
+    if (closestLabel) {
+      if (isFileInput(closestLabel.control)) {
+        return closestLabel.control;
+      }
+      const labelledInput = closestLabel.querySelector?.("input[type='file']");
+      if (isFileInput(labelledInput)) {
+        return labelledInput;
+      }
+    }
+
+    return null;
+  }
+
+  function fileInputFor(referenceId) {
+    const input = resolveFileInputElement(referenceId);
+    if (!input) {
+      throw createNamedError(
+        "BrowserPageContentActionError",
+        `Browser page content reference "${normalizeReferenceId(referenceId)}" is not a file input or associated label.`,
+        {
+          code: "browser_page_content_file_input_not_found"
+        }
+      );
+    }
+    return {
+      accept: normalizeAttributeText(input.getAttribute?.("accept")),
+      multiple: Boolean(input.multiple),
+      name: normalizeAttributeText(input.getAttribute?.("name")),
+      selector: computeStableSelector(input),
+      tagName: getTagName(input),
+      type: String(input.getAttribute?.("type") || input.type || "").toLowerCase()
+    };
+  }
+
+  function fileInputElementFor(referenceId) {
+    return resolveFileInputElement(referenceId);
   }
 
   function refreshReferenceEntry(entry) {
@@ -3403,6 +3949,15 @@
       return typeAndSubmit(referenceId, value);
     },
     boundingBoxFor,
+    fileInputElementFor,
+    fileInputFor,
+    pointFor,
+    select(referenceId, valueOrValues) {
+      return selectReference(referenceId, valueOrValues);
+    },
+    setChecked(referenceId, checked) {
+      return setCheckedReference(referenceId, checked);
+    },
     version: VERSION
   };
 })();

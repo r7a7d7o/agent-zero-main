@@ -637,6 +637,54 @@ class _BrowserRuntimeCore:
         return normalized
 
     @staticmethod
+    def _has_reference(reference_id: int | str | None) -> bool:
+        return reference_id is not None and str(reference_id).strip() != ""
+
+    def _screenshot_output_path(self, browser_id: int, path: str = "") -> tuple[Path, str, str]:
+        raw_path = str(path or "").strip()
+        if raw_path:
+            output_path = Path(files.fix_dev_path(raw_path) if raw_path.startswith("/a0/") else raw_path)
+            if not output_path.is_absolute():
+                output_path = Path(files.get_abs_path(str(output_path)))
+            suffix = output_path.suffix.lower()
+            if suffix == ".png":
+                return output_path, "png", "image/png"
+            if suffix not in {".jpg", ".jpeg"}:
+                output_path = output_path.with_suffix(".jpg") if not suffix else output_path.with_name(f"{output_path.name}.jpg")
+            return output_path, "jpeg", "image/jpeg"
+
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        millis = int((time.time() % 1) * 1000)
+        output_path = self.screenshots_dir / f"browser-{int(browser_id)}-{timestamp}-{millis:03d}.jpg"
+        return output_path, "jpeg", "image/jpeg"
+
+    @staticmethod
+    def _normalize_upload_paths(path: str = "", paths: list[str] | None = None) -> list[str]:
+        raw_paths: list[str] = []
+        if paths:
+            if not isinstance(paths, list):
+                raise ValueError("paths must be a list of file paths")
+            raw_paths.extend(str(item or "").strip() for item in paths)
+        if str(path or "").strip():
+            raw_paths.append(str(path or "").strip())
+
+        normalized_paths: list[str] = []
+        for raw_path in raw_paths:
+            if not raw_path:
+                continue
+            candidate = Path(files.fix_dev_path(raw_path) if raw_path.startswith("/a0/") else raw_path)
+            if not candidate.is_absolute():
+                candidate = Path(files.get_abs_path(str(candidate)))
+            candidate = candidate.expanduser().resolve()
+            if not candidate.is_file():
+                raise FileNotFoundError(f"Upload file does not exist: {candidate}")
+            normalized_paths.append(str(candidate))
+
+        if not normalized_paths:
+            raise ValueError("upload_file requires path or non-empty paths")
+        return normalized_paths
+
+    @staticmethod
     def _multi_group_key(call: dict[str, Any]) -> Any:
         value = call.get("browser_id")
         if value is None or str(value).strip() == "":
@@ -656,6 +704,10 @@ class _BrowserRuntimeCore:
     @property
     def downloads_dir(self) -> Path:
         return Path(files.get_abs_path("usr/downloads/browser"))
+
+    @property
+    def screenshots_dir(self) -> Path:
+        return Path(files.get_abs_path("tmp/browser/screenshots", self.safe_context_id))
 
     async def ensure_started(self) -> None:
         if self._context_is_alive():
@@ -915,6 +967,13 @@ class _BrowserRuntimeCore:
         bid = call.get("browser_id")
         if action == "open":
             return await self.open(call.get("url") or "")
+        if action == "screenshot":
+            return await self.screenshot_file(
+                bid,
+                quality=int(call.get("quality") or 80),
+                full_page=bool(call.get("full_page")),
+                path=call.get("path") or "",
+            )
         if action == "list":
             return await self.list(include_content=bool(call.get("include_content")))
         if action == "state":
@@ -985,6 +1044,118 @@ class _BrowserRuntimeCore:
                 float(call.get("x") or 0), float(call.get("y") or 0),
                 button=call.get("button") or "left",
                 modifiers=self._normalize_modifiers(call.get("modifiers")),
+            )
+        if action == "hover":
+            return await self.hover(
+                bid,
+                ref=call.get("ref"),
+                x=float(call.get("x") or 0),
+                y=float(call.get("y") or 0),
+                offset_x=float(call.get("offset_x") or 0),
+                offset_y=float(call.get("offset_y") or 0),
+            )
+        if action == "double_click":
+            return await self.double_click(
+                bid,
+                ref=call.get("ref"),
+                x=float(call.get("x") or 0),
+                y=float(call.get("y") or 0),
+                button=call.get("button") or "left",
+                modifiers=self._normalize_modifiers(call.get("modifiers")),
+                offset_x=float(call.get("offset_x") or 0),
+                offset_y=float(call.get("offset_y") or 0),
+            )
+        if action == "right_click":
+            return await self.right_click(
+                bid,
+                ref=call.get("ref"),
+                x=float(call.get("x") or 0),
+                y=float(call.get("y") or 0),
+                modifiers=self._normalize_modifiers(call.get("modifiers")),
+                offset_x=float(call.get("offset_x") or 0),
+                offset_y=float(call.get("offset_y") or 0),
+            )
+        if action == "drag":
+            return await self.drag(
+                bid,
+                ref=call.get("ref"),
+                target_ref=call.get("target_ref"),
+                x=float(call.get("x") or 0),
+                y=float(call.get("y") or 0),
+                to_x=float(call.get("to_x") or 0),
+                to_y=float(call.get("to_y") or 0),
+                offset_x=float(call.get("offset_x") or 0),
+                offset_y=float(call.get("offset_y") or 0),
+                target_offset_x=float(call.get("target_offset_x") or 0),
+                target_offset_y=float(call.get("target_offset_y") or 0),
+            )
+        if action == "wheel":
+            return await self.wheel(
+                bid,
+                float(call.get("x") or 0),
+                float(call.get("y") or 0),
+                float(call.get("delta_x") or 0),
+                float(call.get("delta_y") or 0),
+            )
+        if action == "keyboard":
+            return await self.keyboard(
+                bid,
+                key=str(call.get("key") or ""),
+                text=str(call.get("text") or ""),
+            )
+        if action == "clipboard":
+            clipboard_action = str(
+                call.get("clipboard_action")
+                or call.get("operation")
+                or call.get("event_type")
+                or ""
+            ).strip().lower()
+            return await self.clipboard(
+                bid,
+                action=clipboard_action,
+                text=str(call.get("text") or ""),
+            )
+        if action in {"copy", "cut", "paste"}:
+            return await self.clipboard(
+                bid,
+                action=action,
+                text=str(call.get("text") or ""),
+            )
+        if action == "set_viewport":
+            return await self.set_viewport(
+                bid,
+                int(call.get("width") or 0),
+                int(call.get("height") or 0),
+            )
+        if action == "select_option":
+            ref = call.get("ref")
+            if ref is None:
+                raise ValueError("select_option requires ref")
+            return await self.select_option(
+                bid,
+                ref,
+                value=str(call.get("value") or ""),
+                values=call.get("values"),
+            )
+        if action == "set_checked":
+            ref = call.get("ref")
+            if ref is None:
+                raise ValueError("set_checked requires ref")
+            checked = call.get("checked")
+            return await self.set_checked(
+                bid,
+                ref,
+                checked=True if checked is None else bool(checked),
+            )
+        if action == "upload_file":
+            ref = call.get("ref")
+            if ref is None:
+                raise ValueError("upload_file requires ref")
+            return await self.upload_file(
+                bid,
+                ref,
+                path=call.get("path") or "",
+                paths=call.get("paths"),
             )
         if action == "close":
             return await self.close_browser(bid)
@@ -1342,6 +1513,43 @@ class _BrowserRuntimeCore:
             "state": await self._state(resolved_id),
         }
 
+    async def screenshot_file(
+        self,
+        browser_id: int | str | None = None,
+        *,
+        quality: int = 80,
+        full_page: bool = False,
+        path: str = "",
+    ) -> dict[str, Any]:
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        output_path, image_type, mime = self._screenshot_output_path(resolved_id, path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        clamped_quality = max(20, min(95, int(quality)))
+        screenshot_kwargs: dict[str, Any] = {
+            "path": str(output_path),
+            "type": image_type,
+            "full_page": bool(full_page),
+        }
+        if image_type == "jpeg":
+            screenshot_kwargs["quality"] = clamped_quality
+        await page.screenshot(**screenshot_kwargs)
+        local_path = str(output_path)
+        return {
+            "browser_id": resolved_id,
+            "path": local_path,
+            "a0_path": files.normalize_a0_path(local_path),
+            "mime": mime,
+            "state": await self._state(resolved_id),
+            "vision_load": {
+                "tool_name": "vision_load",
+                "tool_args": {
+                    "paths": [local_path],
+                },
+            },
+        }
+
     async def start_screencast(
         self,
         browser_id: int | str | None = None,
@@ -1447,6 +1655,311 @@ class _BrowserRuntimeCore:
     @staticmethod
     def _nudged_viewport(viewport: dict[str, int]) -> dict[str, int]:
         return _nudged_viewport(viewport)
+
+    async def _point_for(
+        self,
+        page: Any,
+        reference_id: int | str,
+        *,
+        offset_x: float = 0,
+        offset_y: float = 0,
+    ) -> dict[str, Any]:
+        await self._ensure_content_helper(page)
+        point = await page.evaluate(
+            "(args) => globalThis.__spaceBrowserPageContent__.pointFor(args.ref, args.offsets)",
+            {
+                "ref": reference_id,
+                "offsets": {
+                    "offset_x": float(offset_x),
+                    "offset_y": float(offset_y),
+                    "useOffsets": bool(offset_x or offset_y),
+                },
+            },
+        )
+        if not point or not isinstance(point, dict):
+            raise ValueError(f"Could not resolve Browser ref {reference_id!r} to a viewport point")
+        return point
+
+    async def _input_point(
+        self,
+        page: Any,
+        reference_id: int | str | None,
+        *,
+        x: float = 0,
+        y: float = 0,
+        offset_x: float = 0,
+        offset_y: float = 0,
+    ) -> dict[str, Any]:
+        if self._has_reference(reference_id):
+            return await self._point_for(
+                page,
+                reference_id,
+                offset_x=offset_x,
+                offset_y=offset_y,
+            )
+        return {
+            "x": float(x),
+            "y": float(y),
+            "rect": None,
+            "selector": None,
+        }
+
+    async def hover(
+        self,
+        browser_id: int | str | None,
+        ref: int | str | None = None,
+        x: float = 0,
+        y: float = 0,
+        offset_x: float = 0,
+        offset_y: float = 0,
+    ) -> dict[str, Any]:
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        point = await self._input_point(
+            page,
+            ref,
+            x=x,
+            y=y,
+            offset_x=offset_x,
+            offset_y=offset_y,
+        )
+        await page.mouse.move(float(point["x"]), float(point["y"]))
+        self._maybe_promote(resolved_id)
+        return {
+            "action": {
+                "point": point,
+                "ref": ref if self._has_reference(ref) else None,
+            },
+            "state": await self._state(resolved_id),
+        }
+
+    async def double_click(
+        self,
+        browser_id: int | str | None,
+        ref: int | str | None = None,
+        x: float = 0,
+        y: float = 0,
+        button: str = "left",
+        modifiers: list[str] | str | None = None,
+        offset_x: float = 0,
+        offset_y: float = 0,
+    ) -> dict[str, Any]:
+        modifiers = self._normalize_modifiers(modifiers)
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        point = await self._input_point(
+            page,
+            ref,
+            x=x,
+            y=y,
+            offset_x=offset_x,
+            offset_y=offset_y,
+        )
+        pressed: list[str] = []
+        try:
+            if modifiers:
+                for mod in modifiers:
+                    await page.keyboard.down(mod)
+                    pressed.append(mod)
+            await page.mouse.dblclick(float(point["x"]), float(point["y"]), button=button or "left")
+        finally:
+            for mod in reversed(pressed):
+                with contextlib.suppress(Exception):
+                    await page.keyboard.up(mod)
+        await self._settle(page, short=True)
+        self._maybe_promote(resolved_id)
+        return {
+            "action": {
+                "button": button or "left",
+                "modifiers": modifiers or [],
+                "point": point,
+                "ref": ref if self._has_reference(ref) else None,
+            },
+            "state": await self._state(resolved_id),
+        }
+
+    async def right_click(
+        self,
+        browser_id: int | str | None,
+        ref: int | str | None = None,
+        x: float = 0,
+        y: float = 0,
+        modifiers: list[str] | str | None = None,
+        offset_x: float = 0,
+        offset_y: float = 0,
+    ) -> dict[str, Any]:
+        modifiers = self._normalize_modifiers(modifiers)
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        point = await self._input_point(
+            page,
+            ref,
+            x=x,
+            y=y,
+            offset_x=offset_x,
+            offset_y=offset_y,
+        )
+        pressed: list[str] = []
+        try:
+            if modifiers:
+                for mod in modifiers:
+                    await page.keyboard.down(mod)
+                    pressed.append(mod)
+            await page.mouse.click(float(point["x"]), float(point["y"]), button="right")
+        finally:
+            for mod in reversed(pressed):
+                with contextlib.suppress(Exception):
+                    await page.keyboard.up(mod)
+        await self._settle(page, short=True)
+        self._maybe_promote(resolved_id)
+        return {
+            "action": {
+                "button": "right",
+                "modifiers": modifiers or [],
+                "point": point,
+                "ref": ref if self._has_reference(ref) else None,
+            },
+            "state": await self._state(resolved_id),
+        }
+
+    async def drag(
+        self,
+        browser_id: int | str | None,
+        ref: int | str | None = None,
+        target_ref: int | str | None = None,
+        x: float = 0,
+        y: float = 0,
+        to_x: float = 0,
+        to_y: float = 0,
+        offset_x: float = 0,
+        offset_y: float = 0,
+        target_offset_x: float = 0,
+        target_offset_y: float = 0,
+    ) -> dict[str, Any]:
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        start_point = await self._input_point(
+            page,
+            ref,
+            x=x,
+            y=y,
+            offset_x=offset_x,
+            offset_y=offset_y,
+        )
+        end_point = await self._input_point(
+            page,
+            target_ref,
+            x=to_x,
+            y=to_y,
+            offset_x=target_offset_x,
+            offset_y=target_offset_y,
+        )
+        await page.mouse.move(float(start_point["x"]), float(start_point["y"]))
+        await page.mouse.down()
+        await page.mouse.move(float(end_point["x"]), float(end_point["y"]), steps=12)
+        await page.mouse.up()
+        await self._settle(page, short=True)
+        self._maybe_promote(resolved_id)
+        return {
+            "action": {
+                "from": start_point,
+                "ref": ref if self._has_reference(ref) else None,
+                "target_ref": target_ref if self._has_reference(target_ref) else None,
+                "to": end_point,
+            },
+            "state": await self._state(resolved_id),
+        }
+
+    async def select_option(
+        self,
+        browser_id: int | str | None,
+        ref: int | str,
+        value: str = "",
+        values: list[str] | None = None,
+    ) -> dict[str, Any]:
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        await self._ensure_content_helper(page)
+        action = await page.evaluate(
+            "(args) => globalThis.__spaceBrowserPageContent__.select(args.ref, args.values)",
+            {
+                "ref": ref,
+                "values": values if values is not None else value,
+            },
+        )
+        await self._settle(page, short=True)
+        self._maybe_promote(resolved_id)
+        return {"action": action or {}, "state": await self._state(resolved_id)}
+
+    async def set_checked(
+        self,
+        browser_id: int | str | None,
+        ref: int | str,
+        checked: bool = True,
+    ) -> dict[str, Any]:
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        await self._ensure_content_helper(page)
+        action = await page.evaluate(
+            "(args) => globalThis.__spaceBrowserPageContent__.setChecked(args.ref, args.checked)",
+            {
+                "ref": ref,
+                "checked": bool(checked),
+            },
+        )
+        await self._settle(page, short=True)
+        self._maybe_promote(resolved_id)
+        return {"action": action or {}, "state": await self._state(resolved_id)}
+
+    async def upload_file(
+        self,
+        browser_id: int | str | None,
+        ref: int | str,
+        path: str = "",
+        paths: list[str] | None = None,
+    ) -> dict[str, Any]:
+        upload_paths = self._normalize_upload_paths(path=path, paths=paths)
+        await self.ensure_started()
+        resolved_id = self._resolve_browser_id(browser_id)
+        page = self._page(resolved_id)
+        await self._ensure_content_helper(page)
+        metadata = await page.evaluate(
+            "(ref) => globalThis.__spaceBrowserPageContent__.fileInputFor(ref)",
+            ref,
+        )
+        handle = None
+        try:
+            handle = await page.evaluate_handle(
+                "(ref) => globalThis.__spaceBrowserPageContent__.fileInputElementFor(ref)",
+                ref,
+            )
+            element = handle.as_element() if handle else None
+            if element:
+                await element.set_input_files(upload_paths)
+            elif metadata and metadata.get("selector"):
+                await page.set_input_files(metadata["selector"], upload_paths)
+            else:
+                raise ValueError(f"Browser ref {ref!r} does not resolve to a file input")
+        finally:
+            if handle:
+                with contextlib.suppress(Exception):
+                    await handle.dispose()
+        await self._settle(page, short=True)
+        self._maybe_promote(resolved_id)
+        return {
+            "action": {
+                "files": upload_paths,
+                "input": metadata or {},
+                "ref": ref,
+            },
+            "state": await self._state(resolved_id),
+        }
 
     async def mouse(
         self,
@@ -1747,7 +2260,7 @@ class _BrowserRuntimeCore:
 
     async def _ensure_content_helper(self, page: Any) -> None:
         has_helper = await page.evaluate(
-            "() => Boolean(globalThis.__spaceBrowserPageContent__?.capture && globalThis.__spaceBrowserPageContent__?.annotate && globalThis.__spaceBrowserPageContent__?.boundingBoxFor)"
+            "() => Boolean(globalThis.__spaceBrowserPageContent__?.capture && globalThis.__spaceBrowserPageContent__?.annotate && globalThis.__spaceBrowserPageContent__?.boundingBoxFor && globalThis.__spaceBrowserPageContent__?.pointFor && globalThis.__spaceBrowserPageContent__?.select && globalThis.__spaceBrowserPageContent__?.setChecked && globalThis.__spaceBrowserPageContent__?.fileInputFor)"
         )
         if has_helper:
             return
