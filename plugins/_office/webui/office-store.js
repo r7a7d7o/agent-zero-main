@@ -228,6 +228,9 @@ const model = {
   _desktopPrimeTimer: null,
   _desktopPrimeAttempts: 0,
   _desktopKeyboardActive: false,
+  _desktopBridgeReady: false,
+  _desktopKeyboardCaptureState: { ready: false, active: false, capture: false, focused: false },
+  _desktopLastState: null,
   _desktopKeyboardCleanup: null,
   _desktopClipboardCleanup: null,
   _desktopStarting: null,
@@ -1007,7 +1010,9 @@ const model = {
     } catch {
       target.focus?.({ preventScroll: true });
     }
-    return Boolean(document.activeElement === target || target.contentDocument?.hasFocus?.());
+    const focused = Boolean(document.activeElement === target || target.contentDocument?.hasFocus?.());
+    this.updateDesktopKeyboardCaptureState(target);
+    return focused;
   },
 
   updateDesktopMonitor() {
@@ -1015,6 +1020,8 @@ const model = {
       this.stopDesktopMonitor();
       this.stopDesktopResizeObserver();
       this._desktopKeyboardActive = false;
+      this._desktopBridgeReady = false;
+      this.updateDesktopKeyboardCaptureState();
       return;
     }
     const sessionId = this.session?.desktop_session_id || this.session?.session_id || "";
@@ -1216,11 +1223,100 @@ const model = {
         this.installXpraDesktopWheelBridge(remoteWindow, xpraWindow);
         if (requestRefresh && xpraWindow.wid != null) client.request_refresh?.(xpraWindow.wid);
       }
+      this.installXpraDesktopAgentBridge(frame, remoteWindow, remoteDocument, client, container);
       return true;
     } catch (error) {
       console.warn("Xpra desktop viewport prime skipped", error);
       return false;
     }
+  },
+
+  installXpraDesktopAgentBridge(frame, remoteWindow, remoteDocument, client, container) {
+    if (!frame || !remoteWindow || !remoteDocument || !client) return null;
+    const store = this;
+    const finite = (value, fallback = 0) => {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : fallback;
+    };
+    const metrics = () => {
+      const desktopWidth = Math.max(1, finite(client.desktop_width || container?.clientWidth || remoteWindow.innerWidth, 1));
+      const desktopHeight = Math.max(1, finite(client.desktop_height || container?.clientHeight || remoteWindow.innerHeight, 1));
+      const clientWidth = Math.max(1, finite(container?.clientWidth || remoteWindow.innerWidth, desktopWidth));
+      const clientHeight = Math.max(1, finite(container?.clientHeight || remoteWindow.innerHeight, desktopHeight));
+      return {
+        desktopWidth,
+        desktopHeight,
+        clientWidth,
+        clientHeight,
+        scaleX: clientWidth / desktopWidth,
+        scaleY: clientHeight / desktopHeight,
+      };
+    };
+    const bridge = frame.__agentZeroDesktopBridge || {};
+    Object.assign(bridge, {
+      ready: true,
+      state: async (options = {}) => {
+        const result = await callOffice("desktop_state", {
+          include_screenshot: options.includeScreenshot === true || options.include_screenshot === true,
+        });
+        store._desktopLastState = result;
+        return result;
+      },
+      focus: (options = {}) => store.focusDesktopFrame(frame, { ...options, arm: options.arm !== false }),
+      requestRefresh: () => {
+        for (const xpraWindow of Object.values(client.id_to_window || {})) {
+          if (xpraWindow?.wid != null) client.request_refresh?.(xpraWindow.wid);
+        }
+        return true;
+      },
+      desktopToClient: (x, y) => {
+        const value = metrics();
+        return {
+          x: Math.round(finite(x) * value.scaleX),
+          y: Math.round(finite(y) * value.scaleY),
+          scale_x: value.scaleX,
+          scale_y: value.scaleY,
+        };
+      },
+      clientToDesktop: (x, y) => {
+        const value = metrics();
+        return {
+          x: Math.round(finite(x) / value.scaleX),
+          y: Math.round(finite(y) / value.scaleY),
+          scale_x: value.scaleX,
+          scale_y: value.scaleY,
+        };
+      },
+      diagnostics: () => store.desktopBridgeDiagnostics(frame),
+    });
+    frame.agentZeroDesktop = bridge;
+    frame.__agentZeroDesktopBridge = bridge;
+    remoteWindow.agentZeroDesktop = bridge;
+    remoteWindow.__agentZeroDesktopBridge = bridge;
+    this._desktopBridgeReady = true;
+    this.updateDesktopKeyboardCaptureState(frame);
+    return bridge;
+  },
+
+  desktopBridgeDiagnostics(frame = null) {
+    return {
+      ready: this._desktopBridgeReady,
+      keyboard: this.updateDesktopKeyboardCaptureState(frame),
+      lastStateOk: this._desktopLastState?.ok ?? null,
+    };
+  },
+
+  updateDesktopKeyboardCaptureState(frame = null) {
+    const target = this.desktopFrame(frame);
+    const client = target?.contentWindow?.client;
+    const state = {
+      ready: Boolean(target?.__agentZeroDesktopBridge || target?.contentWindow?.__agentZeroDesktopBridge),
+      active: Boolean(this._desktopKeyboardActive),
+      capture: Boolean(client?.capture_keyboard),
+      focused: Boolean(target && (document.activeElement === target || target.contentDocument?.hasFocus?.())),
+    };
+    this._desktopKeyboardCaptureState = state;
+    return state;
   },
 
   normalizeXpraDesktopWindow(xpraWindow, width, height) {

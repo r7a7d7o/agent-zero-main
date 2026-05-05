@@ -6,6 +6,8 @@ BASE_DIR="${A0_BASE_DIR:-/a0}"
 PROFILE_DIR="${A0_DESKTOP_PROFILE:-$BASE_DIR/tmp/_office/desktop/profiles/$SESSION}"
 MANIFEST="${A0_DESKTOP_MANIFEST:-$BASE_DIR/tmp/_office/desktop/sessions/$SESSION.json}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DESKTOP_STATE_HELPER="$SCRIPT_DIR/../../../helpers/desktop_state.py"
+DESKTOP_STATE_PYTHON="${A0_DESKTOP_STATE_PYTHON:-$(command -v /usr/bin/python3 || command -v python3 || true)}"
 
 display_from_manifest() {
   if [ ! -f "$MANIFEST" ] || ! command -v python3 >/dev/null 2>&1; then
@@ -34,6 +36,10 @@ esac
 
 export XAUTHORITY="${A0_DESKTOP_XAUTHORITY:-$PROFILE_DIR/.Xauthority}"
 export HOME="${A0_DESKTOP_HOME:-$PROFILE_DIR}"
+export A0_DESKTOP_SESSION="$SESSION"
+export A0_DESKTOP_MANIFEST="$MANIFEST"
+export A0_DESKTOP_PROFILE="$PROFILE_DIR"
+export A0_DESKTOP_DISPLAY="$DISPLAY"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
@@ -49,9 +55,21 @@ Usage: desktopctl.sh <command> [args]
 Commands:
   env                         Print the X11 environment used for the Desktop.
   check                       Verify that xdotool can reach the Desktop display.
+  state --json                Return structured Desktop state as JSON.
+  observe --json [--screenshot]
+                              Return structured state, optionally with a fresh screenshot.
+  screenshot [PATH]           Capture the Desktop to PATH, or to the default screenshot directory.
+  active-window               Print the active window name.
+  geometry PATTERN            Print the first matching visible window geometry.
+  wait-window PATTERN         Wait for a visible matching window and print its id.
   location                    Print the current X pointer location.
   windows [PATTERN]           List visible window names matching PATTERN.
   focus PATTERN               Focus the first visible window matching PATTERN.
+  scroll DIRECTION [UNITS]    Scroll up, down, left, or right; UNITS defaults to 5 clicks.
+  drag X1 Y1 X2 Y2            Drag from X1,Y1 to X2,Y2 in Desktop coordinates.
+  right-click X Y             Move and right-click at X,Y in Desktop coordinates.
+  paste-text TEXT             Put TEXT on the Desktop clipboard and paste it with an app-native shortcut.
+  sequence FILE|-             Run a newline-delimited command sequence.
   key KEY...                  Send one or more xdotool key names.
   type TEXT                   Type text into the focused window.
   click X Y                   Move and click at X,Y in Desktop coordinates.
@@ -79,6 +97,14 @@ ensure_display() {
   fi
 }
 
+desktop_state() {
+  if [ ! -f "$DESKTOP_STATE_HELPER" ]; then
+    echo "Desktop state helper not found: $DESKTOP_STATE_HELPER" >&2
+    exit 2
+  fi
+  "$DESKTOP_STATE_PYTHON" "$DESKTOP_STATE_HELPER" "$@"
+}
+
 run_detached() {
   ( "$@" >/tmp/a0-desktopctl.log 2>&1 & )
 }
@@ -96,6 +122,128 @@ close_blocking_dialogs() {
 first_window() {
   pattern="$1"
   xdotool search --onlyvisible --name "$pattern" 2>/dev/null | head -n 1 || true
+}
+
+active_window_id() {
+  xdotool getactivewindow 2>/dev/null || true
+}
+
+active_window_class() {
+  window_id="$(active_window_id)"
+  if [ -z "$window_id" ]; then
+    return 0
+  fi
+  if command -v xprop >/dev/null 2>&1; then
+    xprop -id "$window_id" WM_CLASS 2>/dev/null | awk -F'"' '/WM_CLASS/ { print $(NF - 1); exit }'
+  fi
+}
+
+active_window_class_lower() {
+  active_window_class | tr '[:upper:]' '[:lower:]'
+}
+
+active_window_is_terminal() {
+  window_class="$(active_window_class_lower)"
+  case "$window_class" in
+    *terminal*|xterm|uxterm|rxvt|urxvt|kitty|alacritty|wezterm|konsole)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+paste_key_for_active_window() {
+  printf '%s\n' "${A0_DESKTOP_PASTE_KEY:-ctrl+v}"
+}
+
+window_geometry() {
+  window_id="$1"
+  if command -v xwininfo >/dev/null 2>&1; then
+    xwininfo -id "$window_id" 2>/dev/null | awk '
+      /Absolute upper-left X:/ { x=$4 }
+      /Absolute upper-left Y:/ { y=$4 }
+      /Width:/ { w=$2 }
+      /Height:/ { h=$2 }
+      END { if (w != "") printf "X=%s\nY=%s\nWIDTH=%s\nHEIGHT=%s\n", x, y, w, h }
+    '
+  else
+    xdotool getwindowgeometry --shell "$window_id"
+  fi
+}
+
+wait_window() {
+  pattern="$1"
+  timeout="${2:-15}"
+  end=$((SECONDS + timeout))
+  while [ "$SECONDS" -le "$end" ]; do
+    window_id="$(first_window "$pattern")"
+    if [ -n "$window_id" ]; then
+      printf '%s\n' "$window_id"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "Timed out waiting for visible window: $pattern" >&2
+  return 1
+}
+
+scroll_desktop() {
+  direction="$1"
+  units="${2:-5}"
+  case "$direction" in
+    up) button=4 ;;
+    down) button=5 ;;
+    left) button=6 ;;
+    right) button=7 ;;
+    *)
+      echo "scroll direction must be up, down, left, or right." >&2
+      exit 2
+      ;;
+  esac
+  xdotool click --repeat "$units" "$button"
+}
+
+paste_text() {
+  text="$*"
+  if active_window_is_terminal; then
+    xdotool type --delay "${A0_DESKTOP_PASTE_TYPE_DELAY_MS:-${A0_DESKTOP_TYPE_DELAY_MS:-4}}" -- "$text"
+    return
+  fi
+  if command -v xclip >/dev/null 2>&1; then
+    printf '%s' "$text" | xclip -selection clipboard
+    xdotool key --clearmodifiers "$(paste_key_for_active_window)"
+    return
+  fi
+  xdotool type --delay "${A0_DESKTOP_TYPE_DELAY_MS:-1}" -- "$text"
+}
+
+run_sequence_line() {
+  line="$1"
+  [ -z "$line" ] && return 0
+  case "$line" in
+    \#*) return 0 ;;
+  esac
+  # shellcheck disable=SC2086
+  "$0" $line
+}
+
+run_sequence() {
+  source_file="$1"
+  if [ "$source_file" = "-" ]; then
+    while IFS= read -r line; do
+      run_sequence_line "$line"
+    done
+    return
+  fi
+  if [ ! -f "$source_file" ]; then
+    echo "sequence requires an existing FILE or - for stdin." >&2
+    exit 2
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    run_sequence_line "$line"
+  done < "$source_file"
 }
 
 launch_app() {
@@ -142,6 +290,55 @@ case "$command_name" in
     ensure_display
     xdotool getmouselocation --shell
     ;;
+  state)
+    if [ "${1:-}" != "--json" ]; then
+      echo "state currently requires --json." >&2
+      exit 2
+    fi
+    desktop_state state --json
+    ;;
+  observe)
+    if [ "${1:-}" != "--json" ]; then
+      echo "observe currently requires --json." >&2
+      exit 2
+    fi
+    shift
+    desktop_state observe --json "$@"
+    ;;
+  screenshot)
+    if [ "${1:-}" = "--json" ]; then
+      shift
+      desktop_state screenshot --json "$@"
+    elif [ "$#" -gt 0 ]; then
+      desktop_state screenshot "$1"
+    else
+      desktop_state screenshot
+    fi
+    ;;
+  active-window)
+    ensure_display
+    window_id="$(active_window_id)"
+    if [ -z "$window_id" ]; then
+      echo "No active window." >&2
+      exit 1
+    fi
+    xdotool getwindowname "$window_id"
+    ;;
+  geometry)
+    ensure_display
+    pattern="${1:?geometry requires a window name pattern}"
+    window_id="$(first_window "$pattern")"
+    if [ -z "$window_id" ]; then
+      echo "No visible window matched: $pattern" >&2
+      exit 1
+    fi
+    window_geometry "$window_id"
+    ;;
+  wait-window)
+    ensure_display
+    pattern="${1:?wait-window requires a window name pattern}"
+    wait_window "$pattern" "${2:-15}"
+    ;;
   location)
     ensure_display
     xdotool getmouselocation --shell
@@ -160,6 +357,36 @@ case "$command_name" in
       exit 1
     fi
     xdotool windowactivate --sync "$window_id"
+    ;;
+  scroll)
+    ensure_display
+    scroll_desktop "${1:?scroll requires DIRECTION}" "${2:-5}"
+    ;;
+  drag)
+    ensure_display
+    x1="${1:?drag requires X1}"
+    y1="${2:?drag requires Y1}"
+    x2="${3:?drag requires X2}"
+    y2="${4:?drag requires Y2}"
+    xdotool mousemove --sync "$x1" "$y1" mousedown 1 mousemove --sync "$x2" "$y2" mouseup 1
+    ;;
+  right-click)
+    ensure_display
+    x="${1:?right-click requires X}"
+    y="${2:?right-click requires Y}"
+    xdotool mousemove --sync "$x" "$y" click 3
+    ;;
+  paste-text)
+    ensure_display
+    if [ "$#" -eq 0 ]; then
+      echo "paste-text requires TEXT." >&2
+      exit 2
+    fi
+    paste_text "$@"
+    ;;
+  sequence)
+    source_file="${1:?sequence requires FILE or -}"
+    run_sequence "$source_file"
     ;;
   key)
     ensure_display

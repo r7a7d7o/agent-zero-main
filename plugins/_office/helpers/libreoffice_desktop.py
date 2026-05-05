@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from helpers import files, virtual_desktop
-from plugins._office.helpers import document_store, libreoffice
+from plugins._office.helpers import desktop_state, document_store, libreoffice
 
 
 OFFICIAL_EXTENSIONS = {"odt", "ods", "odp", "docx", "xlsx", "pptx"}
@@ -212,6 +212,11 @@ class LibreOfficeDesktopManager:
             "document": _public_doc(updated),
             "url_intents": url_intents,
         }
+
+    def state(self, *, include_screenshot: bool = False) -> dict[str, Any]:
+        with self._lock:
+            self._reap_dead_locked()
+        return desktop_state.collect_state(include_screenshot=include_screenshot)
 
     def claim_url_intents(self, session_id: str = SYSTEM_SESSION_ID) -> list[dict[str, Any]]:
         session = self.get(session_id) or self.get(SYSTEM_SESSION_ID)
@@ -1069,6 +1074,7 @@ fi
             "path": session.path,
             "display": session.display,
             "xpra_port": session.xpra_port,
+            "profile_dir": str(session.profile_dir),
             "owner_pid": os.getpid(),
             "pids": {name: process.pid for name, process in session.processes.items()},
         }

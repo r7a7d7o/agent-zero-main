@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from plugins._office.helpers import desktop_state
 from plugins._office.helpers import document_store
 
 
 def build_context(max_items: int = 6) -> str:
     documents = document_store.get_open_documents(limit=max_items)
+    desktop_context = build_desktop_context()
     if not documents:
-        return ""
+        return desktop_context
 
     lines = [
         "These document artifacts have active canvas sessions. Content is omitted; load skill `office-artifacts` for edit workflow, then use document_artifact:read before content-sensitive edits.",
@@ -18,6 +20,8 @@ def build_context(max_items: int = 6) -> str:
     lines.append(
         "Use document_artifact:edit with file_id or path for saved edits; tool results refresh the document canvas."
     )
+    if desktop_context:
+        lines.extend(["", desktop_context])
     return "\n".join(lines)
 
 
@@ -29,3 +33,18 @@ def format_document_line(doc: dict[str, Any]) -> str:
         f"size={doc.get('size', 0)} bytes, last_modified={doc.get('last_modified', '')}, "
         f"open_sessions={doc.get('open_sessions', 1)})"
     )
+
+
+def build_desktop_context() -> str:
+    if not desktop_state.session_manifest_exists():
+        return ""
+    try:
+        return desktop_state.compact_prompt_context(
+            desktop_state.collect_state(include_screenshot=False),
+        )
+    except Exception as exc:
+        return (
+            "[DESKTOP STATE]\n"
+            f"- unavailable={exc}\n"
+            "- next=Open the Desktop canvas manually, then run plugins/_office/skills/linux-desktop/scripts/desktopctl.sh observe --json."
+        )

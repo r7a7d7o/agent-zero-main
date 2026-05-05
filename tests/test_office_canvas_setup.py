@@ -72,6 +72,14 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "primeXpraDesktopFrame" in store
     assert "normalizeXpraDesktopWindow" in store
     assert "installXpraDesktopWheelBridge" in store
+    assert "installXpraDesktopAgentBridge" in store
+    assert "agentZeroDesktop" in store
+    assert 'callOffice("desktop_state"' in store
+    assert "desktopToClient" in store
+    assert "clientToDesktop" in store
+    assert "requestRefresh" in store
+    assert "_desktopBridgeReady" in store
+    assert "_desktopKeyboardCaptureState" in store
     assert "installXpraDesktopKeyboardBridge" in store
     assert "focusDesktopFrame" in store
     assert "_desktopKeyboardActive" in store
@@ -227,6 +235,10 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     linux_desktopctl = (
         PROJECT_ROOT / "plugins" / "_office" / "skills" / "linux-desktop" / "scripts" / "desktopctl.sh"
     ).read_text(encoding="utf-8")
+    desktop_state_helper = (
+        PROJECT_ROOT / "plugins" / "_office" / "helpers" / "desktop_state.py"
+    ).read_text(encoding="utf-8")
+    hooks_py = (PROJECT_ROOT / "plugins" / "_office" / "hooks.py").read_text(encoding="utf-8")
     linux_calc_helper = (
         PROJECT_ROOT / "plugins" / "_office" / "skills" / "linux-desktop" / "scripts" / "calc_set_cell.py"
     ).read_text(encoding="utf-8")
@@ -320,10 +332,42 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert "/a0/usr/projects" in linux_desktop_skill
     assert "desktopctl.sh" in linux_desktop_skill
     assert "calc-set-cell" in linux_desktop_skill
+    assert "Clicks are explicitly last resort" in linux_desktop_skill or "clicks are explicitly last resort" in linux_desktop_skill
+    assert "fresh Desktop observation" in linux_desktop_skill
+    assert "observe --json --screenshot" in linux_desktop_skill
+    assert "Terminal And CLI Agent Verification" in linux_desktop_skill
+    assert "Do not report from an earlier screenshot path" in linux_desktop_skill
+    assert "screenshot path returned by that final observation" in linux_desktop_skill
     assert "xdotool" in linux_desktopctl
     assert "agent-zero-desktop" in linux_desktopctl
     assert "launch_app" in linux_desktopctl
+    assert "paste_key_for_active_window" in linux_desktopctl
+    assert "active_window_is_terminal" in linux_desktopctl
+    assert "WM_CLASS" in linux_desktopctl
+    for command in (
+        "state)",
+        "observe)",
+        "screenshot)",
+        "active-window)",
+        "geometry)",
+        "wait-window)",
+        "scroll)",
+        "drag)",
+        "right-click)",
+        "paste-text)",
+        "sequence)",
+    ):
+        assert command in linux_desktopctl
     assert "calc_set_cell.py" in linux_desktopctl
+    assert "collect_state" in desktop_state_helper
+    assert "compact_prompt_context" in desktop_state_helper
+    assert "fresh final" in desktop_state_helper
+    assert "xwd" in desktop_state_helper
+    assert "PIL" in desktop_state_helper
+    assert '"x11-utils"' in hooks_py
+    assert '"x11-apps"' in hooks_py
+    assert '"xclip"' in hooks_py
+    assert '"python3-pil"' in hooks_py
     assert "wait_for_document" in linux_calc_helper
     assert "document.store()" in linux_calc_helper
     assert "read_xlsx_cell" in linux_calc_helper
@@ -419,6 +463,8 @@ def test_office_skills_preserve_markdown_first_and_opt_in_desktop_policy():
     assert "Download and Open in canvas actions" in office_skill
     assert "method: \"create\"" in office_skill
     assert "The Desktop is opt-in" in desktop_skill
+    assert "coordinate clicks only as a last resort" in desktop_skill
+    assert "After any GUI action, verify" in desktop_skill
     assert "custom Markdown editor" in desktop_skill
     assert "Never open the Desktop/canvas automatically" in desktop_skill
     assert "persistent Desktop runtime during initial startup" in desktop_skill
@@ -432,3 +478,19 @@ def test_office_skills_preserve_markdown_first_and_opt_in_desktop_policy():
     assert "must not open the canvas automatically" in excel_skill
     assert '"format": "odp"' in presentation_skill
     assert "must not open the canvas automatically" in presentation_skill
+
+
+def test_office_extra_prompt_includes_existing_desktop_state_without_opening_canvas():
+    canvas_context = (
+        PROJECT_ROOT / "plugins" / "_office" / "helpers" / "canvas_context.py"
+    ).read_text(encoding="utf-8")
+    prompt = (
+        PROJECT_ROOT / "plugins" / "_office" / "prompts" / "agent.extras.office_canvas.md"
+    ).read_text(encoding="utf-8")
+
+    assert "build_desktop_context" in canvas_context
+    assert "session_manifest_exists" in canvas_context
+    assert "collect_state(include_screenshot=False)" in canvas_context
+    assert "compact_prompt_context" in canvas_context
+    assert "ensure_system_desktop" not in canvas_context
+    assert "[DOCUMENT CANVAS]" in prompt

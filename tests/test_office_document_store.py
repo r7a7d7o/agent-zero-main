@@ -503,6 +503,57 @@ def test_official_libreoffice_desktop_status_and_url_contract(tmp_path, monkeypa
     assert "printing=true" in url
 
 
+def test_office_session_desktop_state_action_defaults_without_screenshot(monkeypatch):
+    api_module = types.ModuleType("helpers.api")
+
+    class ApiHandler:
+        def __init__(self, app=None, thread_lock=None):
+            self.app = app
+            self.thread_lock = thread_lock
+
+    api_module.ApiHandler = ApiHandler
+    api_module.Request = object
+    monkeypatch.setitem(sys.modules, "helpers.api", api_module)
+    monkeypatch.delitem(sys.modules, "plugins._office.api.office_session", raising=False)
+
+    from plugins._office.api import office_session
+
+    calls = []
+
+    class FakeManager:
+        def state(self, *, include_screenshot=False):
+            calls.append(include_screenshot)
+            return {
+                "ok": True,
+                "display": ":120",
+                "profile_dir": "/a0/tmp/_office/desktop/profiles/agent-zero-desktop",
+                "size": {"width": 1440, "height": 900},
+                "pointer": {"x": 0, "y": 0, "screen": 0, "window": 0},
+                "active_window": None,
+                "windows": [],
+                "screenshot": {"ok": False, "path": ""},
+                "capabilities": {},
+                "errors": [],
+            }
+
+    monkeypatch.setattr(office_session.libreoffice_desktop, "get_manager", lambda: FakeManager())
+    handler = office_session.OfficeSession(app=None, thread_lock=None)
+    request = types.SimpleNamespace(headers={}, host_url="http://localhost:32080")
+
+    default_result = asyncio.run(handler.process({"action": "desktop_state"}, request))
+    screenshot_result = asyncio.run(
+        handler.process({"action": "desktop_state", "include_screenshot": True}, request),
+    )
+
+    assert default_result["ok"] is True
+    assert screenshot_result["ok"] is True
+    assert calls == [False, True]
+    monkeypatch.delitem(sys.modules, "plugins._office.api.office_session", raising=False)
+    api_package = sys.modules.get("plugins._office.api")
+    if api_package is not None:
+        monkeypatch.delattr(api_package, "office_session", raising=False)
+
+
 def test_official_libreoffice_desktop_manager_opens_binary_session(office_state, tmp_path, monkeypatch):
     class FakeProcess:
         pid = 4242

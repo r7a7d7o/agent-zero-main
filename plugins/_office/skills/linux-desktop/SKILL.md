@@ -23,14 +23,24 @@ Use the Desktop as a full Linux GUI when the user explicitly needs a visual work
 
 ## Operating Model
 
-1. Prefer `document_artifact` for creating, reading, and editing Markdown, ODT, ODS, ODP, DOCX, XLSX, and PPTX files.
-2. Treat Markdown as first-class. For writing, notes, reports, and drafts with no explicit binary Office requirement, create Markdown and use the custom Markdown editor when the user opens the canvas.
-3. Treat ODF as first-class for LibreOffice office work: ODT in Writer, ODS in Calc, ODP in Impress. Use DOCX/XLSX/PPTX only for explicit Microsoft compatibility.
-4. Use the Desktop only when the user asks for the Desktop, a GUI app, binary Office visual work, or visual confirmation.
-5. Never open the Desktop/canvas automatically from a tool result if the user has not opened it. Offer the explicit Open in canvas action instead.
-6. Launch common apps from the Desktop icons, the header buttons, or `scripts/desktopctl.sh`.
-7. Use the external Agent Zero Browser for web browsing. Do not launch an operating-system browser in this version.
-8. Verify GUI work by observing the desktop state, checking window titles, and saving the file before reporting success.
+The Desktop is an observe-act-verify control surface. Use this decision hierarchy:
+
+1. Prefer structured tools such as `document_artifact` for deterministic file creation, reads, and edits.
+2. Prefer app-native helpers for visible live edits, such as `desktopctl.sh calc-set-cell` for Calc/UNO spreadsheet changes.
+3. Prefer launcher commands, window focus, keyboard shortcuts, menus, paste, and save commands.
+4. Use coordinate clicks only as a last resort, and only after a fresh Desktop observation.
+5. After any GUI action, verify through Desktop state, active window titles, screenshots, saved file state, or exported output.
+6. For terminal or CLI-agent work, verify against a fresh final `observe --json --screenshot` captured after the command has finished or visibly returned to an input prompt. Do not report from an earlier screenshot path.
+
+Keep these standing rules:
+
+1. Treat Markdown as first-class. For writing, notes, reports, and drafts with no explicit binary Office requirement, create Markdown and use the custom Markdown editor when the user opens the canvas.
+2. Treat ODF as first-class for LibreOffice office work: ODT in Writer, ODS in Calc, ODP in Impress. Use DOCX/XLSX/PPTX only for explicit Microsoft compatibility.
+3. Use the Desktop only when the user asks for the Desktop, a GUI app, binary Office visual work, or visual confirmation.
+4. Never open the Desktop/canvas automatically from a tool result if the user has not opened it. Offer the explicit Open in canvas action instead.
+5. Launch common apps from the Desktop icons, the header buttons, or `scripts/desktopctl.sh`.
+6. Use the external Agent Zero Browser for web browsing. Do not launch an operating-system browser in this version.
+7. Verify GUI work by observing the desktop state, checking window titles, and saving the file before reporting success. If exact terminal text matters, load or inspect the screenshot path returned by the final observation, not a screenshot captured before the text appeared.
 
 ## Control Flow
 
@@ -38,7 +48,10 @@ Use the helper script when the Desktop is already open and you need reliable app
 
 ```bash
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh check
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh state --json
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh observe --json --screenshot
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh launch calc
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh wait-window LibreOffice
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh windows LibreOffice
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh focus LibreOffice
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh key ctrl+s
@@ -55,6 +68,9 @@ plugins/_office/skills/linux-desktop/scripts/desktopctl.sh launch impress
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh launch terminal
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh launch settings
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh open-path /a0/usr/workdir
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh focus "LibreOffice"
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh paste-text "Text to insert"
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh key ctrl+s
 ```
 
 For live spreadsheet coworking, use the Calc helper instead of hand-written UNO snippets:
@@ -65,13 +81,17 @@ plugins/_office/skills/linux-desktop/scripts/desktopctl.sh calc-set-cell /a0/usr
 
 This opens the workbook in the visible Desktop Calc session if needed, changes the cell through LibreOffice, saves the workbook, and verifies the `.xlsx` on disk. Because the edit happens through the running LibreOffice session, the user can see the sheet update without refreshing the Desktop surface.
 
-For coordinate actions after observing the Desktop:
+For coordinate actions, clicks are explicitly last resort. First try `launch`, `open-path`, `wait-window`, `focus`, `key`, `paste-text`, `save`, or an app-native helper. If a coordinate action is still necessary, base it on a fresh screenshot observation and verify immediately afterward:
 
 ```bash
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh observe --json --screenshot
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh click 120 180
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh dblclick 120 180
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh right-click 120 180
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh drag 120 180 400 180
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh scroll down 3
 plugins/_office/skills/linux-desktop/scripts/desktopctl.sh type "Text to enter"
-plugins/_office/skills/linux-desktop/scripts/desktopctl.sh location
+plugins/_office/skills/linux-desktop/scripts/desktopctl.sh observe --json
 ```
 
 When browser automation is available, the higher-level QA flow is:
@@ -81,6 +101,19 @@ When browser automation is available, the higher-level QA flow is:
 3. Use browser mouse events into the Xpra iframe for real user-path testing.
 4. Cross-check with `desktopctl.sh location` and `desktopctl.sh windows PATTERN`.
 5. Capture the browser screenshot as visual evidence.
+
+## Terminal And CLI Agent Verification
+
+Terminal apps are visual state, not structured logs. When the task depends on exact terminal output, follow this stricter loop:
+
+1. Run `desktopctl.sh observe --json --screenshot` immediately before acting to record the starting window and screenshot path.
+2. Use `focus`, `paste-text` or `type`, and `key Return` to drive the terminal. Prefer CLI-native commands and keyboard input over clicks.
+3. Wait until the CLI has visibly produced a response or returned to an input prompt.
+4. Run a new final `desktopctl.sh observe --json --screenshot`.
+5. Verify exact text only from the screenshot path returned by that final observation, or from a newer screenshot. Never use an earlier screenshot path as final evidence.
+6. If the final screenshot is cropped, stale, or unreadable, capture another screenshot or report the result as unverified with that specific reason.
+
+For nested CLI agents, a successful proof requires both the input prompt and the nested agent's visible response in the final screenshot, or another deterministic saved transcript produced by the CLI itself.
 
 ## Desktop Locations
 
