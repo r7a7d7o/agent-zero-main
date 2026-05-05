@@ -78,18 +78,21 @@ Agent Zero is becoming more visual and shared. The right-side Universal Canvas g
 
 The canvas makes agent work visible. You can watch it browse, inspect what changed, open files, cowork on deliverables, and intervene before a small mistake becomes a large one.
 
-## Cowork on Documents
+## LibreOffice Integration
 
-Create, open, and cowork with the AI on documents, spreadsheets, and presentation decks.
+<img alt="Cowork on Documents" src="https://github.com/user-attachments/assets/5ceb8f2c-cb5a-41d0-b7a8-7d5da6375aa1" />
+<br>
 
-The document canvas supports Markdown by default, with LibreOffice-native ODT, ODS, and ODP workflows when binary office artifacts are needed. DOCX, XLSX, and PPTX remain available for explicit Microsoft compatibility. Agents can create substantial deliverables, read their contents, apply precise saved edits, preserve version history, and generate native XLSX charts directly inside compatibility spreadsheets.
+Create, open, and cowork with the AI on documents, spreadsheets, and presentation decks with the LibreOffice stack.
+
+The document canvas supports Markdown by default, with LibreOffice-native ODT, ODS, and ODP workflows when binary office artifacts are needed. Agents can create substantial deliverables, read their contents, apply precise saved edits, preserve version history, and generate native ODS charts directly inside spreadsheets. Microsoft Office compatibility imports and exports remain available when explicitly requested.
 
 ## Native Browser With Annotations and Extensions
 
-<img width="1280" height="656" alt="Native Browser" src="https://github.com/user-attachments/assets/2e7aa52c-317a-4ded-987c-4d7f12e1bdd7" />
+<img alt="Native Browser" src="https://github.com/user-attachments/assets/4a2a9f8a-470f-4f24-94b7-c5fbbebe9008" />
 <br>
 
-Agent Zero includes a direct Playwright-powered Browser tool with a visible WebUI viewer. The agent can navigate pages, inspect readable page content, and act through typed page references such as `[link 3]`, `[button 6]`, and `[input text 8]`.
+Agent Zero includes a direct Playwright-powered Browser tool with a visible WebUI viewer. The agent can navigate pages, inspect readable page content, and act through typed page references such as `[link 3]`, `[button 6]`, and `[input text 8]` and use vision.
 
 For web and mobile development, Annotate mode lets you click page elements or regions and leave actionable comments for the agent targeted at the page itself. You can review a UI visually, mark what needs to change, and send those notes straight back into the conversation.
 
