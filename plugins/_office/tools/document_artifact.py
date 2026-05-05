@@ -42,6 +42,13 @@ class DocumentArtifact(Tool):
                     path=path,
                     context_id=self._context_id(),
                 )
+                if doc["extension"] in {"odt", "ods", "odp"}:
+                    validation = libreoffice.validate_odf(doc["path"])
+                    if not validation.get("ok"):
+                        return Response(
+                            message=f"document_artifact create failed: {validation.get('error')}",
+                            break_loop=False,
+                        )
                 if doc["extension"] == "docx":
                     validation = libreoffice.validate_docx(doc["path"])
                     if not validation.get("ok"):

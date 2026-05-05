@@ -20,9 +20,25 @@ from plugins._office.helpers import pptx_writer
 
 
 PLUGIN_NAME = "_office"
-SUPPORTED_EXTENSIONS = {"md", "docx", "xlsx", "pptx"}
+OPEN_DOCUMENT_EXTENSIONS = {"odt", "ods", "odp"}
+OOXML_EXTENSIONS = {"docx", "xlsx", "pptx"}
+SUPPORTED_EXTENSIONS = {"md", *OPEN_DOCUMENT_EXTENSIONS, *OOXML_EXTENSIONS}
 DEFAULT_TTL_SECONDS = 8 * 60 * 60
 MAX_SAVE_BYTES = 512 * 1024 * 1024
+ODF_OFFICE_NS = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+ODF_TEXT_NS = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+ODF_TABLE_NS = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+ODF_DRAW_NS = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+ODF_PRESENTATION_NS = "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"
+ODF_STYLE_NS = "urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+ODF_FO_NS = "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
+ODF_MANIFEST_NS = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"
+ODF_VERSION = "1.2"
+ODF_MIMETYPES = {
+    "odt": "application/vnd.oasis.opendocument.text",
+    "ods": "application/vnd.oasis.opendocument.spreadsheet",
+    "odp": "application/vnd.oasis.opendocument.presentation",
+}
 
 STATE_DIR = Path(files.get_abs_path("usr", "plugins", PLUGIN_NAME, "documents"))
 DB_PATH = STATE_DIR / "documents.sqlite3"
@@ -58,8 +74,6 @@ def normalize_extension(value: str) -> str:
     if not ext:
         ext = "md"
     if ext not in SUPPORTED_EXTENSIONS:
-        if ext == "odt":
-            raise ValueError("ODT editing is not supported in this migration. Use Markdown or DOCX.")
         raise ValueError(f"Unsupported document format: {ext}")
     return ext
 
@@ -599,7 +613,7 @@ def create_document(
 
 
 def _unique_document_path(title: str, ext: str, context_id: str = "") -> Path:
-    base = safe_title(title, "Document")
+    base = safe_document_stem(title, ext, "Document")
     root = document_home(context_id) if ext == "md" else document_binary_home(context_id)
     candidate = root / f"{base}.{ext}"
     index = 2
@@ -609,10 +623,24 @@ def _unique_document_path(title: str, ext: str, context_id: str = "") -> Path:
     return candidate.resolve(strict=False)
 
 
+def safe_document_stem(title: str, ext: str, fallback: str = "Document") -> str:
+    base = safe_title(title, fallback)
+    suffix = f".{normalize_extension(ext)}"
+    if base.casefold().endswith(suffix.casefold()):
+        base = base[: -len(suffix)].rstrip(" ._") or fallback
+    return base
+
+
 def template_bytes(kind: str, ext: str, title: str, content: str) -> bytes:
     ext = normalize_extension(ext or "md")
     if ext == "md":
         return _markdown(title, content).encode("utf-8")
+    if ext == "odt":
+        return odt_bytes(title, content)
+    if ext == "ods":
+        return ods_bytes(title, content)
+    if ext == "odp":
+        return odp_bytes(title, content)
     if ext == "docx":
         return _docx(title, content)
     if ext == "xlsx":
@@ -636,6 +664,219 @@ def _zip_bytes(files_map: dict[str, str | bytes]) -> bytes:
             data = value.encode("utf-8") if isinstance(value, str) else value
             archive.writestr(name, data)
     return buffer.getvalue()
+
+
+def odf_zip_bytes(ext: str, files_map: dict[str, str | bytes]) -> bytes:
+    ext = normalize_extension(ext)
+    if ext not in ODF_MIMETYPES:
+        raise ValueError(f"Unsupported ODF format: {ext}")
+    media_type = ODF_MIMETYPES[ext]
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("mimetype", media_type, compress_type=zipfile.ZIP_STORED)
+        for name, value in files_map.items():
+            if name == "mimetype":
+                continue
+            data = value.encode("utf-8") if isinstance(value, str) else value
+            archive.writestr(name, data, compress_type=zipfile.ZIP_DEFLATED)
+    return buffer.getvalue()
+
+
+def odt_bytes(title: str, content: str) -> bytes:
+    return odt_bytes_from_paragraphs(_document_lines(title, content))
+
+
+def odt_bytes_from_paragraphs(paragraphs: list[str]) -> bytes:
+    lines = [str(line) for line in paragraphs] or [""]
+    body = "\n".join(_odt_paragraph(line, index == 0) for index, line in enumerate(lines))
+    return _odf_package(
+        "odt",
+        f"""<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content {_odf_content_namespaces()} office:version="{ODF_VERSION}">
+  <office:body>
+    <office:text>
+      {body}
+    </office:text>
+  </office:body>
+</office:document-content>
+""",
+    )
+
+
+def ods_bytes(title: str, content: str) -> bytes:
+    return ods_bytes_from_sheets([{"name": "Sheet1", "rows": _xlsx_rows(title, content)}])
+
+
+def ods_bytes_from_sheets(sheets: list[dict[str, Any]]) -> bytes:
+    normalized = []
+    for index, sheet in enumerate(sheets or []):
+        name = safe_title(str(sheet.get("name") or f"Sheet{index + 1}"), f"Sheet{index + 1}")[:31] or f"Sheet{index + 1}"
+        rows = sheet.get("rows") or []
+        normalized.append({"name": name, "rows": rows})
+    if not normalized:
+        normalized = [{"name": "Sheet1", "rows": [["Spreadsheet"]]}]
+
+    tables = "\n".join(
+        f"""<table:table table:name="{escape(sheet['name'])}">
+          {''.join(_ods_row(row) for row in sheet['rows'])}
+        </table:table>"""
+        for sheet in normalized
+    )
+    return _odf_package(
+        "ods",
+        f"""<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content {_odf_content_namespaces()} office:version="{ODF_VERSION}">
+  <office:body>
+    <office:spreadsheet>
+      {tables}
+    </office:spreadsheet>
+  </office:body>
+</office:document-content>
+""",
+    )
+
+
+def odp_bytes(title: str, content: str) -> bytes:
+    return odp_bytes_from_slides(pptx_writer.slides_from_text(title, content))
+
+
+def odp_bytes_from_slides(slides: list[dict[str, Any]]) -> bytes:
+    normalized = pptx_writer.normalize_slides(slides)
+    if not normalized:
+        normalized = [{"title": "Presentation", "bullets": []}]
+    pages = "\n".join(_odp_page(slide, index) for index, slide in enumerate(normalized, start=1))
+    return _odf_package(
+        "odp",
+        f"""<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content {_odf_content_namespaces()} office:version="{ODF_VERSION}">
+  <office:body>
+    <office:presentation>
+      {pages}
+    </office:presentation>
+  </office:body>
+</office:document-content>
+""",
+    )
+
+
+def _document_lines(title: str, content: str) -> list[str]:
+    lines = [str(title or "Document").strip() or "Document"]
+    lines.extend(line.rstrip() for line in str(content or "").splitlines() if line.strip())
+    if len(lines) == 1:
+        lines.append("")
+    return lines
+
+
+def _odf_package(ext: str, content_xml: str) -> bytes:
+    return odf_zip_bytes(
+        ext,
+        {
+            "content.xml": content_xml,
+            "styles.xml": _odf_styles_xml(),
+            "meta.xml": _odf_meta_xml(),
+            "settings.xml": _odf_settings_xml(),
+            "META-INF/manifest.xml": _odf_manifest_xml(ODF_MIMETYPES[ext]),
+        },
+    )
+
+
+def _odf_content_namespaces() -> str:
+    return (
+        f'xmlns:office="{ODF_OFFICE_NS}" '
+        f'xmlns:text="{ODF_TEXT_NS}" '
+        f'xmlns:table="{ODF_TABLE_NS}" '
+        f'xmlns:draw="{ODF_DRAW_NS}" '
+        f'xmlns:presentation="{ODF_PRESENTATION_NS}" '
+        f'xmlns:style="{ODF_STYLE_NS}" '
+        f'xmlns:fo="{ODF_FO_NS}"'
+    )
+
+
+def _odf_styles_xml() -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<office:document-styles {_odf_content_namespaces()} office:version="{ODF_VERSION}">
+  <office:styles>
+    <style:style style:name="Standard" style:family="paragraph"/>
+    <style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph">
+      <style:text-properties fo:font-weight="bold" fo:font-size="18pt"/>
+    </style:style>
+  </office:styles>
+</office:document-styles>
+"""
+
+
+def _odf_meta_xml() -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<office:document-meta xmlns:office="{ODF_OFFICE_NS}" office:version="{ODF_VERSION}">
+  <office:meta/>
+</office:document-meta>
+"""
+
+
+def _odf_settings_xml() -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<office:document-settings xmlns:office="{ODF_OFFICE_NS}" office:version="{ODF_VERSION}">
+  <office:settings/>
+</office:document-settings>
+"""
+
+
+def _odf_manifest_xml(media_type: str) -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<manifest:manifest xmlns:manifest="{ODF_MANIFEST_NS}" manifest:version="{ODF_VERSION}">
+  <manifest:file-entry manifest:full-path="/" manifest:media-type="{media_type}"/>
+  <manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
+  <manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/>
+  <manifest:file-entry manifest:full-path="meta.xml" manifest:media-type="text/xml"/>
+  <manifest:file-entry manifest:full-path="settings.xml" manifest:media-type="text/xml"/>
+</manifest:manifest>
+"""
+
+
+def _odt_paragraph(line: str, heading: bool = False) -> str:
+    text = escape(str(line))
+    if heading:
+        return f'<text:h text:outline-level="1">{text}</text:h>'
+    return f"<text:p>{text}</text:p>"
+
+
+def _ods_row(row: list[Any]) -> str:
+    cells = "".join(_ods_cell(value) for value in row)
+    return f"<table:table-row>{cells}</table:table-row>"
+
+
+def _ods_cell(value: Any) -> str:
+    value = _xlsx_value(value)
+    if value in (None, ""):
+        return "<table:table-cell/>"
+    if isinstance(value, bool):
+        text = "TRUE" if value else "FALSE"
+        return (
+            f'<table:table-cell office:value-type="boolean" office:boolean-value="{str(value).lower()}">'
+            f"<text:p>{text}</text:p></table:table-cell>"
+        )
+    if isinstance(value, (int, float)):
+        return (
+            f'<table:table-cell office:value-type="float" office:value="{value}">'
+            f"<text:p>{value}</text:p></table:table-cell>"
+        )
+    text = escape(str(value))
+    return f'<table:table-cell office:value-type="string"><text:p>{text}</text:p></table:table-cell>'
+
+
+def _odp_page(slide: dict[str, Any], index: int) -> str:
+    title = escape(str(slide.get("title") or f"Slide {index}"))
+    bullets = [escape(str(item)) for item in slide.get("bullets") or []]
+    bullet_items = "".join(f"<text:list-item><text:p>{bullet}</text:p></text:list-item>" for bullet in bullets)
+    body = f"<text:list>{bullet_items}</text:list>" if bullet_items else "<text:p/>"
+    return f"""<draw:page draw:name="Slide {index}" draw:master-page-name="Default">
+  <draw:frame presentation:class="title" draw:name="Title {index}" svg:width="24cm" svg:height="2cm" svg:x="1.5cm" svg:y="1cm" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0">
+    <draw:text-box><text:p>{title}</text:p></draw:text-box>
+  </draw:frame>
+  <draw:frame presentation:class="outline" draw:name="Content {index}" svg:width="24cm" svg:height="12cm" svg:x="1.5cm" svg:y="3.5cm" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0">
+    <draw:text-box>{body}</draw:text-box>
+  </draw:frame>
+</draw:page>"""
 
 
 def _docx(title: str, content: str) -> bytes:

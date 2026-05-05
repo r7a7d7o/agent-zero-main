@@ -20,12 +20,24 @@ R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
+ODF_OFFICE_NS = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+ODF_TEXT_NS = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+ODF_TABLE_NS = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+ODF_DRAW_NS = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+ODF_PRESENTATION_NS = "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"
+ODS_DIRECT_EDIT_ROW_LIMIT = 10000
+ODS_DIRECT_EDIT_COLUMN_LIMIT = 1024
 
 for prefix, namespace in {
     "w": W_NS,
     "a": A_NS,
     "p": P_NS,
     "r": R_NS,
+    "office": ODF_OFFICE_NS,
+    "text": ODF_TEXT_NS,
+    "table": ODF_TABLE_NS,
+    "draw": ODF_DRAW_NS,
+    "presentation": ODF_PRESENTATION_NS,
 }.items():
     ET.register_namespace(prefix, namespace)
 
@@ -40,6 +52,12 @@ def read_artifact(doc: dict[str, Any], max_chars: int = 12000) -> dict[str, Any]
     ext = str(doc["extension"]).lower()
     if ext == "md":
         content = _read_markdown(path)
+    elif ext == "odt":
+        content = _read_odt(path)
+    elif ext == "ods":
+        content = _read_ods(path)
+    elif ext == "odp":
+        content = _read_odp(path)
     elif ext == "docx":
         content = _read_docx(path)
     elif ext == "xlsx":
@@ -74,6 +92,12 @@ def edit_artifact(
     invalidate_sessions = bool(kwargs.pop("invalidate_sessions", False))
     if ext == "md":
         updated, details = _edit_markdown(before, op, content=content, find=find, replace=replace, **kwargs)
+    elif ext == "odt":
+        updated, details = _edit_odt(before, op, content=content, find=find, replace=replace, **kwargs)
+    elif ext == "ods":
+        updated, details = _edit_ods(before, op, content=content, find=find, replace=replace, sheet=sheet, cells=cells, rows=rows, **kwargs)
+    elif ext == "odp":
+        updated, details = _edit_odp(before, op, content=content, find=find, replace=replace, slides=slides, **kwargs)
     elif ext == "docx":
         updated, details = _edit_docx(before, op, content=content, find=find, replace=replace, **kwargs)
     elif ext == "xlsx":
@@ -179,6 +203,65 @@ def _read_markdown(path: Path) -> dict[str, Any]:
     }
 
 
+def _read_odt(path: Path) -> dict[str, Any]:
+    root = _odf_content_root(path)
+    paragraphs = _odf_text_lines(root)
+    headings = [
+        "".join(node.itertext()).strip()
+        for node in root.iter(qn(ODF_TEXT_NS, "h"))
+        if "".join(node.itertext()).strip()
+    ]
+    return {
+        "kind": "document",
+        "format": "odt",
+        "paragraph_count": len(paragraphs),
+        "headings": headings[:40],
+        "text": "\n".join(paragraphs),
+        "paragraphs": paragraphs[:80],
+    }
+
+
+def _read_ods(path: Path) -> dict[str, Any]:
+    sheets = _ods_sheets_from_bytes(
+        path.read_bytes(),
+        max_rows=ODS_DIRECT_EDIT_ROW_LIMIT,
+        max_cols=ODS_DIRECT_EDIT_COLUMN_LIMIT,
+    )
+    return {
+        "kind": "spreadsheet",
+        "format": "ods",
+        "sheet_count": len(sheets),
+        "sheets": [
+            {
+                "name": sheet["name"],
+                "max_row": len(sheet["rows"]),
+                "max_column": max((len(row) for row in sheet["rows"]), default=0),
+                "chart_count": 0,
+                "charts": [],
+                "preview_rows": sheet["rows"][:80],
+            }
+            for sheet in sheets[:8]
+        ],
+    }
+
+
+def _read_odp(path: Path) -> dict[str, Any]:
+    slides = _odp_text_slides(path.read_bytes())
+    return {
+        "kind": "presentation",
+        "format": "odp",
+        "slide_count": len(slides),
+        "slides": [
+            {
+                "index": index + 1,
+                "title": slide.get("title", ""),
+                "lines": [slide.get("title", ""), *slide.get("bullets", [])],
+            }
+            for index, slide in enumerate(slides[:40])
+        ],
+    }
+
+
 def _read_docx(path: Path) -> dict[str, Any]:
     with zipfile.ZipFile(path) as archive:
         xml = archive.read("word/document.xml")
@@ -272,6 +355,30 @@ def _edit_markdown(before: bytes, op: str, *, content: str = "", find: str = "",
     return updated.encode("utf-8"), details
 
 
+def _edit_odt(before: bytes, op: str, *, content: str = "", find: str = "", replace: str = "", **kwargs: Any) -> tuple[bytes, dict[str, Any]]:
+    if op not in {"set_text", "append_text", "prepend_text", "replace_text", "delete_text"}:
+        raise ValueError(f"Unsupported ODT operation: {op}")
+
+    paragraphs = _odf_text_lines(ET.fromstring(_zip_member(before, "content.xml")))
+    if op == "set_text":
+        lines = _text_lines(content)
+        return document_store.odt_bytes_from_paragraphs(lines), {"paragraphs_written": len(lines)}
+    if op == "append_text":
+        lines = [*paragraphs, *_text_lines(content)]
+        return document_store.odt_bytes_from_paragraphs(lines), {"paragraphs_written": len(lines)}
+    if op == "prepend_text":
+        lines = [*_text_lines(content), *paragraphs]
+        return document_store.odt_bytes_from_paragraphs(lines), {"paragraphs_written": len(lines)}
+
+    if not find:
+        raise ValueError("find is required for replace_text")
+    replacement = "" if op == "delete_text" else replace
+    joined, count = _replace_limited("\n".join(paragraphs), find, replacement, _int_or_none(kwargs.get("count")))
+    if count == 0:
+        return before, {"replacements": count}
+    return document_store.odt_bytes_from_paragraphs(joined.splitlines()), {"replacements": count}
+
+
 def _edit_docx(before: bytes, op: str, *, content: str = "", find: str = "", replace: str = "", **kwargs: Any) -> tuple[bytes, dict[str, Any]]:
     if op not in {"set_text", "append_text", "prepend_text", "replace_text", "delete_text"}:
         raise ValueError(f"Unsupported DOCX operation: {op}")
@@ -325,6 +432,75 @@ def _edit_docx(before: bytes, op: str, *, content: str = "", find: str = "", rep
 
     files["word/document.xml"] = _xml_bytes(root)
     return _zip_from_existing(files), details
+
+
+def _edit_ods(
+    before: bytes,
+    op: str,
+    *,
+    content: str = "",
+    find: str = "",
+    replace: str = "",
+    sheet: str = "",
+    cells: Any = None,
+    rows: Any = None,
+    **kwargs: Any,
+) -> tuple[bytes, dict[str, Any]]:
+    if op not in {"set_text", "set_rows", "append_text", "append_rows", "set_cells", "replace_text", "delete_text"}:
+        raise ValueError(f"Unsupported ODS operation: {op}")
+
+    sheets = _ods_sheets_from_bytes(
+        before,
+        max_rows=ODS_DIRECT_EDIT_ROW_LIMIT,
+        max_cols=ODS_DIRECT_EDIT_COLUMN_LIMIT,
+        strict_limits=True,
+    )
+    if not sheets:
+        sheets = [{"name": "Sheet1", "rows": []}]
+    worksheet = _ods_sheet(sheets, sheet)
+    details: dict[str, Any] = {"sheet": worksheet["name"]}
+
+    if op in {"set_text", "set_rows"}:
+        parsed_rows = _normalize_rows(rows if rows is not None else content)
+        worksheet["rows"] = parsed_rows
+        details["rows_written"] = len(parsed_rows)
+    elif op in {"append_text", "append_rows"}:
+        parsed_rows = _normalize_rows(rows if rows is not None else content)
+        worksheet["rows"].extend(parsed_rows)
+        details["rows_appended"] = len(parsed_rows)
+        details["start_row"] = max(len(worksheet["rows"]) - len(parsed_rows) + 1, 1)
+    elif op == "set_cells":
+        assignments = _normalize_cells(cells, default_sheet=worksheet["name"])
+        for sheet_name, cell, value in assignments:
+            target = _ods_sheet(sheets, sheet_name)
+            row_idx, col_idx = _cell_indices(cell)
+            _set_matrix_value(target["rows"], row_idx, col_idx, value)
+        details["cells_written"] = len(assignments)
+    else:
+        if not find:
+            raise ValueError("find is required for replace_text")
+        replacement = "" if op == "delete_text" else replace
+        count = 0
+        limit = _int_or_none(kwargs.get("count"))
+        for item in sheets:
+            for row_idx, row in enumerate(item["rows"]):
+                for col_idx, value in enumerate(row):
+                    if not isinstance(value, str) or find not in value:
+                        continue
+                    remaining = None if limit is None else max(limit - count, 0)
+                    if remaining == 0:
+                        break
+                    row[col_idx], replaced = _replace_limited(value, find, replacement, remaining)
+                    count += replaced
+                if limit is not None and count >= limit:
+                    break
+            if limit is not None and count >= limit:
+                break
+        details["replacements"] = count
+        if count == 0:
+            return before, details
+
+    return document_store.ods_bytes_from_sheets(sheets), details
 
 
 def _edit_xlsx(
@@ -956,6 +1132,57 @@ def _edit_pptx(before: bytes, op: str, *, content: str = "", find: str = "", rep
     return _zip_from_existing(files), {"replacements": count}
 
 
+def _edit_odp(before: bytes, op: str, *, content: str = "", find: str = "", replace: str = "", slides: Any = None, **kwargs: Any) -> tuple[bytes, dict[str, Any]]:
+    if op not in {"set_text", "set_slides", "append_text", "append_slide", "replace_text", "delete_text"}:
+        raise ValueError(f"Unsupported ODP operation: {op}")
+
+    if op in {"set_text", "set_slides"}:
+        parsed_slides = _normalize_slides(slides if slides is not None else content)
+        return document_store.odp_bytes_from_slides(parsed_slides), {"slides_written": len(parsed_slides)}
+
+    existing = _odp_text_slides(before)
+    if op in {"append_text", "append_slide"}:
+        existing.extend(_normalize_slides(slides if slides is not None else content))
+        return document_store.odp_bytes_from_slides(existing), {"slides_written": len(existing)}
+
+    if not find:
+        raise ValueError("find is required for replace_text")
+    replacement = "" if op == "delete_text" else replace
+    count = 0
+    limit = _int_or_none(kwargs.get("count"))
+    for slide in existing:
+        title, title_count = _replace_limited(
+            str(slide.get("title") or ""),
+            find,
+            replacement,
+            None if limit is None else max(limit - count, 0),
+        )
+        if title_count:
+            slide["title"] = title
+            count += title_count
+        if limit is not None and count >= limit:
+            break
+        bullets = []
+        for bullet in slide.get("bullets") or []:
+            updated, replaced = _replace_limited(
+                str(bullet),
+                find,
+                replacement,
+                None if limit is None else max(limit - count, 0),
+            )
+            bullets.append(updated)
+            count += replaced
+            if limit is not None and count >= limit:
+                bullets.extend(slide.get("bullets", [])[len(bullets):])
+                break
+        slide["bullets"] = bullets
+        if limit is not None and count >= limit:
+            break
+    if count == 0:
+        return before, {"replacements": count}
+    return document_store.odp_bytes_from_slides(existing), {"replacements": count}
+
+
 def _replace_text_in_paragraphs(
     root: ET.Element,
     *,
@@ -1138,6 +1365,188 @@ def _markdown_table_rows(lines: list[str]) -> list[list[str]]:
             continue
         rows.append(cells)
     return rows
+
+
+def _zip_member(data: bytes, name: str) -> bytes:
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        return archive.read(name)
+
+
+def _odf_content_root(path: Path) -> ET.Element:
+    with zipfile.ZipFile(path) as archive:
+        return ET.fromstring(archive.read("content.xml"))
+
+
+def _odf_text_lines(root: ET.Element) -> list[str]:
+    lines = []
+    for node in root.iter():
+        if node.tag not in {qn(ODF_TEXT_NS, "h"), qn(ODF_TEXT_NS, "p")}:
+            continue
+        text = "".join(node.itertext()).strip()
+        if text:
+            lines.append(text)
+    return lines
+
+
+def _ods_sheets_from_bytes(
+    data: bytes,
+    *,
+    max_rows: int | None = None,
+    max_cols: int | None = None,
+    strict_limits: bool = False,
+) -> list[dict[str, Any]]:
+    root = ET.fromstring(_zip_member(data, "content.xml"))
+    sheets = []
+    for index, table in enumerate(root.iter(qn(ODF_TABLE_NS, "table")), start=1):
+        name = table.get(qn(ODF_TABLE_NS, "name")) or table.get("name") or f"Sheet{index}"
+        rows = []
+        for row in table:
+            if row.tag != qn(ODF_TABLE_NS, "table-row"):
+                continue
+            values = _ods_row_values(row, max_cols=max_cols, strict_limits=strict_limits)
+            repeat_rows = _repeat_count(row.get(qn(ODF_TABLE_NS, "number-rows-repeated")))
+            append_count = repeat_rows
+            if max_rows is not None:
+                remaining = max(max_rows - len(rows), 0)
+                append_count = min(repeat_rows, remaining)
+                if strict_limits and repeat_rows > append_count and _row_has_content(values):
+                    raise ValueError(f"ODS direct editing is limited to {max_rows} populated rows per sheet.")
+                if remaining == 0:
+                    if not strict_limits:
+                        break
+                    continue
+            for _ in range(append_count):
+                rows.append(values.copy())
+            if max_rows is not None and len(rows) >= max_rows and not strict_limits:
+                break
+        sheets.append({"name": name, "rows": _trim_blank_edges(rows)})
+    return sheets
+
+
+def _ods_row_values(
+    row: ET.Element,
+    *,
+    max_cols: int | None = None,
+    strict_limits: bool = False,
+) -> list[Any]:
+    values = []
+    for cell in row:
+        if cell.tag not in {qn(ODF_TABLE_NS, "table-cell"), qn(ODF_TABLE_NS, "covered-table-cell")}:
+            continue
+        value = _ods_cell_value(cell)
+        repeat = _repeat_count(cell.get(qn(ODF_TABLE_NS, "number-columns-repeated")))
+        append_count = repeat
+        if max_cols is not None:
+            remaining = max(max_cols - len(values), 0)
+            append_count = min(repeat, remaining)
+            if strict_limits and repeat > append_count and _cell_has_content(value):
+                raise ValueError(f"ODS direct editing is limited to {max_cols} populated columns per sheet.")
+            if remaining == 0:
+                if not strict_limits:
+                    break
+                continue
+        for _ in range(append_count):
+            values.append(value)
+        if max_cols is not None and len(values) >= max_cols and not strict_limits:
+            break
+    return values
+
+
+def _ods_cell_value(cell: ET.Element) -> Any:
+    value_type = str(cell.get(qn(ODF_OFFICE_NS, "value-type")) or "").lower()
+    if value_type in {"float", "currency", "percentage"}:
+        raw = cell.get(qn(ODF_OFFICE_NS, "value"))
+        if raw not in (None, ""):
+            try:
+                number = float(raw)
+                return int(number) if number.is_integer() else number
+            except ValueError:
+                pass
+    if value_type == "boolean":
+        raw = str(cell.get(qn(ODF_OFFICE_NS, "boolean-value")) or "").lower()
+        if raw in {"true", "false"}:
+            return raw == "true"
+    text = "\n".join("".join(node.itertext()).strip() for node in cell.iter(qn(ODF_TEXT_NS, "p")))
+    return text.strip()
+
+
+def _repeat_count(value: Any) -> int:
+    try:
+        count = int(value or 1)
+    except (TypeError, ValueError):
+        count = 1
+    return max(1, count)
+
+
+def _trim_blank_edges(rows: list[list[Any]]) -> list[list[Any]]:
+    trimmed = []
+    for row in rows:
+        next_row = list(row)
+        while next_row and not _cell_has_content(next_row[-1]):
+            next_row.pop()
+        trimmed.append(next_row)
+    while trimmed and not _row_has_content(trimmed[-1]):
+        trimmed.pop()
+    return trimmed
+
+
+def _cell_has_content(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _row_has_content(row: list[Any]) -> bool:
+    return any(_cell_has_content(value) for value in row)
+
+
+def _ods_sheet(sheets: list[dict[str, Any]], name: str = "") -> dict[str, Any]:
+    normalized = str(name or "").strip()
+    if normalized:
+        for sheet in sheets:
+            if str(sheet["name"]).casefold() == normalized.casefold():
+                return sheet
+        sheet = {"name": normalized, "rows": []}
+        sheets.append(sheet)
+        return sheet
+    return sheets[0]
+
+
+def _cell_indices(cell: str) -> tuple[int, int]:
+    match = re.fullmatch(r"\$?([A-Za-z]{1,4})\$?([1-9][0-9]*)", str(cell or "").strip())
+    if not match:
+        raise ValueError(f"Invalid cell reference: {cell}")
+    col = 0
+    for char in match.group(1).upper():
+        col = col * 26 + (ord(char) - 64)
+    return int(match.group(2)), col
+
+
+def _set_matrix_value(rows: list[list[Any]], row_idx: int, col_idx: int, value: Any) -> None:
+    while len(rows) < row_idx:
+        rows.append([])
+    row = rows[row_idx - 1]
+    while len(row) < col_idx:
+        row.append("")
+    row[col_idx - 1] = value
+
+
+def _odp_text_slides(data: bytes) -> list[dict[str, Any]]:
+    root = ET.fromstring(_zip_member(data, "content.xml"))
+    slides = []
+    for page in root.iter(qn(ODF_DRAW_NS, "page")):
+        lines = []
+        for node in page.iter():
+            if node.tag not in {qn(ODF_TEXT_NS, "h"), qn(ODF_TEXT_NS, "p")}:
+                continue
+            text = "".join(node.itertext()).strip()
+            if text:
+                lines.append(text)
+        if lines:
+            slides.append({"title": lines[0], "bullets": lines[1:]})
+    return slides
 
 
 def _pptx_text_slides(data: bytes) -> list[dict[str, Any]]:

@@ -33,6 +33,10 @@ class OfficeSession(ApiHandler):
                 )
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
+            if doc["extension"] in {"odt", "ods", "odp"}:
+                validation = libreoffice.validate_odf(doc["path"])
+                if not validation.get("ok"):
+                    return {"ok": False, "error": validation.get("error") or "ODF validation failed."}
             if doc["extension"] == "docx":
                 validation = libreoffice.validate_docx(doc["path"])
                 if not validation.get("ok"):

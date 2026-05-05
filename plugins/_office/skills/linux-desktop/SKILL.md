@@ -23,13 +23,14 @@ Use the Desktop as a full Linux GUI when the user explicitly needs a visual work
 
 ## Operating Model
 
-1. Prefer `document_artifact` for creating, reading, and editing Markdown, DOCX, XLSX, and PPTX files.
+1. Prefer `document_artifact` for creating, reading, and editing Markdown, ODT, ODS, ODP, DOCX, XLSX, and PPTX files.
 2. Treat Markdown as first-class. For writing, notes, reports, and drafts with no explicit binary Office requirement, create Markdown and use the custom Markdown editor when the user opens the canvas.
-3. Use the Desktop only when the user asks for the Desktop, a GUI app, binary Office visual work, or visual confirmation.
-4. Never open the Desktop/canvas automatically from a tool result if the user has not opened it. Offer the explicit Open in canvas action instead.
-5. Launch common apps from the Desktop icons, the header buttons, or `scripts/desktopctl.sh`.
-6. Use the external Agent Zero Browser for web browsing. Do not launch an operating-system browser in this version.
-7. Verify GUI work by observing the desktop state, checking window titles, and saving the file before reporting success.
+3. Treat ODF as first-class for LibreOffice office work: ODT in Writer, ODS in Calc, ODP in Impress. Use DOCX/XLSX/PPTX only for explicit Microsoft compatibility.
+4. Use the Desktop only when the user asks for the Desktop, a GUI app, binary Office visual work, or visual confirmation.
+5. Never open the Desktop/canvas automatically from a tool result if the user has not opened it. Offer the explicit Open in canvas action instead.
+6. Launch common apps from the Desktop icons, the header buttons, or `scripts/desktopctl.sh`.
+7. Use the external Agent Zero Browser for web browsing. Do not launch an operating-system browser in this version.
+8. Verify GUI work by observing the desktop state, checking window titles, and saving the file before reporting success.
 
 ## Control Flow
 
@@ -95,9 +96,9 @@ Use these folders when the user asks to inspect or manipulate project files, ski
 
 ## App Map
 
-- `LibreOffice Writer`: word processing and DOCX layout.
-- `LibreOffice Calc`: spreadsheets, formulas, tables, charts.
-- `LibreOffice Impress`: presentations and slide polish.
+- `LibreOffice Writer`: ODT word processing and DOCX compatibility layout.
+- `LibreOffice Calc`: ODS spreadsheets, formulas, tables, charts, and XLSX compatibility.
+- `LibreOffice Impress`: ODP presentations, slide polish, and PPTX compatibility.
 - `Workdir`: graphical file management with Thunar at the configured Agent Zero workdir (default `/a0/usr/workdir`).
 - `Terminal`: shell work inside the Agent Zero runtime.
 - `Settings`: XFCE system settings.

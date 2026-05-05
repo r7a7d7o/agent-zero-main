@@ -20,7 +20,7 @@ from helpers import files, virtual_desktop
 from plugins._office.helpers import document_store, libreoffice
 
 
-OFFICIAL_EXTENSIONS = {"docx", "xlsx", "pptx"}
+OFFICIAL_EXTENSIONS = {"odt", "ods", "odp", "docx", "xlsx", "pptx"}
 SYSTEM_SESSION_ID = "agent-zero-desktop"
 SYSTEM_FILE_ID = "system-desktop"
 SYSTEM_TITLE = "Desktop"

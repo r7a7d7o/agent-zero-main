@@ -72,6 +72,21 @@ def test_document_artifact_create_defaults_to_markdown(office_state):
     assert Path(doc["path"]).read_text(encoding="utf-8").startswith("# Research Note")
 
 
+@pytest.mark.parametrize(
+    ("kind", "title", "fmt", "expected_name"),
+    [
+        ("document", "real-chat-canvas-smoke.md", "md", "real-chat-canvas-smoke.md"),
+        ("document", "Board Memo.ODT", "odt", "Board Memo.odt"),
+        ("spreadsheet", "Budget.ods", "ods", "Budget.ods"),
+        ("presentation", "Roadmap.odp", "odp", "Roadmap.odp"),
+    ],
+)
+def test_create_document_does_not_duplicate_matching_extension(office_state, kind, title, fmt, expected_name):
+    doc = document_store.create_document(kind, title, fmt, content="Smoke")
+
+    assert Path(doc["path"]).name == expected_name
+
+
 def test_explicit_docx_creates_valid_word_package(office_state):
     doc = document_store.create_document("document", "Board Memo", "docx", "A careful memo.")
 
@@ -80,6 +95,23 @@ def test_explicit_docx_creates_valid_word_package(office_state):
     assert libreoffice.validate_docx(doc["path"])["ok"] is True
     with zipfile.ZipFile(doc["path"]) as archive:
         assert "word/document.xml" in archive.namelist()
+
+
+def test_odf_formats_create_valid_libreoffice_packages(office_state):
+    writer = document_store.create_document("document", "Board Memo", "odt", "A careful memo.")
+    sheet = document_store.create_document("spreadsheet", "Budget", "ods", "Name,Amount\nPlatform,1000")
+    deck = document_store.create_document("presentation", "Roadmap", "odp", "Roadmap\nLaunch sequence")
+
+    assert writer["extension"] == "odt"
+    assert sheet["extension"] == "ods"
+    assert deck["extension"] == "odp"
+    assert Path(writer["path"]).parent == office_state.documents
+    assert libreoffice.validate_odf(writer["path"])["ok"] is True
+    assert libreoffice.validate_odf(sheet["path"])["ok"] is True
+    assert libreoffice.validate_odf(deck["path"])["ok"] is True
+    assert artifact_editor.read_artifact(writer)["text"].startswith("Board Memo")
+    assert artifact_editor.read_artifact(sheet)["sheets"][0]["preview_rows"][1][1] == 1000
+    assert artifact_editor.read_artifact(deck)["slides"][0]["title"] == "Roadmap"
 
 
 def test_blank_docx_includes_editable_body_paragraph(office_state):
@@ -93,7 +125,57 @@ def test_blank_docx_includes_editable_body_paragraph(office_state):
     assert 'xml:space="preserve">&#160;</w:t>' in xml
 
 
-def test_xlsx_and_pptx_creation_and_direct_edits_still_work(office_state):
+def test_odf_and_ooxml_creation_and_direct_edits_still_work(office_state):
+    odt = document_store.create_document("document", "Writer Memo", "odt", "Old phrase")
+    updated_odt, odt_payload = artifact_editor.edit_artifact(
+        odt,
+        operation="replace_text",
+        find="Old phrase",
+        replace="New phrase",
+    )
+    odt_read = artifact_editor.read_artifact(updated_odt)
+
+    assert odt_payload["changed"] is True
+    assert "New phrase" in odt_read["text"]
+
+    ods = document_store.create_document(
+        "spreadsheet",
+        "Budget ODS",
+        "ods",
+        "Name,Amount\nPlatform,1000",
+    )
+    updated_ods, ods_payload = artifact_editor.edit_artifact(
+        ods,
+        operation="set_cells",
+        cells={"Sheet1!B2": 12500, "Sheet1!A3": "Research", "Sheet1!B3": 4700},
+    )
+    ods_read = artifact_editor.read_artifact(updated_ods)
+    ods_rows = ods_read["sheets"][0]["preview_rows"]
+
+    assert ods_payload["changed"] is True
+    assert ods_rows[1][1] == 12500
+    assert ods_rows[2][0] == "Research"
+
+    odp = document_store.create_document(
+        "presentation",
+        "Roadmap ODP",
+        "odp",
+        "Roadmap\nLaunch sequence\n\n---\n\nNext\nPolish rollout",
+    )
+    updated_odp, odp_payload = artifact_editor.edit_artifact(
+        odp,
+        operation="set_slides",
+        slides=[
+            {"title": "Now", "bullets": ["Stabilize"]},
+            {"title": "Next", "bullets": ["Polish"]},
+        ],
+    )
+    odp_read = artifact_editor.read_artifact(updated_odp)
+
+    assert odp_payload["changed"] is True
+    assert odp_read["slide_count"] == 2
+    assert odp_read["slides"][1]["title"] == "Next"
+
     sheet = document_store.create_document(
         "spreadsheet",
         "Budget",
@@ -142,7 +224,29 @@ def test_xlsx_and_pptx_creation_and_direct_edits_still_work(office_state):
     assert deck_read["slides"][1]["title"] == "Next"
 
 
-def test_document_artifact_accepts_method_alias_for_xlsx_create(office_state, monkeypatch):
+def test_ods_direct_edit_preserves_rows_beyond_preview_window_and_blank_separators(office_state):
+    rows = [["Row", "Value"], ["alpha", 1], [], ["separator-survives", 2]]
+    rows.extend([[f"item-{index}", index] for index in range(4, 96)])
+    doc = document_store.create_document("spreadsheet", "Long ODS", "ods", "")
+    updated, payload = artifact_editor.edit_artifact(
+        doc,
+        operation="set_rows",
+        rows=rows,
+    )
+    updated, payload = artifact_editor.edit_artifact(
+        updated,
+        operation="set_cells",
+        cells={"Sheet1!B90": 9000},
+    )
+    parsed = artifact_editor._ods_sheets_from_bytes(Path(updated["path"]).read_bytes(), max_rows=120, max_cols=10)
+
+    assert payload["changed"] is True
+    assert parsed[0]["rows"][2] == []
+    assert parsed[0]["rows"][3][0] == "separator-survives"
+    assert parsed[0]["rows"][89][1] == 9000
+
+
+def test_document_artifact_accepts_method_alias_for_ods_create(office_state, monkeypatch):
     tool_module = types.ModuleType("helpers.tool")
 
     class Response:
@@ -185,30 +289,32 @@ def test_document_artifact_accepts_method_alias_for_xlsx_create(office_state, mo
         tool.execute(
             method="create",
             kind="document",
-            title="New Excel Workbook",
-            format="xlsx",
+            title="New Calc Workbook",
+            format="ods",
             content="Sheet1\n",
         )
     )
     payload = json.loads(response.message)
 
     assert payload["action"] == "create"
-    assert payload["document"]["extension"] == "xlsx"
-    assert Path(payload["document"]["path"]).name == "New Excel Workbook.xlsx"
+    assert payload["document"]["extension"] == "ods"
+    assert Path(payload["document"]["path"]).name == "New Calc Workbook.ods"
     assert Path(document_store._path_from_a0(payload["document"]["path"])).exists()
 
 
-def test_odt_is_not_advertised_and_returns_clear_unsupported_response(office_state):
+def test_odf_is_advertised_and_docx_remains_explicit_compatibility(office_state):
     prompt = (PROJECT_ROOT / "plugins" / "_office" / "prompts" / "agent.system.tool.document_artifact.md").read_text(
         encoding="utf-8",
     )
 
-    assert "formats: md docx xlsx pptx" in prompt
+    assert "formats: md odt ods odp docx xlsx pptx" in prompt
+    assert "ODF is first-class for LibreOffice" in prompt
+    assert "DOCX/XLSX/PPTX are compatibility formats" in prompt
     assert "`method` is accepted as an alias for action" in prompt
     assert "they do not open the canvas automatically" in prompt
     assert "Download and Open in canvas message actions" in prompt
-    with pytest.raises(ValueError, match="ODT editing is not supported"):
-        document_store.create_document("document", "Skip ODT", "odt", "")
+    doc = document_store.create_document("document", "Use ODT", "odt", "")
+    assert doc["extension"] == "odt"
 
 
 def test_project_scoped_creation_uses_active_project_root(office_state, monkeypatch):
@@ -224,15 +330,15 @@ def test_project_scoped_creation_uses_active_project_root(office_state, monkeypa
     monkeypatch.setattr(office_state.project_helpers, "get_project_folder", lambda name: str(project_root))
 
     markdown = document_store.create_document("document", "Project Note", "md", "Scoped.", context_id="ctx-project")
-    docx = document_store.create_document("document", "Project Memo", "docx", "Scoped.", context_id="ctx-project")
+    odt = document_store.create_document("document", "Project Memo", "odt", "Scoped.", context_id="ctx-project")
 
     assert Path(markdown["path"]).parent == project_root
-    assert Path(docx["path"]).parent == project_root / "documents"
+    assert Path(odt["path"]).parent == project_root / "documents"
 
 
 def test_non_project_creation_uses_configured_workdir(office_state):
     markdown = document_store.create_document("document", "Workdir Note", content="Plain.")
-    spreadsheet = document_store.create_document("spreadsheet", "Workdir Sheet", "xlsx", "Name,Value")
+    spreadsheet = document_store.create_document("spreadsheet", "Workdir Sheet", "ods", "Name,Value")
 
     assert markdown["extension"] == "md"
     assert Path(markdown["path"]).parent == office_state.workdir
@@ -324,9 +430,9 @@ def test_direct_markdown_edits_refresh_open_canvas_session(office_state, monkeyp
 
 def test_markdown_session_rejects_office_binaries(office_state):
     manager = markdown_sessions.MarkdownSessionManager()
-    doc = document_store.create_document("document", "Desktop Only", "docx", "Native text")
+    doc = document_store.create_document("document", "Desktop Only", "odt", "Native text")
 
-    with pytest.raises(ValueError, match="Open .docx files in the Desktop"):
+    with pytest.raises(ValueError, match="Open .odt files in the Desktop"):
         manager.open(doc)
 
 
@@ -439,12 +545,12 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     monkeypatch.setattr(libreoffice_desktop.LibreOfficeDesktopManager, "_spawn_desktop_locked", fake_spawn)
     monkeypatch.setattr(libreoffice_desktop.LibreOfficeDesktopManager, "_open_document_locked", fake_open_document)
 
-    doc = document_store.create_document("spreadsheet", "Official Sheet", "xlsx", "Name,Value\nA,1")
+    doc = document_store.create_document("spreadsheet", "Official Sheet", "ods", "Name,Value\nA,1")
     manager = libreoffice_desktop.LibreOfficeDesktopManager()
     payload = manager.open(doc)
 
     assert payload["available"] is True
-    assert payload["extension"] == "xlsx"
+    assert payload["extension"] == "ods"
     assert payload["url"].startswith("/desktop/session/")
     registry = tmp_path / "desktop" / "profiles" / payload["session_id"] / "user" / "registrymodifications.xcu"
     registry_text = registry.read_text(encoding="utf-8")
@@ -463,10 +569,13 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     settings_launcher = tmp_path / "desktop" / "profiles" / payload["session_id"] / "Desktop" / "Settings.desktop"
     terminal_text = terminal_launcher.read_text(encoding="utf-8")
     settings_text = settings_launcher.read_text(encoding="utf-8")
+    browser_launcher = tmp_path / "desktop" / "profiles" / payload["session_id"] / "Desktop" / "Browser.desktop"
+    browser_text = browser_launcher.read_text(encoding="utf-8")
     assert "xfce4-terminal" in terminal_text
     assert "org.xfce.terminal" in terminal_text
     assert not files_launcher.exists()
-    assert not (tmp_path / "desktop" / "profiles" / payload["session_id"] / "Desktop" / "Browser.desktop").exists()
+    assert "open-url" in browser_text
+    assert "firefox" not in browser_text.lower()
     assert "xfce4-settings-manager" in settings_text
     assert "org.xfce.settings.manager" in settings_text
     link_targets = {

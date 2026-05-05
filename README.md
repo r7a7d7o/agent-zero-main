@@ -82,7 +82,7 @@ The canvas makes agent work visible. You can watch it browse, inspect what chang
 
 Create, open, and cowork with the AI on documents, spreadsheets, and presentation decks.
 
-The document canvas supports Markdown by default, with LibreOffice-backed DOCX, XLSX, and PPTX workflows when binary artifacts are needed. Agents can create substantial deliverables, read their contents, apply precise saved edits, preserve version history, and generate native XLSX charts directly inside spreadsheets.
+The document canvas supports Markdown by default, with LibreOffice-native ODT, ODS, and ODP workflows when binary office artifacts are needed. DOCX, XLSX, and PPTX remain available for explicit Microsoft compatibility. Agents can create substantial deliverables, read their contents, apply precise saved edits, preserve version history, and generate native XLSX charts directly inside compatibility spreadsheets.
 
 ## Native Browser With Annotations and Extensions
 
@@ -176,7 +176,7 @@ Agent Zero supports plugins, MCP, A2A, custom tools, custom prompts, project-sco
 ## Try These First
 
 - **Research with a browser:** "Open the browser, compare three project management tools for a small AI team, and summarize the tradeoffs with source links."
-- **Cowork on a spreadsheet:** "Create an editable XLSX budget model with assumptions, monthly projections, and a native chart."
+- **Cowork on a spreadsheet:** "Create an editable ODS budget model with assumptions and monthly projections."
 - **Review a web UI:** "Open my local app in the Browser. I will annotate the page with comments; then implement the requested UI fixes."
 - **Work inside a Git project:** "Clone this repository into a new project, inspect the architecture, and propose the safest first improvement."
 - **Create a specialist:** "Create an Agent Profile for financial analysis with cautious reasoning, clear assumptions, and spreadsheet-first deliverables."

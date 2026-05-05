@@ -42,6 +42,9 @@ DOCUMENT_TERMS = {
     "manual",
     "markdown",
     "memo",
+    "odt",
+    "open document",
+    "opendocument",
     "policy",
     "proposal",
     "report",
@@ -49,11 +52,14 @@ DOCUMENT_TERMS = {
     "spec",
     "story",
     "whitepaper",
+    "writer",
 }
 
 SPREADSHEET_TERMS = {
     "budget",
+    "calc",
     "excel",
+    "ods",
     "sheet",
     "spreadsheet",
     "table",
@@ -63,6 +69,8 @@ SPREADSHEET_TERMS = {
 
 PRESENTATION_TERMS = {
     "deck",
+    "impress",
+    "odp",
     "ppt",
     "pptx",
     "presentation",
@@ -89,6 +97,9 @@ EXPLICIT_FORMAT_TERMS = {
     "docx",
     "md",
     "markdown",
+    "odp",
+    "ods",
+    "odt",
     "pptx",
     "xlsx",
 }
@@ -98,8 +109,10 @@ HANDOFF_TERMS = {
     "artifacts",
     "canvas",
     "document canvas",
+    "download",
     "downloadable",
     "editable",
+    "export",
     "open it",
     "save it",
     "save this",
@@ -118,6 +131,36 @@ CHAT_ONLY_TERMS = {
     "no file",
     "no files",
 }
+
+META_DISCUSSION_TERMS = {
+    "affordance",
+    "automatically",
+    "auto",
+    "disable",
+    "issue",
+    "less triggered",
+    "problem",
+    "speedbump",
+    "stop",
+    "trigger",
+    "triggered",
+    "why",
+}
+
+OOXML_COMPAT_TERMS = {
+    "docx",
+    "excel",
+    "microsoft word",
+    "powerpoint",
+    "ppt",
+    "pptx",
+    "word",
+    "xlsx",
+}
+
+ODF_DOCUMENT_TERMS = {"odt", "open document text", "opendocument text", "writer"}
+ODF_SPREADSHEET_TERMS = {"calc", "ods", "open document spreadsheet", "opendocument spreadsheet"}
+ODF_PRESENTATION_TERMS = {"impress", "odp", "open document presentation", "opendocument presentation"}
 
 SKIP_RESPONSE_PREFIXES = (
     "i can't",
@@ -200,11 +243,17 @@ def normalize_text(value: str) -> str:
 
 def infer_kind_and_format(lowered_user: str) -> tuple[str, str]:
     if has_any(lowered_user, PRESENTATION_TERMS):
-        return "presentation", "pptx"
+        if has_any(lowered_user, {"powerpoint", "ppt", "pptx"}):
+            return "presentation", "pptx"
+        return "presentation", "odp"
     if has_any(lowered_user, SPREADSHEET_TERMS):
-        return "spreadsheet", "xlsx"
-    if has_any(lowered_user, {"docx"}):
+        if has_any(lowered_user, {"excel", "xlsx"}):
+            return "spreadsheet", "xlsx"
+        return "spreadsheet", "ods"
+    if has_any(lowered_user, {"docx", "microsoft word", "word"}):
         return "document", "docx"
+    if has_any(lowered_user, ODF_DOCUMENT_TERMS):
+        return "document", "odt"
     return "document", "md"
 
 
@@ -213,8 +262,6 @@ def artifact_intent(lowered_user: str, response_text: str) -> str | None:
         return None
     if has_explicit_handoff_signal(lowered_user):
         return "explicit_handoff"
-    if has_any(lowered_user, DELIVERABLE_TERMS) and looks_like_standalone_artifact(response_text):
-        return "document_intent"
     return None
 
 
@@ -226,25 +273,42 @@ def has_document_creation_intent(lowered_user: str) -> bool:
 
 
 def has_explicit_handoff_signal(lowered_user: str) -> bool:
-    if has_any(lowered_user, EXPLICIT_FORMAT_TERMS | HANDOFF_TERMS):
-        return True
-    if has_any(lowered_user, FILE_HANDOFF_TERMS) and has_any(
-        lowered_user,
-        DOCUMENT_TERMS | SPREADSHEET_TERMS | PRESENTATION_TERMS,
-    ):
+    if looks_like_affordance_meta_discussion(lowered_user):
+        return False
+
+    creation = r"(?:write|draft|compose|create|generate|prepare|produce|make|build|author|format|convert|turn|save|export)"
+    handoff = r"(?:file|files|artifact|artifacts|canvas|download|downloadable|editable file|open in canvas)"
+    format_name = (
+        r"(?:md|markdown|odt|ods|odp|docx|xlsx|pptx|writer|calc|impress|word|excel|"
+        r"powerpoint|document|spreadsheet|workbook|presentation|deck|slides)"
+    )
+
+    if re.search(rf"\b{creation}\b(?:\W+\w+){{0,10}}\W+\b{handoff}\b", lowered_user):
         return True
     if re.search(
-        r"\b(?:convert|format|save|turn)\b(?:\W+\w+){0,8}?\W+(?:as|to|into)\s+"
-        r"(?:a|an|the)?\s*(?:doc|document|markdown|spreadsheet|workbook|presentation|deck|slides|md|docx|xlsx|pptx)\b",
+        rf"\b{creation}\b(?:\W+\w+){{0,10}}\W+(?:as|to|into)\s+"
+        rf"(?:a|an|the)?\s*{format_name}\b",
         lowered_user,
     ):
         return True
-    return bool(re.search(
-        r"\b(?:write|draft|compose|create|generate|prepare|produce|make|build|author|format)\b"
-        r"(?:\s+(?:me|us|a|an|the|new|blank|editable|office|word|excel|powerpoint))*"
-        r"\s+(?:doc|document|markdown|spreadsheet|workbook|presentation|deck|slides)\b",
+    if re.search(rf"\b{creation}\b(?:\W+\w+){{0,10}}\W+\b(?:md|markdown|odt|ods|odp|docx|xlsx|pptx|writer|calc|impress)\b", lowered_user):
+        return True
+    return bool(
+        has_any(lowered_user, FILE_HANDOFF_TERMS | HANDOFF_TERMS)
+        and has_any(
+            lowered_user,
+            EXPLICIT_FORMAT_TERMS | ODF_DOCUMENT_TERMS | ODF_SPREADSHEET_TERMS | ODF_PRESENTATION_TERMS | OOXML_COMPAT_TERMS,
+        )
+    )
+
+
+def looks_like_affordance_meta_discussion(lowered_user: str) -> bool:
+    if not has_any(lowered_user, META_DISCUSSION_TERMS):
+        return False
+    return has_any(
         lowered_user,
-    ))
+        DOCUMENT_TERMS | SPREADSHEET_TERMS | PRESENTATION_TERMS | EXPLICIT_FORMAT_TERMS | FILE_HANDOFF_TERMS,
+    )
 
 
 def has_any(text: str, terms: set[str]) -> bool:

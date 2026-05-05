@@ -119,6 +119,11 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "setupTitle()" not in panel
     assert "Setup in progress" not in store
     assert "office-log" not in panel
+    assert "New Writer document" in panel
+    assert "DOCX</span>" not in panel
+    assert "$store.office.create('document', 'odt')" in panel
+    assert "$store.office.create('spreadsheet', 'ods')" in panel
+    assert "$store.office.create('presentation', 'odp')" in panel
 
 
 def test_desktop_xpra_canvas_scroll_is_forwarded_to_the_remote_session():
@@ -407,7 +412,8 @@ def test_office_skills_preserve_markdown_first_and_opt_in_desktop_policy():
         PROJECT_ROOT / "plugins" / "_office" / "skills" / "presentation-decks" / "SKILL.md"
     ).read_text(encoding="utf-8")
 
-    assert "Markdown is the first-class document format" in office_skill
+    assert "ODF is first-class" in office_skill
+    assert "DOCX, XLSX, or PPTX only" in office_skill
     assert "custom document canvas" in office_skill
     assert "must not open the canvas automatically" in office_skill
     assert "Download and Open in canvas actions" in office_skill
@@ -418,10 +424,11 @@ def test_office_skills_preserve_markdown_first_and_opt_in_desktop_policy():
     assert "persistent Desktop runtime during initial startup" in desktop_skill
     assert '"format": "md"' in markdown_skill
     assert "never open the canvas automatically" in markdown_skill
-    assert '"format": "docx"' in word_skill
+    assert '"format": "odt"' in word_skill
+    assert "DOCX only" in word_skill
     assert "must not open the canvas automatically" in word_skill
-    assert '"format": "xlsx"' in excel_skill
+    assert '"format": "ods"' in excel_skill
     assert "For a blank workbook request" in excel_skill
     assert "must not open the canvas automatically" in excel_skill
-    assert '"format": "pptx"' in presentation_skill
+    assert '"format": "odp"' in presentation_skill
     assert "must not open the canvas automatically" in presentation_skill

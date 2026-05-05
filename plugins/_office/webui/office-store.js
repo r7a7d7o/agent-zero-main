@@ -360,7 +360,7 @@ const model = {
   },
 
   async create(kind = "document", format = "") {
-    const fmt = String(format || (kind === "spreadsheet" ? "xlsx" : kind === "presentation" ? "pptx" : "md")).toLowerCase();
+    const fmt = String(format || (kind === "spreadsheet" ? "ods" : kind === "presentation" ? "odp" : "md")).toLowerCase();
     const title = this.defaultTitle(kind, fmt);
     await this.openSession({
       action: "create",
@@ -831,7 +831,7 @@ const model = {
 
   isBinaryOffice(tab = this.session) {
     const ext = String(tab?.extension || tab?.document?.extension || "").toLowerCase();
-    return ext === "docx" || ext === "xlsx" || ext === "pptx";
+    return ["odt", "ods", "odp", "docx", "xlsx", "pptx"].includes(ext);
   },
 
   hasOfficialOffice(tab = this.session) {
@@ -1872,6 +1872,7 @@ const model = {
   defaultTitle(kind, fmt) {
     const date = new Date().toISOString().slice(0, 10);
     if (fmt === "md") return `Document ${date}`;
+    if (fmt === "odt") return `Writer ${date}`;
     if (fmt === "docx") return `DOCX ${date}`;
     if (kind === "spreadsheet") return `Spreadsheet ${date}`;
     if (kind === "presentation") return `Presentation ${date}`;
@@ -1891,9 +1892,9 @@ const model = {
     const ext = String(tab.extension || tab.document?.extension || "").toLowerCase();
     if (this.isDesktopSession(tab)) return "desktop_windows";
     if (ext === "md") return "article";
-    if (ext === "docx") return "description";
-    if (ext === "xlsx") return "table_chart";
-    if (ext === "pptx") return "co_present";
+    if (ext === "odt" || ext === "docx") return "description";
+    if (ext === "ods" || ext === "xlsx") return "table_chart";
+    if (ext === "odp" || ext === "pptx") return "co_present";
     return "draft";
   },
 

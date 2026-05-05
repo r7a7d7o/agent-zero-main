@@ -53,8 +53,30 @@ def test_explicit_spreadsheet_file_request_creates_spreadsheet_artifact():
 
     assert decision is not None
     assert decision.kind == "spreadsheet"
-    assert decision.fmt == "xlsx"
+    assert decision.fmt == "ods"
     assert decision.reason == "explicit_handoff"
+
+
+def test_explicit_excel_request_keeps_xlsx_compatibility_format():
+    decision = document_affordance.decide_response_artifact(
+        "Build an editable Excel XLSX file for this budget.",
+        substantial_text(),
+    )
+
+    assert decision is not None
+    assert decision.kind == "spreadsheet"
+    assert decision.fmt == "xlsx"
+
+
+def test_explicit_presentation_file_request_uses_odp_by_default():
+    decision = document_affordance.decide_response_artifact(
+        "Create a presentation file for this roadmap.",
+        substantial_text(),
+    )
+
+    assert decision is not None
+    assert decision.kind == "presentation"
+    assert decision.fmt == "odp"
 
 
 def test_convert_into_document_creates_document_artifact():
@@ -111,9 +133,16 @@ def test_deliverable_request_with_artifact_shape_creates_document_artifact():
         standalone_report(),
     )
 
-    assert decision is not None
-    assert decision.kind == "document"
-    assert decision.reason == "document_intent"
+    assert decision is None
+
+
+def test_meta_discussion_about_auto_md_files_does_not_create_artifact():
+    decision = document_affordance.decide_response_artifact(
+        "Why are .md files being created automatically by the document affordance?",
+        standalone_report(),
+    )
+
+    assert decision is None
 
 
 def test_chat_only_instruction_blocks_even_explicit_file_request():

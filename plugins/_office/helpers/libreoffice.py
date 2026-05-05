@@ -11,6 +11,11 @@ from typing import Any
 
 SOFFICE_BINARIES = ("soffice", "libreoffice")
 CONVERT_TIMEOUT_SECONDS = 45
+ODF_MIMETYPES = {
+    "odt": "application/vnd.oasis.opendocument.text",
+    "ods": "application/vnd.oasis.opendocument.spreadsheet",
+    "odp": "application/vnd.oasis.opendocument.presentation",
+}
 
 
 def find_soffice() -> str:
@@ -71,6 +76,29 @@ def validate_docx(path: str | Path) -> dict[str, Any]:
         if result.returncode != 0:
             return {"ok": False, "error": _format_process_error(result)}
         return {"ok": True}
+
+
+def validate_odf(path: str | Path) -> dict[str, Any]:
+    source = Path(path)
+    if not source.exists():
+        return {"ok": False, "error": f"File not found: {source}"}
+    ext = source.suffix.lower().lstrip(".")
+    expected_mimetype = ODF_MIMETYPES.get(ext)
+    if not expected_mimetype:
+        return {"ok": False, "error": f"Unsupported ODF extension: {ext}"}
+    try:
+        with zipfile.ZipFile(source) as archive:
+            first = archive.infolist()[0]
+            mimetype = archive.read("mimetype").decode("utf-8")
+            archive.getinfo("content.xml")
+            archive.getinfo("META-INF/manifest.xml")
+    except Exception as exc:
+        return {"ok": False, "error": f"ODF package validation failed: {exc}"}
+    if first.filename != "mimetype" or first.compress_type != zipfile.ZIP_STORED:
+        return {"ok": False, "error": "ODF mimetype must be the first uncompressed package entry."}
+    if mimetype != expected_mimetype:
+        return {"ok": False, "error": f"ODF mimetype mismatch: expected {expected_mimetype}, got {mimetype}"}
+    return {"ok": True}
 
 
 def convert_document(path: str | Path, target_format: str, output_dir: str | Path | None = None) -> dict[str, Any]:
