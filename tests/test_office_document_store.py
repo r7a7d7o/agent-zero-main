@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import types
 import zipfile
@@ -554,6 +555,51 @@ def test_office_session_desktop_state_action_defaults_without_screenshot(monkeyp
         monkeypatch.delattr(api_package, "office_session", raising=False)
 
 
+def test_office_session_desktop_shutdown_action_calls_manager(monkeypatch):
+    api_module = types.ModuleType("helpers.api")
+
+    class ApiHandler:
+        def __init__(self, app=None, thread_lock=None):
+            self.app = app
+            self.thread_lock = thread_lock
+
+    api_module.ApiHandler = ApiHandler
+    api_module.Request = object
+    monkeypatch.setitem(sys.modules, "helpers.api", api_module)
+    monkeypatch.delitem(sys.modules, "plugins._office.api.office_session", raising=False)
+
+    from plugins._office.api import office_session
+
+    calls = []
+
+    class FakeManager:
+        def shutdown_system_desktop(self, *, save_first=True, source="api"):
+            calls.append({"save_first": save_first, "source": source})
+            return {
+                "ok": True,
+                "closed": 1,
+                "shutdown": True,
+                "intentional_shutdown": True,
+                "source": source,
+            }
+
+    monkeypatch.setattr(office_session.libreoffice_desktop, "get_manager", lambda: FakeManager())
+    handler = office_session.OfficeSession(app=None, thread_lock=None)
+    request = types.SimpleNamespace(headers={}, host_url="http://localhost:32080")
+
+    result = asyncio.run(
+        handler.process({"action": "desktop_shutdown", "save_first": False, "source": "ui"}, request),
+    )
+
+    assert result["ok"] is True
+    assert result["intentional_shutdown"] is True
+    assert calls == [{"save_first": False, "source": "ui"}]
+    monkeypatch.delitem(sys.modules, "plugins._office.api.office_session", raising=False)
+    api_package = sys.modules.get("plugins._office.api")
+    if api_package is not None:
+        monkeypatch.delattr(api_package, "office_session", raising=False)
+
+
 def test_official_libreoffice_desktop_manager_opens_binary_session(office_state, tmp_path, monkeypatch):
     class FakeProcess:
         pid = 4242
@@ -704,7 +750,47 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     ).read_text(encoding="utf-8")
     assert "panel-1" in panel_profile
     assert "panel-2" not in panel_profile
-    assert "launcher" not in panel_profile
+    assert 'value="actions"' not in panel_profile
+    assert 'value="launcher"' in panel_profile
+    assert "agent-zero-shutdown.desktop" in panel_profile
+    shutdown_app = (
+        tmp_path
+        / "desktop"
+        / "profiles"
+        / payload["session_id"]
+        / ".local"
+        / "share"
+        / "applications"
+        / "agent-zero-shutdown.desktop"
+    ).read_text(encoding="utf-8")
+    assert "Shutdown Desktop" in shutdown_app
+    assert "shutdown-desktop" in shutdown_app
+    shutdown_panel_launcher = (
+        tmp_path
+        / "desktop"
+        / "profiles"
+        / payload["session_id"]
+        / ".config"
+        / "xfce4"
+        / "panel"
+        / "launcher-9"
+        / "agent-zero-shutdown.desktop"
+    ).read_text(encoding="utf-8")
+    assert "Shutdown Desktop" in shutdown_panel_launcher
+    assert "shutdown-desktop" in shutdown_panel_launcher
+    shutdown_script = (
+        tmp_path
+        / "desktop"
+        / "profiles"
+        / payload["session_id"]
+        / ".agent-zero"
+        / "shutdown-desktop"
+    ).read_text(encoding="utf-8")
+    assert "CONFIRM_SECONDS" in shutdown_script
+    assert "ARM_PATH" in shutdown_script
+    assert "Click Shutdown Desktop again" in shutdown_script
+    assert "xmessage" in shutdown_script
+    assert '"-buttons",' in shutdown_script
     desktop_helper = (
         PROJECT_ROOT / "plugins" / "_office" / "helpers" / "libreoffice_desktop.py"
     ).read_text(encoding="utf-8")
@@ -731,11 +817,17 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     assert "agent-zero-settings.desktop" not in profile_script
     assert "metadata::xfce-exe-checksum" in profile_script
     assert "xfconf-query -c thunar -p /last-show-hidden" in profile_script
+    assert "xfconf-query -c xfce4-panel" not in profile_script
+    assert "launcher-*" not in profile_script
     for filename in (
         "exo-mail-reader.desktop",
         "exo-web-browser.desktop",
         "xfce4-mail-reader.desktop",
         "xfce4-web-browser.desktop",
+        "xfce4-session-logout.desktop",
+        "xfce4-lock-screen.desktop",
+        "xflock4.desktop",
+        "xfce4-switch-user.desktop",
     ):
         entry = (
             tmp_path
@@ -752,6 +844,106 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     assert manager.proxy_for_token(payload["token"]) == ("127.0.0.1", libreoffice_desktop.XPRA_PORT_BASE)
     assert manager.close(payload["session_id"], save_first=False)["closed"] == 0
     assert manager.close(payload["session_id"], save_first=False)["persistent"] is True
+
+
+def test_shutdown_panel_launcher_requires_second_click(tmp_path):
+    profile_dir = tmp_path / "desktop" / "profiles" / libreoffice_desktop.SYSTEM_SESSION_ID
+    profile_dir.mkdir(parents=True)
+    desktop_path = tmp_path / "workdir"
+    desktop_path.mkdir()
+    session = libreoffice_desktop.DesktopSession(
+        session_id=libreoffice_desktop.SYSTEM_SESSION_ID,
+        file_id=libreoffice_desktop.SYSTEM_FILE_ID,
+        extension="desktop",
+        path=str(desktop_path),
+        title=libreoffice_desktop.SYSTEM_TITLE,
+        display=libreoffice_desktop.DISPLAY_BASE,
+        xpra_port=libreoffice_desktop.XPRA_PORT_BASE,
+        token=libreoffice_desktop.SYSTEM_SESSION_ID,
+        url="/desktop/session/agent-zero-desktop/index.html",
+        profile_dir=profile_dir,
+    )
+    script = libreoffice_desktop._write_shutdown_bridge_script(session)
+    request = libreoffice_desktop._shutdown_request_path(session)
+    arm = libreoffice_desktop._shutdown_arm_path(session)
+    env = dict(os.environ)
+    env.pop("DISPLAY", None)
+
+    subprocess.run([sys.executable, str(script)], check=True, env=env)
+
+    assert arm.exists()
+    assert not request.exists()
+
+    subprocess.run([sys.executable, str(script)], check=True, env=env)
+
+    payload = json.loads(request.read_text(encoding="utf-8"))
+    assert payload["source"] == "tray"
+    assert payload["armed_at"] <= payload["created_at"]
+    assert not arm.exists()
+
+
+def test_libreoffice_desktop_sync_consumes_shutdown_marker(tmp_path, monkeypatch):
+    class FakeProcess:
+        pid = 5252
+        terminated = False
+
+        def poll(self):
+            return None if not self.terminated else 0
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            self.terminated = True
+            return 0
+
+        def kill(self):
+            self.terminated = True
+
+    monkeypatch.setattr(libreoffice_desktop, "STATE_DIR", tmp_path / "desktop")
+    monkeypatch.setattr(libreoffice_desktop, "SESSION_DIR", tmp_path / "desktop" / "sessions")
+    monkeypatch.setattr(libreoffice_desktop, "PROFILE_DIR", tmp_path / "desktop" / "profiles")
+
+    profile_dir = tmp_path / "desktop" / "profiles" / libreoffice_desktop.SYSTEM_SESSION_ID
+    profile_dir.mkdir(parents=True)
+    desktop_path = tmp_path / "workdir"
+    desktop_path.mkdir()
+    session = libreoffice_desktop.DesktopSession(
+        session_id=libreoffice_desktop.SYSTEM_SESSION_ID,
+        file_id=libreoffice_desktop.SYSTEM_FILE_ID,
+        extension="desktop",
+        path=str(desktop_path),
+        title=libreoffice_desktop.SYSTEM_TITLE,
+        display=libreoffice_desktop.DISPLAY_BASE,
+        xpra_port=libreoffice_desktop.XPRA_PORT_BASE,
+        token=libreoffice_desktop.SYSTEM_SESSION_ID,
+        url="/desktop/session/agent-zero-desktop/index.html",
+        profile_dir=profile_dir,
+        processes={"xpra": FakeProcess()},
+    )
+    manager = libreoffice_desktop.LibreOfficeDesktopManager()
+    manager._sessions[session.session_id] = session
+    manager._write_manifest(session)
+    libreoffice_desktop._write_url_bridge_script(session)
+    shutdown_request = libreoffice_desktop._shutdown_request_path(session)
+    shutdown_request.write_text('{"source": "tray", "created_at": 123.0}\n', encoding="utf-8")
+    save_calls = []
+    monkeypatch.setattr(
+        manager,
+        "save",
+        lambda session_id, file_id="": save_calls.append((session_id, file_id)) or {"ok": True},
+    )
+
+    result = manager.sync(session_id=session.session_id)
+
+    assert result["ok"] is True
+    assert result["intentional_shutdown"] is True
+    assert result["source"] == "tray"
+    assert result["closed"] == 1
+    assert save_calls == [(libreoffice_desktop.SYSTEM_SESSION_ID, "")]
+    assert not shutdown_request.exists()
+    assert not (libreoffice_desktop.SESSION_DIR / f"{session.session_id}.json").exists()
+    assert manager.get(session.session_id) is None
 
 
 def test_libreoffice_desktop_cleanup_preserves_live_owner_manifest(tmp_path, monkeypatch):

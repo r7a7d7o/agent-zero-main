@@ -19,6 +19,7 @@ const SYSTEM_DESKTOP_FILE_ID = "system-desktop";
 const BROWSER_MODAL_PATH = "/plugins/_browser/webui/main.html";
 const OFFICE_MODAL_PATH = "/plugins/_office/webui/main.html";
 const URL_INTENT_PANEL_TIMEOUT_MS = 5000;
+const DESKTOP_SHUTDOWN_STORAGE_KEY = "a0.office.desktopShutdown";
 const MAX_HISTORY = 80;
 
 function currentContextId() {
@@ -236,8 +237,14 @@ const model = {
   _desktopStarting: null,
   _desktopUrlIntentBusy: false,
   _desktopUrlIntentQueue: [],
+  _desktopFrame: null,
+  _desktopFrameHost: null,
+  _desktopFrameLoadHandler: null,
+  _desktopKeepaliveHost: null,
+  _desktopIntentionalShutdown: false,
 
   async init(element = null) {
+    this.restoreDesktopShutdownState();
     return await this.onMount(element, { mode: "canvas" });
   },
 
@@ -254,12 +261,18 @@ const model = {
   },
 
   async onOpen(payload = {}) {
+    this.restoreDesktopShutdownState();
     await this.refresh();
     if (payload?.path || payload?.file_id) {
       await this.openSession({
         path: payload.path || "",
         file_id: payload.file_id || "",
       });
+    } else if (this._desktopIntentionalShutdown) {
+      this.session = null;
+      this.activeTabId = "";
+      this.editorText = "";
+      this.dirty = false;
     } else {
       await this.ensureDesktopSession({ select: !this.session });
     }
@@ -271,6 +284,9 @@ const model = {
     this._desktopHostVisible = false;
     this.flushInput();
     this.clearDesktopViewportSyncTimers();
+    this.stopDesktopMonitor();
+    this.stopDesktopKeyboardBridge();
+    this.stopDesktopClipboardBridge();
     this.unloadDesktopFrames();
   },
 
@@ -282,6 +298,7 @@ const model = {
     this.stopXpraDesktopPrime();
     this.stopDesktopKeyboardBridge();
     this.stopDesktopClipboardBridge();
+    if (!this._desktopIntentionalShutdown) this.moveDesktopFrameToKeepalive();
     this._floatingCleanup?.();
     this._floatingCleanup = null;
     if (this._mode === "modal") this._root = null;
@@ -297,7 +314,110 @@ const model = {
     }
   },
 
+  restoreDesktopShutdownState() {
+    try {
+      this._desktopIntentionalShutdown = localStorage.getItem(DESKTOP_SHUTDOWN_STORAGE_KEY) === "1";
+    } catch {
+      this._desktopIntentionalShutdown = Boolean(this._desktopIntentionalShutdown);
+    }
+  },
+
+  persistDesktopShutdownState() {
+    try {
+      if (this._desktopIntentionalShutdown) {
+        localStorage.setItem(DESKTOP_SHUTDOWN_STORAGE_KEY, "1");
+      } else {
+        localStorage.removeItem(DESKTOP_SHUTDOWN_STORAGE_KEY);
+      }
+    } catch {
+      // Shutdown state is still correct for this page even without storage.
+    }
+  },
+
+  setDesktopIntentionalShutdown(value) {
+    this._desktopIntentionalShutdown = Boolean(value);
+    this.persistDesktopShutdownState();
+  },
+
+  isDesktopShutdown() {
+    return Boolean(this._desktopIntentionalShutdown);
+  },
+
+  shouldShowDesktopEmptyState() {
+    return Boolean(this._desktopIntentionalShutdown && !this.session);
+  },
+
+  async restartDesktopSession() {
+    this.error = "";
+    const session = await this.ensureDesktopSession({
+      force: true,
+      restart: true,
+      select: true,
+      message: "Restarting Agent Zero Desktop environment",
+    });
+    if (!session) {
+      this.setDesktopIntentionalShutdown(true);
+      return null;
+    }
+    this.restoreDesktopFrames();
+    this.requestDesktopViewportSync({ force: true });
+    return session;
+  },
+
+  async shutdownDesktop(options = {}) {
+    this.loading = options.progress !== false;
+    this.message = this.loading ? "Shutting down Desktop" : this.message;
+    this.error = "";
+    try {
+      const response = await callOffice("desktop_shutdown", {
+        save_first: options.saveFirst !== false,
+        source: options.source || "ui",
+      });
+      await this.handleIntentionalDesktopShutdown(response);
+      return response;
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+      return null;
+    } finally {
+      if (options.progress !== false) {
+        this.loading = false;
+        if (this.message === "Shutting down Desktop") this.message = "";
+      }
+    }
+  },
+
+  async handleIntentionalDesktopShutdown(response = {}) {
+    this.setDesktopIntentionalShutdown(true);
+    this.stopDesktopMonitor();
+    this.stopDesktopResizeObserver();
+    this.clearDesktopViewportSyncTimers();
+    this.stopXpraDesktopPrime();
+    this.stopDesktopKeyboardBridge();
+    this.stopDesktopClipboardBridge();
+    this.destroyDesktopFrame();
+    const activeTabId = this.activeTabId;
+    this.tabs = this.tabs.filter((tab) => !this.isDesktopSession(tab) && !this.hasOfficialOffice(tab));
+    if (!this.tabs.some((tab) => tab.tab_id === activeTabId)) {
+      this.session = null;
+      this.activeTabId = "";
+      this.editorText = "";
+      this.dirty = false;
+      this.resetHistory("");
+    }
+    this._desktopStarting = null;
+    this._desktopHeartbeatMisses = 0;
+    this.message = response?.source === "tray" ? "Desktop shut down from system tray" : "Desktop is shut down";
+    await this.refresh();
+  },
+
   async ensureDesktopSession(options = {}) {
+    if (this._desktopIntentionalShutdown && options.restart !== true) {
+      return null;
+    }
+    if (options.restart === true) {
+      this.setDesktopIntentionalShutdown(false);
+      this.destroyDesktopFrame();
+    }
     const existing = this.tabs.find((tab) => this.isDesktopSession(tab));
     if (existing && !options.force) {
       if (options.select) this.selectTab(existing.tab_id, { focus: false });
@@ -323,6 +443,7 @@ const model = {
         }
         const response = await callOffice("desktop");
         if (response?.ok === false) throw new Error(response.error || "Desktop session could not be opened.");
+        this.setDesktopIntentionalShutdown(false);
         const session = normalizeSession(response);
         const existingIndex = this.tabs.findIndex((tab) => this.isDesktopSession(tab));
         let desktopTabId = session.tab_id;
@@ -347,6 +468,7 @@ const model = {
         } else {
           this.updateDesktopMonitor();
         }
+        this.restoreDesktopFrames();
         return { ...session, tab_id: desktopTabId };
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error);
@@ -434,6 +556,7 @@ const model = {
   },
 
   installDesktopDocumentSession(session) {
+    this.setDesktopIntentionalShutdown(false);
     this.tabs = this.tabs.filter((tab) => this.isVisibleOfficeTab(tab));
     let desktopTab = this.tabs.find((tab) => this.isDesktopSession(tab));
     if (!desktopTab) {
@@ -468,12 +591,19 @@ const model = {
 
   selectTab(tabId, options = {}) {
     const tab = this.tabs.find((item) => item.tab_id === tabId) || this.tabs[0] || null;
+    if (this.hasOfficialOffice(this.session) && !this.hasOfficialOffice(tab)) {
+      this.moveDesktopFrameToKeepalive();
+    }
     this.session = tab;
     this.activeTabId = tab?.tab_id || "";
     this.editorText = String(tab?.text || "");
     this.dirty = Boolean(tab?.dirty);
     this.resetHistory(this.editorText);
     this.queueRender({ focus: Boolean(tab) && options.focus !== false });
+    if (this.hasOfficialOffice(tab)) {
+      this.restoreDesktopFrames();
+      this.requestDesktopViewportSync({ force: true });
+    }
     this.updateDesktopMonitor();
   },
 
@@ -898,9 +1028,11 @@ const model = {
   },
 
   desktopFrames() {
-    const frames = Array.from(document.querySelectorAll("[data-office-desktop-frame]"));
-    const rootFrame = this._root?.querySelector?.("[data-office-desktop-frame]");
-    if (rootFrame && !frames.includes(rootFrame)) frames.push(rootFrame);
+    const frames = [];
+    if (this._desktopFrame) frames.push(this._desktopFrame);
+    for (const frame of Array.from(document.querySelectorAll("[data-office-desktop-frame]"))) {
+      if (!frames.includes(frame)) frames.push(frame);
+    }
     return frames;
   },
 
@@ -924,29 +1056,149 @@ const model = {
       })[0] || null;
   },
 
+  isUsableDesktopHost(host) {
+    if (!host?.appendChild) return false;
+    const rect = host.getBoundingClientRect?.();
+    return Boolean(rect && rect.width >= 120 && rect.height >= 80);
+  },
+
+  desktopHost(preferred = null) {
+    if (preferred?.matches?.("[data-office-desktop-host]")) return preferred;
+    const rootHost = this._root?.querySelector?.("[data-office-desktop-host]");
+    if (this.isUsableDesktopHost(rootHost)) return rootHost;
+    const hosts = Array.from(document.querySelectorAll("[data-office-desktop-host]"));
+    return hosts
+      .filter((host) => this.isUsableDesktopHost(host))
+      .sort((left, right) => {
+        const leftRect = left.getBoundingClientRect();
+        const rightRect = right.getBoundingClientRect();
+        return (rightRect.width * rightRect.height) - (leftRect.width * leftRect.height);
+      })[0] || rootHost || hosts[0] || null;
+  },
+
+  ensureDesktopKeepaliveHost() {
+    if (this._desktopKeepaliveHost?.isConnected) return this._desktopKeepaliveHost;
+    const host = document.createElement("div");
+    host.className = "office-desktop-keepalive";
+    host.dataset.officeDesktopKeepalive = "true";
+    Object.assign(host.style, {
+      position: "fixed",
+      left: "-10000px",
+      top: "-10000px",
+      width: "720px",
+      height: "480px",
+      overflow: "hidden",
+      pointerEvents: "none",
+      visibility: "hidden",
+    });
+    document.body?.appendChild(host);
+    this._desktopKeepaliveHost = host;
+    return host;
+  },
+
+  rememberDesktopFrameSize() {
+    const frame = this._desktopFrame;
+    const rect = frame?.getBoundingClientRect?.();
+    const hostRect = this._desktopFrameHost?.getBoundingClientRect?.();
+    const width = Math.round(rect?.width || hostRect?.width || 720);
+    const height = Math.round(rect?.height || hostRect?.height || 480);
+    const keepalive = this.ensureDesktopKeepaliveHost();
+    keepalive.style.width = `${Math.max(320, width)}px`;
+    keepalive.style.height = `${Math.max(220, height)}px`;
+    return keepalive;
+  },
+
+  ensureDesktopFrame() {
+    if (this._desktopFrame) return this._desktopFrame;
+    const frame = document.createElement("iframe");
+    frame.className = "office-desktop-frame";
+    frame.dataset.officeDesktopFrame = "true";
+    frame.dataset.officePersistentDesktopFrame = "true";
+    frame.setAttribute("tabindex", "0");
+    frame.setAttribute("aria-label", "Desktop");
+    frame.setAttribute("allow", "clipboard-read; clipboard-write; autoplay");
+    this._desktopFrameLoadHandler = (event) => this.onDesktopFrameLoaded(event);
+    frame.addEventListener("load", this._desktopFrameLoadHandler);
+    this._desktopFrame = frame;
+    return frame;
+  },
+
+  desktopFrameSrcMatches(frame, url) {
+    const current = frame?.getAttribute?.("src") || frame?.src || "";
+    if (!current && !url) return true;
+    try {
+      return new URL(current, window.location.href).href === new URL(url, window.location.href).href;
+    } catch {
+      return current === url;
+    }
+  },
+
+  attachDesktopFrame(host = null) {
+    if (!this.hasOfficialOffice()) return false;
+    const target = this.desktopHost(host);
+    if (!target) return false;
+    const frame = this.ensureDesktopFrame();
+    if (frame.parentElement !== target) {
+      frame.parentElement?.removeAttribute?.("data-office-desktop-attached");
+      target.appendChild(frame);
+    }
+    target.dataset.officeDesktopAttached = "true";
+    if (this._desktopFrameHost !== target) this._desktopFrameHost = target;
+    const url = this.officialOfficeUrl();
+    if (url && !this.desktopFrameSrcMatches(frame, url)) {
+      frame.setAttribute("src", url);
+    }
+    return true;
+  },
+
+  mountDesktopFrameHost(host = null) {
+    const attached = this.attachDesktopFrame(host);
+    if (attached && this.isDesktopHostVisible()) {
+      this.requestDesktopViewportSync({ force: true, frame: this._desktopFrame, followup: true });
+    }
+    return attached;
+  },
+
+  moveDesktopFrameToKeepalive() {
+    const frame = this._desktopFrame;
+    if (!frame) return false;
+    const keepalive = this.rememberDesktopFrameSize();
+    if (frame.parentElement !== keepalive) {
+      frame.parentElement?.removeAttribute?.("data-office-desktop-attached");
+      keepalive.appendChild(frame);
+    }
+    this._desktopFrameHost = keepalive;
+    this._desktopKeyboardActive = false;
+    this.updateDesktopKeyboardCaptureState(frame);
+    return true;
+  },
+
+  destroyDesktopFrame() {
+    const frame = this._desktopFrame;
+    if (!frame) return;
+    if (this._desktopFrameLoadHandler) {
+      frame.removeEventListener("load", this._desktopFrameLoadHandler);
+    }
+    frame.setAttribute("src", "about:blank");
+    frame.remove();
+    this._desktopFrame = null;
+    this._desktopFrameHost = null;
+    this._desktopFrameLoadHandler = null;
+    this._desktopBridgeReady = false;
+    this.updateDesktopKeyboardCaptureState();
+    this._desktopKeepaliveHost?.remove?.();
+    this._desktopKeepaliveHost = null;
+  },
+
   unloadDesktopFrames() {
     this.stopDesktopResizeObserver();
     this.stopXpraDesktopPrime();
-    for (const frame of this.desktopFrames()) {
-      if (!frame?.getAttribute) continue;
-      const current = frame.getAttribute("src") || "";
-      if (!current || current === "about:blank") continue;
-      frame.dataset.officeDesktopUnloaded = "true";
-      frame.setAttribute("src", "about:blank");
-    }
+    this.moveDesktopFrameToKeepalive();
   },
 
   restoreDesktopFrames() {
     if (!this.isDesktopHostVisible()) return;
-    const url = this.officialOfficeUrl();
-    if (!url) return;
-    for (const frame of this.desktopFrames()) {
-      if (!frame?.getAttribute) continue;
-      const current = frame.getAttribute("src") || "";
-      if (current && current !== "about:blank" && frame.dataset.officeDesktopUnloaded !== "true") continue;
-      delete frame.dataset.officeDesktopUnloaded;
-      frame.setAttribute("src", url);
-    }
+    this.attachDesktopFrame();
   },
 
   afterDesktopHostShown() {
@@ -1908,6 +2160,10 @@ const model = {
           desktop_session_id: sessionId,
           file_id: this.session.file_id || "",
         });
+        if (response?.intentional_shutdown || response?.shutdown) {
+          await this.handleIntentionalDesktopShutdown(response);
+          return;
+        }
         if (response?.ok === false) throw new Error(response.error || "Desktop session closed.");
         this._desktopHeartbeatMisses = 0;
         await this.handleDesktopUrlIntents(response?.url_intents);
@@ -1945,6 +2201,7 @@ const model = {
   },
 
   async handleOfficialOfficeClosed(tabId) {
+    if (this._desktopIntentionalShutdown) return;
     const tab = this.tabs.find((item) => item.tab_id === tabId);
     const hiddenDesktopDocument = !tab && this.session?.tab_id === tabId && this.isDesktopOfficeDocument(this.session)
       ? this.session

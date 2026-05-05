@@ -103,16 +103,11 @@
           <div class="office-editor-wrap" x-show="$store.office.session" style="display: none;">
             <div class="office-editor-scroll" :class="{ 'is-desktop': $store.office.hasOfficialOffice(), 'is-source': $store.office.isMarkdown() }" @click.self="$store.office.focusEditor()">
               <template x-if="$store.office.hasOfficialOffice()">
-                <div class="office-desktop-wrap">
-                  <iframe
-                    class="office-desktop-frame"
-                    data-office-desktop-frame
-                    tabindex="0"
-                    :src="$store.office.officialOfficeUrl()"
-                    aria-label="Desktop"
-                    allow="clipboard-read; clipboard-write; autoplay"
-                    @load="$store.office.onDesktopFrameLoaded($event)"
-                  ></iframe>
+                <div
+                  class="office-desktop-wrap"
+                  data-office-desktop-host
+                  x-init="$nextTick(() => $store.office.mountDesktopFrameHost($el))"
+                >
                 </div>
               </template>
 
@@ -129,6 +124,15 @@
               ></textarea>
 
             </div>
+          </div>
+
+          <div class="office-desktop-empty" x-show="$store.office.shouldShowDesktopEmptyState()" style="display: none;">
+            <span class="material-symbols-outlined" aria-hidden="true">power_settings_new</span>
+            <span class="office-desktop-empty-title">Desktop is shut down</span>
+            <button type="button" class="office-icon-button office-command-button" @click="$store.office.restartDesktopSession()">
+              <span class="material-symbols-outlined" aria-hidden="true">restart_alt</span>
+              <span class="office-button-label">Restart Desktop</span>
+            </button>
           </div>
         </div>
       </div>
@@ -460,10 +464,7 @@
       flex: 1 1 auto;
       min-height: 0;
       overflow: hidden;
-      background:
-        linear-gradient(90deg, rgba(44, 123, 229, 0.05), transparent 38%),
-        linear-gradient(180deg, rgba(44, 165, 141, 0.04), transparent 46%),
-        #eef2f7;
+      background: var(--color-background);
     }
 
     .office-body.is-source {
@@ -508,6 +509,29 @@
       min-height: 0;
       aspect-ratio: auto;
       background: #1f2329;
+    }
+
+    .office-desktop-empty {
+      display: grid;
+      flex: 1 1 auto;
+      place-items: center;
+      align-content: center;
+      gap: 12px;
+      min-width: 0;
+      min-height: 0;
+      padding: 24px;
+      color: var(--color-text-secondary);
+      text-align: center;
+    }
+
+    .office-desktop-empty > .material-symbols-outlined {
+      font-size: 32px;
+      color: color-mix(in srgb, var(--color-text) 68%, transparent);
+    }
+
+    .office-desktop-empty-title {
+      font-size: 13px;
+      font-weight: 700;
     }
 
     .office-desktop-frame {

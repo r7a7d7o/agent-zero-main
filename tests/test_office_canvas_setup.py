@@ -22,9 +22,12 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "office-rich-editor" not in panel
     assert "office-docx-pages" not in panel
     assert "office-desktop-frame" in panel
-    assert "data-office-desktop-frame" in panel
+    assert "data-office-desktop-host" in panel
+    assert 'x-init="$nextTick(() => $store.office.mountDesktopFrameHost($el))"' in panel
+    assert 'x-effect="$store.office.attachDesktopFrame($el)"' not in panel
+    assert "data-office-desktop-frame" in store
     assert 'title="LibreOffice desktop"' not in panel
-    assert 'aria-label="Desktop"' in panel
+    assert 'frame.setAttribute("aria-label", "Desktop")' in store
     assert "office-command-button" in panel
     assert "office-button-label" in panel
     assert "grid-template-columns: minmax(0, 1fr) auto auto auto" in panel
@@ -32,7 +35,7 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert ".modal-inner.office-modal .modal-scroll" in panel
     assert "office-modal-resizer" in panel
     assert "resize: both" not in panel
-    assert 'tabindex="0"' in panel
+    assert 'frame.setAttribute("tabindex", "0")' in store
     assert "format_underlined" not in panel
     assert "format_align_center" not in panel
     assert "is-native-tile" not in panel
@@ -55,6 +58,7 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "isDesktopHostVisible" in store
     assert "clearDesktopViewportSyncTimers" in store
     assert "setDesktopHostVisible" in canvas_panel
+    assert "queueMicrotask" in canvas_panel
     assert "Starting Agent Zero Desktop environment" in store
     assert "handleOfficialOfficeClosed" in store
     assert "ResizeObserver" in store
@@ -67,8 +71,22 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "right-canvas-resize-end" in store
     assert "isDesktopSession" in store
     assert "desktopFrame" in store
+    assert "attachDesktopFrame" in store
+    assert "mountDesktopFrameHost" in store
+    assert "desktopFrameSrcMatches" in store
+    assert "moveDesktopFrameToKeepalive" in store
+    assert "destroyDesktopFrame" in store
+    assert "office-desktop-keepalive" in store
+    assert "DESKTOP_SHUTDOWN_STORAGE_KEY" in store
+    assert 'callOffice("desktop_shutdown"' in store
+    assert "intentional_shutdown" in store
+    assert "restartDesktopSession" in store
+    assert "shouldShowDesktopEmptyState" in store
+    assert "Restart Desktop" in panel
+    assert "office-desktop-empty" in panel
     assert "unloadDesktopFrames" in store
     assert "restoreDesktopFrames" in store
+    assert "officeDesktopUnloaded" not in store
     assert "primeXpraDesktopFrame" in store
     assert "normalizeXpraDesktopWindow" in store
     assert "installXpraDesktopWheelBridge" in store
@@ -306,11 +324,21 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert "DESKTOP_FOLDER_LINKS" in desktop
     assert "HIDDEN_XPRA_DESKTOP_ENTRIES" in desktop
     assert "HIDDEN_XFCE_MENU_ENTRIES" in desktop
+    assert "SHUTDOWN_HANDLER_DESKTOP_ID" in desktop
+    assert "SHUTDOWN_PANEL_LAUNCHER_ID" in desktop
+    assert "SHUTDOWN_CONFIRM_SECONDS" in desktop
+    assert "Shutdown Desktop" in desktop
+    assert "shutdown-request.json" in desktop
+    assert "shutdown-request.arm.json" in desktop
+    assert "shutdown_system_desktop" in desktop
+    assert "claim_shutdown_request" in desktop
     assert "last-show-hidden" in desktop
     assert "exo-mail-reader.desktop" in desktop
     assert "exo-web-browser.desktop" in desktop
     assert "xfce4-mail-reader.desktop" in desktop
     assert "xfce4-web-browser.desktop" in desktop
+    assert "xfce4-session-logout.desktop" in desktop
+    assert "agent-zero-shutdown.desktop" in desktop
     assert "libreoffice-gtk3" in install
     assert "libreofficekit" not in install
     assert "gir1.2-lokdocview" not in install

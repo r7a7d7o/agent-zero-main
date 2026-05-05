@@ -50,6 +50,10 @@ HIDDEN_XFCE_MENU_ENTRIES = (
     ("exo-web-browser.desktop", "Web Browser"),
     ("xfce4-mail-reader.desktop", "Mail Reader"),
     ("xfce4-web-browser.desktop", "Web Browser"),
+    ("xfce4-session-logout.desktop", "Log Out"),
+    ("xfce4-lock-screen.desktop", "Lock Screen"),
+    ("xflock4.desktop", "Lock Screen"),
+    ("xfce4-switch-user.desktop", "Switch User"),
 )
 DESKTOP_README_SOURCE = Path(__file__).resolve().parents[1] / "assets" / "desktop" / "README.md"
 DESKTOP_FOLDER_LINKS = (
@@ -61,6 +65,9 @@ DESKTOP_FOLDER_LINKS = (
 URL_INTENT_MAX_ITEMS = 50
 URL_INTENT_MAX_LENGTH = 8192
 URL_HANDLER_DESKTOP_ID = "agent-zero-browser.desktop"
+SHUTDOWN_HANDLER_DESKTOP_ID = "agent-zero-shutdown.desktop"
+SHUTDOWN_PANEL_LAUNCHER_ID = SHUTDOWN_HANDLER_DESKTOP_ID
+SHUTDOWN_CONFIRM_SECONDS = 8
 OOR_NS = "http://openoffice.org/2001/registry"
 XS_NS = "http://www.w3.org/2001/XMLSchema"
 XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
@@ -197,6 +204,12 @@ class LibreOfficeDesktopManager:
             except Exception:
                 pass
         url_intents = self.claim_url_intents(session.session_id)
+        shutdown_request = self.claim_shutdown_request(session.session_id)
+        if shutdown_request:
+            return self.shutdown_system_desktop(
+                save_first=True,
+                source=str(shutdown_request.get("source") or "tray"),
+            )
         doc = self._document_for_save(session, file_id)
         if not doc:
             return {
@@ -223,6 +236,50 @@ class LibreOfficeDesktopManager:
         if not session:
             return []
         return _claim_url_intents(session)
+
+    def claim_shutdown_request(self, session_id: str = SYSTEM_SESSION_ID) -> dict[str, Any] | None:
+        session = self.get(session_id) or self.get(SYSTEM_SESSION_ID)
+        if not session:
+            return None
+        return _claim_shutdown_request(session)
+
+    def shutdown_system_desktop(self, *, save_first: bool = True, source: str = "api") -> dict[str, Any]:
+        with self._lock:
+            session = self._sessions.get(SYSTEM_SESSION_ID)
+        if not session:
+            _remove_system_manifest()
+            return {
+                "ok": True,
+                "closed": 0,
+                "session_id": SYSTEM_SESSION_ID,
+                "shutdown": True,
+                "intentional_shutdown": True,
+                "source": source,
+            }
+
+        save_result = None
+        if save_first:
+            try:
+                save_result = self.save(session.session_id)
+            except Exception as exc:
+                save_result = {"ok": False, "error": str(exc)}
+
+        with self._lock:
+            if self._sessions.get(SYSTEM_SESSION_ID) is session:
+                self._sessions.pop(SYSTEM_SESSION_ID, None)
+        virtual_desktop.unregister_session(session.token)
+        self._terminate_session(session)
+        self._remove_manifest(session.session_id)
+        _clear_shutdown_request(session)
+        return {
+            "ok": True,
+            "closed": 1,
+            "session_id": session.session_id,
+            "shutdown": True,
+            "intentional_shutdown": True,
+            "source": source,
+            "save": save_result,
+        }
 
     def retarget_document(self, file_id: str, doc: dict[str, Any]) -> dict[str, Any]:
         session = self._find_by_file_id(file_id)
@@ -643,6 +700,7 @@ class LibreOfficeDesktopManager:
         applications_dir.mkdir(parents=True, exist_ok=True)
 
         browser_bridge = _write_url_bridge_script(session)
+        shutdown_bridge = _write_shutdown_bridge_script(session)
         helpers_rc = config_dir / "xfce4" / "helpers.rc"
         helpers_rc.parent.mkdir(parents=True, exist_ok=True)
         helpers_rc.write_text(
@@ -671,6 +729,23 @@ class LibreOfficeDesktopManager:
             try_exec=str(browser_bridge),
             mime_types=_url_handler_mime_types(),
             no_display=True,
+        )
+        _write_desktop_launcher(
+            applications_dir / SHUTDOWN_HANDLER_DESKTOP_ID,
+            name="Shutdown Desktop",
+            exec_line=_desktop_exec(shutdown_bridge),
+            icon="system-shutdown",
+            categories="System;",
+            try_exec=str(shutdown_bridge),
+            no_display=True,
+        )
+        _write_desktop_launcher(
+            config_dir / "xfce4" / "panel" / "launcher-9" / SHUTDOWN_HANDLER_DESKTOP_ID,
+            name="Shutdown Desktop",
+            exec_line=_desktop_exec(shutdown_bridge),
+            icon="system-shutdown",
+            categories="System;",
+            try_exec=str(shutdown_bridge),
         )
         _write_desktop_launcher(
             desktop_dir / "Browser.desktop",
@@ -737,7 +812,9 @@ class LibreOfficeDesktopManager:
         ET.SubElement(plugins, "property", {"name": "plugin-6", "type": "string", "value": "separator"})
         ET.SubElement(plugins, "property", {"name": "plugin-7", "type": "string", "value": "clock"})
         ET.SubElement(plugins, "property", {"name": "plugin-8", "type": "string", "value": "separator"})
-        ET.SubElement(plugins, "property", {"name": "plugin-9", "type": "string", "value": "actions"})
+        shutdown = ET.SubElement(plugins, "property", {"name": "plugin-9", "type": "string", "value": "launcher"})
+        shutdown_items = ET.SubElement(shutdown, "property", {"name": "items", "type": "array"})
+        ET.SubElement(shutdown_items, "value", {"type": "string", "value": SHUTDOWN_PANEL_LAUNCHER_ID})
 
         tree = ET.ElementTree(root)
         try:
@@ -764,15 +841,7 @@ if command -v xfconf-query >/dev/null 2>&1; then
   xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-filesystem -n -t bool -s false >/dev/null 2>&1 || true
   xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-removable -n -t bool -s false >/dev/null 2>&1 || true
   xfconf-query -c xfce4-desktop -p /desktop-icons/file-icons/show-trash -n -t bool -s false >/dev/null 2>&1 || true
-  xfconf-query -c xfce4-panel -p /panels -n -a -t int -s 1 >/dev/null 2>&1 || true
-  xfconf-query -c xfce4-panel -p /panels/panel-2 -r -R >/dev/null 2>&1 || true
-  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -r -R >/dev/null 2>&1 || true
-  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -n -a -t int -s 1 -t int -s 2 -t int -s 3 -t int -s 4 -t int -s 5 -t int -s 6 -t int -s 7 -t int -s 8 -t int -s 9 >/dev/null 2>&1 || true
-  for plugin_id in $(seq 10 30); do
-    xfconf-query -c xfce4-panel -p "/plugins/plugin-${plugin_id}" -r -R >/dev/null 2>&1 || true
-  done
 fi
-rm -rf "$XDG_CONFIG_HOME"/xfce4/panel/launcher-* 2>/dev/null || true
 for launcher in "$HOME"/Desktop/*.desktop; do
   [ -f "$launcher" ] || continue
   chmod +x "$launcher" 2>/dev/null || true
@@ -1281,6 +1350,18 @@ def _url_bridge_lock_path(session: DesktopSession) -> Path:
     return _url_bridge_dir(session) / "browser-url-intents.lock"
 
 
+def _shutdown_request_path(session: DesktopSession) -> Path:
+    return _url_bridge_dir(session) / "shutdown-request.json"
+
+
+def _shutdown_arm_path(session: DesktopSession) -> Path:
+    return _url_bridge_dir(session) / "shutdown-request.arm.json"
+
+
+def _shutdown_lock_path(session: DesktopSession) -> Path:
+    return _url_bridge_dir(session) / "shutdown-request.lock"
+
+
 def _write_url_bridge_script(session: DesktopSession) -> Path:
     bridge_dir = _url_bridge_dir(session)
     bridge_dir.mkdir(parents=True, exist_ok=True)
@@ -1317,6 +1398,117 @@ def main():
             queue_file.flush()
             os.fsync(queue_file.fileno())
         fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+if __name__ == "__main__":
+    main()
+""",
+        encoding="utf-8",
+    )
+    try:
+        script.chmod(0o755)
+    except OSError:
+        pass
+    return script
+
+
+def _write_shutdown_bridge_script(session: DesktopSession) -> Path:
+    bridge_dir = _url_bridge_dir(session)
+    bridge_dir.mkdir(parents=True, exist_ok=True)
+    script = bridge_dir / "shutdown-desktop"
+    request = _shutdown_request_path(session)
+    arm = _shutdown_arm_path(session)
+    lock = _shutdown_lock_path(session)
+    script.write_text(
+        f"""#!/usr/bin/env python3
+import fcntl
+import json
+import os
+import shutil
+import subprocess
+import time
+
+REQUEST_PATH = {str(request)!r}
+ARM_PATH = {str(arm)!r}
+LOCK_PATH = {str(lock)!r}
+CONFIRM_SECONDS = {SHUTDOWN_CONFIRM_SECONDS}
+
+
+def notify(message, timeout=None):
+    if not os.environ.get("DISPLAY"):
+        return
+    xmessage = shutil.which("xmessage")
+    if not xmessage:
+        return
+    try:
+        subprocess.Popen(
+            [
+                xmessage,
+                "-buttons",
+                "",
+                "-timeout",
+                str(timeout or CONFIRM_SECONDS),
+                "-center",
+                message,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        pass
+
+
+def read_arm(now):
+    try:
+        with open(ARM_PATH, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    try:
+        created_at = float(payload.get("created_at"))
+    except (TypeError, ValueError):
+        return None
+    if now - created_at > CONFIRM_SECONDS:
+        return None
+    return created_at
+
+
+def write_json_atomic(path, payload):
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=True)
+        handle.write("\\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, path)
+
+
+def main():
+    os.makedirs(os.path.dirname(REQUEST_PATH), exist_ok=True)
+    now = time.time()
+    with open(LOCK_PATH, "a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        armed_at = read_arm(now)
+        if armed_at is None:
+            write_json_atomic(ARM_PATH, {{"created_at": now, "source": "tray"}})
+            notify(
+                f"Shutdown Desktop armed. Click Shutdown Desktop again within {{CONFIRM_SECONDS}} seconds to close it.",
+                CONFIRM_SECONDS,
+            )
+            return
+        try:
+            os.unlink(ARM_PATH)
+        except OSError:
+            pass
+        payload = {{
+            "created_at": now,
+            "armed_at": armed_at,
+            "source": "tray",
+        }}
+        write_json_atomic(REQUEST_PATH, payload)
+        notify("Shutting down Agent Zero Desktop.", 2)
 
 
 if __name__ == "__main__":
@@ -1372,6 +1564,45 @@ def _claim_url_intents(session: DesktopSession) -> list[dict[str, Any]]:
         if len(intents) >= URL_INTENT_MAX_ITEMS:
             break
     return intents
+
+
+def _claim_shutdown_request(session: DesktopSession) -> dict[str, Any] | None:
+    request = _shutdown_request_path(session)
+    if not request.exists():
+        return None
+    try:
+        raw = request.read_text(encoding="utf-8")
+        request.unlink(missing_ok=True)
+    except OSError:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = {}
+    created_at = payload.get("created_at")
+    try:
+        created_at = float(created_at)
+    except (TypeError, ValueError):
+        created_at = time.time()
+    return {
+        "created_at": created_at,
+        "source": str(payload.get("source") or "tray"),
+    }
+
+
+def _clear_shutdown_request(session: DesktopSession) -> None:
+    request = _shutdown_request_path(session)
+    arm = _shutdown_arm_path(session)
+    lock = _shutdown_lock_path(session)
+    request.unlink(missing_ok=True)
+    request.with_suffix(request.suffix + ".tmp").unlink(missing_ok=True)
+    arm.unlink(missing_ok=True)
+    arm.with_suffix(arm.suffix + ".tmp").unlink(missing_ok=True)
+    lock.unlink(missing_ok=True)
+
+
+def _remove_system_manifest() -> None:
+    (SESSION_DIR / f"{SYSTEM_SESSION_ID}.json").unlink(missing_ok=True)
 
 
 def _url_handler_mime_types() -> tuple[str, ...]:

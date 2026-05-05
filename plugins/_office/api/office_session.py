@@ -63,6 +63,8 @@ class OfficeSession(ApiHandler):
             return self._desktop_sync(input)
         if action == "desktop_state":
             return self._desktop_state(input)
+        if action == "desktop_shutdown":
+            return self._desktop_shutdown(input)
         return {"ok": False, "error": f"Unsupported office session action: {action}"}
 
     async def _open_document(self, doc: dict, input: dict, request: Request) -> dict:
@@ -195,6 +197,13 @@ class OfficeSession(ApiHandler):
     def _desktop_state(self, input: dict) -> dict:
         include_screenshot = bool(input.get("include_screenshot") is True)
         return libreoffice_desktop.get_manager().state(include_screenshot=include_screenshot)
+
+    def _desktop_shutdown(self, input: dict) -> dict:
+        save_first = input.get("save_first") is not False
+        return libreoffice_desktop.get_manager().shutdown_system_desktop(
+            save_first=save_first,
+            source=str(input.get("source") or "api"),
+        )
 
     def _origin(self, request: Request) -> str:
         origin = request.headers.get("Origin") or request.host_url.rstrip("/")
