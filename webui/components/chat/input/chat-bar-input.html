@@ -40,6 +40,8 @@
         <div id="chat-input-container" style="position: relative;">
             <textarea id="chat-input" :placeholder="$store.chatInput.inputPlaceholder" rows="1"
                       @keydown.enter="if (!$event.shiftKey && !$event.isComposing && $event.keyCode !== 229) { $event.preventDefault(); $store.chatInput.sendMessage(); }"
+                      @keydown.up="$store.chatInput.historyPrev($event)"
+                      @keydown.down="$store.chatInput.historyNext($event)"
                       @input="$store.chatInput.adjustTextareaHeight()"
                       x-model="$store.chatInput.message"></textarea>
             <button id="expand-button" @click="$store.fullScreenInputModal.openModal()" aria-label="Expand input">

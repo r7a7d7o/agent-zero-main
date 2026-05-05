@@ -8,6 +8,10 @@ import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
 const model = {
   paused: false,
   message: "",
+  _history: [],
+  _historyIndex: null,
+  _draft: "",
+  _historyCtxid: null,
   /** Composer + menu (bottom actions moved into dropdown) */
   chatMoreMenuOpen: false,
   progressText: "",
@@ -71,6 +75,8 @@ const model = {
   },
 
   async sendMessage() {
+    // Capture sent prompt to per-chat history (bash-style)
+    try { this._pushHistory(this.message); } catch (_e) { /* ignore */ }
     // Delegate to the global function
     if (globalThis.sendMessage) {
       await globalThis.sendMessage();
@@ -232,10 +238,165 @@ const model = {
     }
   },
 
+  _loadHistory() {
+    let ctxid = null;
+    try { ctxid = shortcuts.getCurrentContextId(); } catch (_e) { ctxid = null; }
+    this._historyCtxid = ctxid;
+    this._history = [];
+    this._historyIndex = null;
+    this._draft = "";
+    if (!ctxid) return;
+    let raw = null;
+    try { raw = localStorage.getItem("a0:chat-history:" + ctxid); } catch (_e) { raw = null; }
+    if (raw !== null) {
+      try {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          this._history = arr.filter((s) => typeof s === "string");
+        }
+      } catch (_e) { /* ignore */ }
+      return;
+    }
+    // No entry yet for this chat: seed from rendered chat DOM (one-time bootstrap)
+    try {
+      const seeded = this._seedFromChatDom();
+      if (seeded.length > 0) {
+        this._history = seeded;
+        this._saveHistory();
+      } else {
+        // Persist an empty array so we don't re-seed on every nav; respects user clearing
+        this._saveHistory();
+      }
+    } catch (_e) { /* ignore */ }
+  },
+
+  _seedFromChatDom() {
+    const out = [];
+    let nodes;
+    try {
+      nodes = document.querySelectorAll(".user-container .message-user .message-text pre");
+    } catch (_e) {
+      return out;
+    }
+    for (const pre of nodes) {
+      const text = (pre.textContent || "").trim();
+      if (!text) continue;
+      if (out.length > 0 && out[out.length - 1] === text) continue; // ignoredups
+      out.push(text);
+    }
+    if (out.length > 50) return out.slice(-50);
+    return out;
+  },
+
+  _saveHistory() {
+    if (!this._historyCtxid) return;
+    try {
+      localStorage.setItem(
+        "a0:chat-history:" + this._historyCtxid,
+        JSON.stringify(this._history)
+      );
+    } catch (_e) { /* ignore quota / disabled */ }
+  },
+
+  _ensureHistoryLoaded() {
+    let ctxid = null;
+    try { ctxid = shortcuts.getCurrentContextId(); } catch (_e) { ctxid = null; }
+    if (ctxid !== this._historyCtxid) {
+      this._loadHistory();
+    }
+  },
+
+  _pushHistory(text) {
+    if (typeof text !== "string") return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    this._ensureHistoryLoaded();
+    if (this._history.length > 0 && this._history[this._history.length - 1] === trimmed) {
+      this._historyIndex = null;
+      this._draft = "";
+      return;
+    }
+    this._history.push(trimmed);
+    if (this._history.length > 50) {
+      this._history = this._history.slice(-50);
+    }
+    this._saveHistory();
+    this._historyIndex = null;
+    this._draft = "";
+  },
+
+  _setCaretStart() {
+    queueMicrotask(() => {
+      const ta = document.getElementById("chat-input");
+      if (ta) {
+        try { ta.setSelectionRange(0, 0); } catch (_e) { /* ignore */ }
+        try { ta.scrollTop = 0; } catch (_e) { /* ignore */ }
+      }
+      this.adjustTextareaHeight();
+    });
+  },
+
+  _setCaretEnd() {
+    queueMicrotask(() => {
+      const ta = document.getElementById("chat-input");
+      if (ta) {
+        const end = ta.value.length;
+        try { ta.setSelectionRange(end, end); } catch (_e) { /* ignore */ }
+        try { ta.scrollTop = ta.scrollHeight; } catch (_e) { /* ignore */ }
+      }
+      this.adjustTextareaHeight();
+    });
+  },
+
+  historyPrev($event) {
+    if ($event && ($event.isComposing || $event.keyCode === 229)) return;
+    const ta = ($event && $event.target) ? $event.target : document.getElementById("chat-input");
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    if (start !== 0 || end !== 0) return;
+    $event.preventDefault();
+    this._ensureHistoryLoaded();
+    if (this._history.length === 0) return;
+    if (this._historyIndex === null) {
+      this._draft = this.message || "";
+      this._historyIndex = this._history.length - 1;
+    } else if (this._historyIndex > 0) {
+      this._historyIndex -= 1;
+    } else {
+      return;
+    }
+    this.message = this._history[this._historyIndex];
+    this._setCaretStart();
+  },
+
+  historyNext($event) {
+    if ($event && ($event.isComposing || $event.keyCode === 229)) return;
+    const ta = ($event && $event.target) ? $event.target : document.getElementById("chat-input");
+    if (!ta) return;
+    const value = ta.value;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+    if (start !== value.length || end !== value.length) return;
+    $event.preventDefault();
+    if (this._historyIndex === null) return;
+    if (this._historyIndex < this._history.length - 1) {
+      this._historyIndex += 1;
+      this.message = this._history[this._historyIndex];
+    } else {
+      this._historyIndex = null;
+      this.message = this._draft || "";
+      this._draft = "";
+    }
+    this._setCaretEnd();
+  },
+
   reset() {
     this.message = "";
     attachmentsStore.clearAttachments();
     this.chatMoreMenuOpen = false;
+    this._historyIndex = null;
+    this._draft = "";
     this.adjustTextareaHeight();
   }
 };
