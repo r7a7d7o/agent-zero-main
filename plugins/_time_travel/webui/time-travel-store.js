@@ -49,7 +49,6 @@ const model = {
   _mode: "canvas",
   _refreshTimer: null,
   _filterTimer: null,
-  _floatingCleanup: null,
   _requestSeq: 0,
   _diffSeq: 0,
 
@@ -60,9 +59,7 @@ const model = {
   async onMount(element = null, options = {}) {
     if (element) this._root = element;
     this._mode = options?.mode === "modal" ? "modal" : "canvas";
-    if (this._mode === "modal") {
-      this.setupFloatingModal(element);
-    } else {
+    if (this._mode !== "modal") {
       this.setupCanvasSurface(element);
     }
     this.contextId = this.resolveContextId();
@@ -85,103 +82,9 @@ const model = {
       clearTimeout(this._filterTimer);
       this._filterTimer = null;
     }
-    this._floatingCleanup?.();
-    this._floatingCleanup = null;
-  },
-
-  setupFloatingModal(element = null) {
-    this._floatingCleanup?.();
-    const root = element || globalThis.document?.querySelector(".time-travel-panel");
-    const modal = root?.closest?.(".modal");
-    const inner = modal?.querySelector?.(".modal-inner");
-    const body = modal?.querySelector?.(".modal-bd");
-    const header = modal?.querySelector?.(".modal-header");
-    if (!modal || !inner || !header) return;
-    modal.classList.add("modal-floating");
-    inner.classList.add("time-travel-modal", "modal-no-backdrop");
-    body?.classList?.add("time-travel-modal-body");
-
-    const rect = inner.getBoundingClientRect();
-    inner.style.left = `${Math.max(8, rect.left)}px`;
-    inner.style.top = `${Math.max(8, rect.top)}px`;
-    inner.style.transform = "none";
-
-    let drag = null;
-    let resizeObserver = null;
-    const viewportGap = 8;
-    const clampPosition = (left, top) => {
-      const bounds = inner.getBoundingClientRect();
-      const maxLeft = Math.max(viewportGap, globalThis.innerWidth - bounds.width - viewportGap);
-      const maxTop = Math.max(viewportGap, globalThis.innerHeight - bounds.height - viewportGap);
-      return {
-        left: Math.min(Math.max(viewportGap, left), maxLeft),
-        top: Math.min(Math.max(viewportGap, top), maxTop),
-      };
-    };
-    const clampGeometry = () => {
-      const bounds = inner.getBoundingClientRect();
-      const maxWidth = Math.max(360, globalThis.innerWidth - viewportGap * 2);
-      const maxHeight = Math.max(420, globalThis.innerHeight - viewportGap * 2);
-      if (bounds.width > maxWidth) inner.style.width = `${maxWidth}px`;
-      if (bounds.height > maxHeight) inner.style.height = `${maxHeight}px`;
-      const next = clampPosition(bounds.left, bounds.top);
-      inner.style.left = `${next.left}px`;
-      inner.style.top = `${next.top}px`;
-      inner.style.maxWidth = `${Math.max(360, globalThis.innerWidth - next.left - viewportGap)}px`;
-      inner.style.maxHeight = `${Math.max(420, globalThis.innerHeight - next.top - viewportGap)}px`;
-    };
-    clampGeometry();
-    globalThis.addEventListener("resize", clampGeometry);
-    if (globalThis.ResizeObserver) {
-      resizeObserver = new ResizeObserver(clampGeometry);
-      resizeObserver.observe(inner);
-    }
-
-    const onPointerMove = (event) => {
-      if (!drag) return;
-      const next = clampPosition(drag.left + event.clientX - drag.x, drag.top + event.clientY - drag.y);
-      inner.style.left = `${next.left}px`;
-      inner.style.top = `${next.top}px`;
-      clampGeometry();
-    };
-    const onPointerUp = () => {
-      drag = null;
-      globalThis.removeEventListener("pointermove", onPointerMove);
-      globalThis.removeEventListener("pointerup", onPointerUp);
-      try {
-        header.releasePointerCapture?.(header.__timeTravelPanelPointerId || 0);
-      } catch {}
-    };
-    const onPointerDown = (event) => {
-      if (event.button !== 0) return;
-      if (event.target?.closest?.("button, input, select, textarea, a")) return;
-      const current = inner.getBoundingClientRect();
-      drag = {
-        x: event.clientX,
-        y: event.clientY,
-        left: current.left,
-        top: current.top,
-      };
-      header.__timeTravelPanelPointerId = event.pointerId;
-      header.setPointerCapture?.(event.pointerId);
-      globalThis.addEventListener("pointermove", onPointerMove);
-      globalThis.addEventListener("pointerup", onPointerUp);
-      event.preventDefault();
-    };
-    header.addEventListener("pointerdown", onPointerDown);
-
-    this._floatingCleanup = () => {
-      header.removeEventListener("pointerdown", onPointerDown);
-      globalThis.removeEventListener("pointermove", onPointerMove);
-      globalThis.removeEventListener("pointerup", onPointerUp);
-      globalThis.removeEventListener("resize", clampGeometry);
-      resizeObserver?.disconnect?.();
-    };
   },
 
   setupCanvasSurface(element = null) {
-    this._floatingCleanup?.();
-    this._floatingCleanup = null;
     if (element) this._root = element;
   },
 

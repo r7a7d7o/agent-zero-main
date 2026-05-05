@@ -139,8 +139,6 @@ function modalSuppressesBackdrop(modal) {
     || path === "plugins/_browser/webui/main.html"
     || path === "/plugins/_office/webui/main.html"
     || path === "plugins/_office/webui/main.html"
-    || path === "/plugins/_time_travel/webui/main.html"
-    || path === "plugins/_time_travel/webui/main.html"
     || modal?.element?.classList?.contains("modal-floating")
     || modal?.element?.classList?.contains("modal-no-backdrop")
     || modal?.inner?.classList?.contains("modal-no-backdrop");
