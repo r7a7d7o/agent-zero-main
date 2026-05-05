@@ -365,6 +365,7 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert "/a0/usr/workdir" in linux_desktop_skill
     assert "/a0/usr/projects" in linux_desktop_skill
     assert "desktopctl.sh" in linux_desktop_skill
+    assert "/a0/plugins/_office/skills/linux-desktop/scripts/desktopctl.sh" in linux_desktop_skill
     assert "calc-set-cell" in linux_desktop_skill
     assert "Clicks are explicitly last resort" in linux_desktop_skill or "clicks are explicitly last resort" in linux_desktop_skill
     assert "fresh Desktop observation" in linux_desktop_skill
@@ -372,6 +373,11 @@ def test_official_libreoffice_desktop_route_and_packages_are_declared():
     assert "Terminal And CLI Agent Verification" in linux_desktop_skill
     assert "Do not report from an earlier screenshot path" in linux_desktop_skill
     assert "screenshot path returned by that final observation" in linux_desktop_skill
+    assert "Never paste natural-language text into that shell prompt" in linux_desktop_skill
+    assert "command not found" in linux_desktop_skill
+    assert "TARGET_CLI=\"example-cli-agent\"" in linux_desktop_skill
+    assert "FALLBACK_CMD" in linux_desktop_skill
+    assert "@openai/codex" not in linux_desktop_skill
     assert "xdotool" in linux_desktopctl
     assert "agent-zero-desktop" in linux_desktopctl
     assert "launch_app" in linux_desktopctl
