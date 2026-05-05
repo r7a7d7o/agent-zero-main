@@ -229,6 +229,7 @@ const model = {
   _desktopPrimeTimer: null,
   _desktopPrimeAttempts: 0,
   _desktopKeyboardActive: false,
+  _desktopFocusInProgress: false,
   _desktopBridgeReady: false,
   _desktopKeyboardCaptureState: { ready: false, active: false, capture: false, focused: false },
   _desktopLastState: null,
@@ -1011,8 +1012,8 @@ const model = {
 
   isDesktopHostVisible() {
     if (this._mode === "modal") return true;
-    const canvas = globalThis.Alpine?.store?.("rightCanvas") || rightCanvasStore;
-    return Boolean(canvas?.isOpen && canvas.activeSurfaceId === "office");
+    const canvas = rightCanvasStore;
+    return Boolean(canvas?.isOpen && (canvas.isSurfaceMounted?.("office") ?? canvas.activeSurfaceId === "office"));
   },
 
   setDesktopHostVisible(visible) {
@@ -1247,9 +1248,11 @@ const model = {
   },
 
   focusDesktopFrame(frame = null, options = {}) {
+    if (this._desktopFocusInProgress) return false;
     const target = this.desktopFrame(frame);
     if (!target) return false;
     if (options.arm !== false) this._desktopKeyboardActive = true;
+    this._desktopFocusInProgress = true;
     try {
       target.setAttribute("tabindex", "0");
       target.focus?.({ preventScroll: true });
@@ -1261,6 +1264,8 @@ const model = {
       if (target.contentWindow?.client) target.contentWindow.client.capture_keyboard = true;
     } catch {
       target.focus?.({ preventScroll: true });
+    } finally {
+      this._desktopFocusInProgress = false;
     }
     const focused = Boolean(document.activeElement === target || target.contentDocument?.hasFocus?.());
     this.updateDesktopKeyboardCaptureState(target);
@@ -1908,7 +1913,10 @@ const model = {
     frame.setAttribute("tabindex", "0");
     if (remoteWindow.__a0XpraDesktopKeyboardBridgeInstalled) return;
 
-    const activate = () => this.focusDesktopFrame(frame, { arm: true });
+    const activate = () => {
+      if (this._desktopFocusInProgress) return;
+      this.focusDesktopFrame(frame, { arm: true });
+    };
     const events = ["pointerdown", "mousedown", "touchstart", "focusin"];
     for (const eventName of events) {
       remoteDocument.addEventListener(eventName, activate, true);
@@ -2339,8 +2347,8 @@ const model = {
     focusButton.className = "modal-dock-button office-modal-focus-button";
     focusButton.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">fullscreen</span>';
     const updateFocusButton = (active) => {
-      focusButton.title = active ? "Restore size" : "Focus mode";
-      focusButton.setAttribute("aria-label", focusButton.title);
+      const label = active ? "Restore size" : "Focus mode";
+      focusButton.setAttribute("aria-label", label);
       focusButton.querySelector(".material-symbols-outlined").textContent = active ? "fullscreen_exit" : "fullscreen";
     };
     updateFocusButton(false);

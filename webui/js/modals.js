@@ -9,6 +9,25 @@ const EXPLICIT_CLOSE_MODAL_PATHS = new Set([
   "plugins/_browser/webui/main.html",
   "plugins/_office/webui/main.html",
 ]);
+const SINGLE_VISIBLE_MODAL_SURFACE_PATHS = new Set([
+  "plugins/_browser/webui/main.html",
+  "plugins/_office/webui/main.html",
+]);
+const CANVAS_SURFACE_MODAL_GROUP = "canvas-surfaces";
+const DEFAULT_MODAL_SURFACES = [
+  {
+    id: "browser",
+    title: "Browser",
+    icon: "language",
+    modalPath: "/plugins/_browser/webui/main.html",
+  },
+  {
+    id: "office",
+    title: "Desktop",
+    icon: "desktop_windows",
+    modalPath: "/plugins/_office/webui/main.html",
+  },
+];
 
 function normalizeModalPath(modalPath = "") {
   return String(modalPath || "").replace(/^\/+/, "");
@@ -26,6 +45,44 @@ function modalRequiresExplicitClose(modalOrElement) {
     || element?.querySelector?.(".modal-inner")?.classList?.contains("modal-explicit-close");
 }
 
+function modalSurfaceGroup(modalOrElement) {
+  const element = modalOrElement?.element || modalOrElement;
+  const path = normalizeModalPath(modalOrElement?.path || element?.path || "");
+  return SINGLE_VISIBLE_MODAL_SURFACE_PATHS.has(path) ? CANVAS_SURFACE_MODAL_GROUP : "";
+}
+
+function setModalParked(modal, parked = false) {
+  const element = modal?.element;
+  if (!element) return;
+  element.classList.toggle("modal-surface-parked", parked);
+  if (parked) {
+    element.classList.remove("show");
+    element.setAttribute("aria-hidden", "true");
+  } else {
+    element.classList.add("show");
+    element.removeAttribute("aria-hidden");
+  }
+}
+
+function parkSiblingSurfaceModals(activeModal) {
+  const group = modalSurfaceGroup(activeModal);
+  if (!group) {
+    setModalParked(activeModal, false);
+    return;
+  }
+
+  for (const modal of modalStack) {
+    setModalParked(modal, modal !== activeModal && modalSurfaceGroup(modal) === group);
+  }
+}
+
+function activateModal(modal) {
+  if (!modal) return;
+  parkSiblingSurfaceModals(modal);
+  updateModalZIndexes();
+  restoreModalScrollSnapshot(modal);
+}
+
 function findModalIndexByPath(modalPath) {
   return modalStack.findIndex((modal) => sameModalPath(modal.path, modalPath));
 }
@@ -33,10 +90,13 @@ function findModalIndexByPath(modalPath) {
 function focusModal(modalPath) {
   const modalIndex = findModalIndexByPath(modalPath);
   if (modalIndex === -1) return false;
-  if (modalIndex === modalStack.length - 1) return true;
+  const currentTopModal = modalStack[modalStack.length - 1];
+  if (currentTopModal) {
+    currentTopModal.savedScrollSnapshot = captureModalScrollSnapshot(currentTopModal);
+  }
   const [modal] = modalStack.splice(modalIndex, 1);
   modalStack.push(modal);
-  updateModalZIndexes();
+  activateModal(modal);
   return true;
 }
 
@@ -206,29 +266,31 @@ function getDockMetadata(doc, modalPath) {
 }
 
 function getModalSwitchSurfaces(metadata) {
-  if (!metadata) return [];
+  const surfacesById = new Map(DEFAULT_MODAL_SURFACES.map((surface) => [surface.id, surface]));
   const surfaces = Array.isArray(rightCanvasStore.panelSurfaces)
     ? rightCanvasStore.panelSurfaces
     : [];
-  const modalSurfaces = surfaces.filter((surface) => (
-    surface?.id
-    && surface?.modalPath
-    && !surface.actionOnly
-  ));
 
-  if (modalSurfaces.some((surface) => surface.id === metadata.surfaceId)) {
-    return modalSurfaces;
+  for (const surface of surfaces) {
+    if (!surface?.id || !surface.modalPath || surface.actionOnly) continue;
+    surfacesById.set(surface.id, {
+      ...surface,
+      modalPath: surface.modalPath,
+    });
   }
 
-  return [
-    {
+  if (metadata?.surfaceId && !surfacesById.has(metadata.surfaceId)) {
+    surfacesById.set(metadata.surfaceId, {
       id: metadata.surfaceId,
       title: metadata.title,
       icon: metadata.icon,
       modalPath: metadata.modalPath,
-    },
-    ...modalSurfaces,
-  ];
+    });
+  }
+
+  return Array.from(surfacesById.values())
+    .filter((surface) => surface?.id && surface.modalPath && !surface.actionOnly)
+    .sort((left, right) => (left.order ?? 100) - (right.order ?? 100));
 }
 
 function createModalSurfaceButton(surface, metadata, modal) {
@@ -239,7 +301,6 @@ function createModalSurfaceButton(surface, metadata, modal) {
   button.type = "button";
   button.className = "modal-surface-button";
   button.dataset.canvasSurface = surface.id;
-  button.title = title;
   button.setAttribute("aria-label", title);
   button.setAttribute("aria-pressed", isActive.toString());
   if (isActive) button.classList.add("is-active");
@@ -259,7 +320,7 @@ function createModalSurfaceButton(surface, metadata, modal) {
     button.appendChild(icon);
   }
 
-  button.addEventListener("click", async () => {
+  button.addEventListener("click", () => {
     if (button.disabled || isActive || !targetModalPath) return;
     button.disabled = true;
     try {
@@ -268,7 +329,6 @@ function createModalSurfaceButton(surface, metadata, modal) {
       if (openPromise?.catch) {
         openPromise.catch((error) => console.error(`Modal surface ${surface.id} failed to open`, error));
       }
-      await closeModal(modal.path);
     } finally {
       if (document.contains(button)) button.disabled = false;
     }
@@ -310,7 +370,6 @@ function configureModalDockButton(modal, doc) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "modal-dock-button";
-  button.title = metadata.title;
   button.setAttribute("aria-label", metadata.title);
   button.innerHTML = `<span class="material-symbols-outlined" aria-hidden="true">${metadata.icon}</span>`;
   button.addEventListener("click", async () => {
@@ -409,11 +468,9 @@ export async function openModal(modalPath, beforeClose = null) {
       // Add modal to stack
       modal.path = modalPath;
       modalStack.push(modal);
-      modal.element.classList.add("show");
       document.body.style.overflow = "hidden";
 
-      // Update modal z-indexes
-      updateModalZIndexes();
+      activateModal(modal);
     } catch (error) {
       console.error("Error loading modal content:", error);
       resolve();
@@ -450,7 +507,7 @@ export async function closeModal(modalPath = null) {
 
   if (modalPath) {
     // Find the modal with the specified name in the stack
-    modalIndex = modalStack.findIndex((modal) => modal.path === modalPath);
+    modalIndex = findModalIndexByPath(modalPath);
     if (modalIndex === -1) return; // Modal not found in stack
 
     // Get the modal from stack at the found index
@@ -529,9 +586,7 @@ export async function closeModal(modalPath = null) {
       backdrop.style.display = "none";
       document.body.style.overflow = "";
     } else {
-      // Update modal z-indexes
-      updateModalZIndexes();
-      restoreModalScrollSnapshot(modalStack[modalStack.length - 1]);
+      activateModal(modalStack[modalStack.length - 1]);
     }
 
     document.dispatchEvent(

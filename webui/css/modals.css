@@ -18,6 +18,16 @@ the old and the new system. */
   display: block;
 }
 
+.modal.modal-surface-parked {
+  display: block;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.modal.modal-surface-parked .modal-inner {
+  pointer-events: none;
+}
+
 .modal.modal-floating {
   pointer-events: none;
 }
@@ -153,9 +163,11 @@ the old and the new system. */
 }
 
 .modal-surface-switcher {
-  display: inline-flex;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 34px;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .modal-dock-button,

@@ -59,6 +59,9 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "clearDesktopViewportSyncTimers" in store
     assert "setDesktopHostVisible" in canvas_panel
     assert "queueMicrotask" in canvas_panel
+    assert "isSurfaceRendered('office')" in canvas_panel
+    assert "isSurfaceVisible('office')" in canvas_panel
+    assert "canvas.isSurfaceMounted?.(\"office\")" in store
     assert "Starting Agent Zero Desktop environment" in store
     assert "handleOfficialOfficeClosed" in store
     assert "ResizeObserver" in store
@@ -100,6 +103,8 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "_desktopKeyboardCaptureState" in store
     assert "installXpraDesktopKeyboardBridge" in store
     assert "focusDesktopFrame" in store
+    assert "_desktopFocusInProgress" in store
+    assert "if (this._desktopFocusInProgress) return" in store
     assert "_desktopKeyboardActive" in store
     assert "isEditableInputTarget" in store
     assert "reloadDesktopFrame" in store
@@ -127,6 +132,7 @@ def test_document_canvas_uses_markdown_editor_and_official_libreoffice_desktop_f
     assert "__a0AllowScreenResize" in store
     assert "_desktopHeartbeatTimer" in store
     assert "office-modal-focus-button" in store
+    assert "focusButton.title" not in store
     assert "officialOfficeUrl" in store
     assert 'parsed.searchParams.set("offscreen", secureContext ? "true" : "false")' in store
     assert 'parsed.searchParams.set("clipboard_poll", secureContext ? "true" : "false")' in store

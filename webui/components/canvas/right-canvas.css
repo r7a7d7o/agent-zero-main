@@ -239,12 +239,24 @@ body.right-canvas-resizing {
 }
 
 .right-canvas-surface-panel {
+  position: absolute;
+  inset: 0;
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.right-canvas-surface-panel.is-active {
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 2;
 }
 
 .right-canvas-surface-panel > x-component,

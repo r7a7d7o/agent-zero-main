@@ -671,10 +671,18 @@ def test_browser_and_desktop_surface_buttons_remember_latest_window_mode():
     )
     modals_js = (PROJECT_ROOT / "webui" / "js" / "modals.js").read_text(encoding="utf-8")
     modals_css = (PROJECT_ROOT / "webui" / "css" / "modals.css").read_text(encoding="utf-8")
+    surface_button_block = modals_js[
+        modals_js.index("function createModalSurfaceButton"):
+        modals_js.index("function configureModalSurfaceSwitcher")
+    ]
 
     assert "surfaceModes: {}" in canvas_store
+    assert "mountedSurfaces: {}" in canvas_store
     assert "recordSurfaceMode(surfaceId" in canvas_store
     assert "latestSurfaceMode(surfaceId)" in canvas_store
+    assert "markSurfaceMounted(targetId)" in canvas_store
+    assert "isSurfaceRendered(id)" in canvas_store
+    assert "isSurfaceVisible(id)" in canvas_store
     assert "async openLatest(surfaceId" in canvas_store
     assert "async openModalSurface(surfaceId" in canvas_store
     assert "this.recordSurfaceMode(targetId, SURFACE_MODE_CANVAS" in canvas_store
@@ -689,9 +697,16 @@ def test_browser_and_desktop_surface_buttons_remember_latest_window_mode():
     assert "configureModalSurfaceSwitcher" in modals_js
     assert "modal-surface-switcher" in modals_js
     assert "modal-surface-button" in modals_js
+    assert "SINGLE_VISIBLE_MODAL_SURFACE_PATHS" in modals_js
+    assert "modal-surface-parked" in modals_js
+    assert "parkSiblingSurfaceModals(activeModal)" in modals_js
+    assert "activateModal(modal)" in modals_js
+    assert "button.title = title" not in modals_js
+    assert "button.title = metadata.title" not in modals_js
     assert "rightCanvasStore.panelSurfaces" in modals_js
     assert 'rightCanvasStore.recordSurfaceMode?.(surface.id, "modal")' in modals_js
-    assert "await closeModal(modal.path)" in modals_js
+    assert "const openPromise = ensureModalOpen(targetModalPath)" in surface_button_block
+    assert "await closeModal(modal.path)" not in surface_button_block
     assert "modalRequiresExplicitClose" in modals_js
     assert '"plugins/_browser/webui/main.html"' in modals_js
     assert '"plugins/_office/webui/main.html"' in modals_js
@@ -700,6 +715,7 @@ def test_browser_and_desktop_surface_buttons_remember_latest_window_mode():
     assert ".modal-surface-switcher" in modals_css
     assert ".modal-surface-button.is-active" in modals_css
     assert ".modal-surface-image" in modals_css
+    assert ".modal.modal-surface-parked" in modals_css
     assert "grid-auto-flow: column" in modals_css
 
 

@@ -31,6 +31,7 @@ const model = {
   surfaces: [],
   activeSurfaceId: "",
   surfaceModes: {},
+  mountedSurfaces: {},
   isOpen: false,
   width: DEFAULT_WIDTH,
   isOverlayMode: false,
@@ -130,6 +131,7 @@ const model = {
     }
 
     this.activeSurfaceId = targetId;
+    this.markSurfaceMounted(targetId);
     this.isOpen = true;
     this.recordSurfaceMode(targetId, SURFACE_MODE_CANVAS, { persist: false });
     this._lastPayloadBySurface[targetId] = payload || {};
@@ -142,6 +144,41 @@ const model = {
       console.error(`Canvas surface ${targetId} failed to open`, error);
     }
     return true;
+  },
+
+  markSurfaceMounted(surfaceId) {
+    const targetId = String(surfaceId || "").trim();
+    if (!targetId) return;
+    this.mountedSurfaces = {
+      ...this.mountedSurfaces,
+      [targetId]: true,
+    };
+  },
+
+  markSurfaceUnmounted(surfaceId) {
+    const targetId = String(surfaceId || "").trim();
+    if (!targetId || !this.mountedSurfaces[targetId]) return;
+    const next = { ...this.mountedSurfaces };
+    delete next[targetId];
+    this.mountedSurfaces = next;
+  },
+
+  mountedSurfaceIds() {
+    return Object.entries(this.mountedSurfaces)
+      .filter(([, mounted]) => mounted)
+      .map(([surfaceId]) => surfaceId);
+  },
+
+  isSurfaceMounted(id) {
+    return Boolean(this.mountedSurfaces[String(id || "").trim()]);
+  },
+
+  isSurfaceRendered(id) {
+    return Boolean(this.isOpen && this.isSurfaceMounted(id));
+  },
+
+  isSurfaceVisible(id) {
+    return Boolean(this.isOpen && this.activeSurfaceId === id && this.isSurfaceMounted(id));
   },
 
   recordSurfaceMode(surfaceId, mode = SURFACE_MODE_CANVAS, options = {}) {
@@ -169,14 +206,19 @@ const model = {
   },
 
   async close() {
-    const surface = this.currentSurface();
+    const mountedIds = this.mountedSurfaceIds();
     this.isOpen = false;
+    this.mountedSurfaces = {};
     this.persist();
     this.applyLayoutState();
-    try {
-      await surface?.close?.(this._lastPayloadBySurface[this.activeSurfaceId] || {});
-    } catch (error) {
-      console.error(`Canvas surface ${this.activeSurfaceId} failed to close`, error);
+
+    for (const surfaceId of mountedIds) {
+      const surface = this.getSurface(surfaceId);
+      try {
+        await surface?.close?.(this._lastPayloadBySurface[surfaceId] || {});
+      } catch (error) {
+        console.error(`Canvas surface ${surfaceId} failed to close`, error);
+      }
     }
   },
 
@@ -237,13 +279,19 @@ const model = {
     const openModal = globalThis.ensureModalOpen || globalThis.openModal;
     if (!openModal) return false;
     if (this.activeSurfaceId === targetId) {
+      const mountedIds = this.mountedSurfaceIds();
       this.isOpen = false;
+      this.mountedSurfaces = {};
       this.persist();
       this.applyLayoutState();
-      try {
-        await surface.close?.(this._lastPayloadBySurface[targetId] || {});
-      } catch (error) {
-        console.error(`Canvas surface ${targetId} failed to close while undocking`, error);
+
+      for (const mountedId of mountedIds) {
+        const mountedSurface = this.getSurface(mountedId);
+        try {
+          await mountedSurface?.close?.(this._lastPayloadBySurface[mountedId] || {});
+        } catch (error) {
+          console.error(`Canvas surface ${mountedId} failed to close while undocking`, error);
+        }
       }
     }
     this.recordSurfaceMode(targetId, SURFACE_MODE_MODAL);
@@ -263,13 +311,19 @@ const model = {
     if (!openModal) return false;
 
     if (this.isOpen && this.activeSurfaceId === targetId) {
+      const mountedIds = this.mountedSurfaceIds();
       this.isOpen = false;
+      this.mountedSurfaces = {};
       this.persist();
       this.applyLayoutState();
-      try {
-        await surface.close?.(this._lastPayloadBySurface[targetId] || {});
-      } catch (error) {
-        console.error(`Canvas surface ${targetId} failed to close before modal open`, error);
+
+      for (const mountedId of mountedIds) {
+        const mountedSurface = this.getSurface(mountedId);
+        try {
+          await mountedSurface?.close?.(this._lastPayloadBySurface[mountedId] || {});
+        } catch (error) {
+          console.error(`Canvas surface ${mountedId} failed to close before modal open`, error);
+        }
       }
     }
 
@@ -413,12 +467,16 @@ const model = {
     this.isMobileMode = width <= MOBILE_BREAKPOINT;
     if (this.isMobileMode) {
       const wasOpen = this.isOpen;
-      const surface = wasOpen ? this.currentSurface() : null;
-      const payload = this._lastPayloadBySurface[this.activeSurfaceId] || {};
+      const mountedIds = this.mountedSurfaceIds();
       this.isOpen = false;
-      if (surface && wasOpen) {
+      this.mountedSurfaces = {};
+      if ((wasOpen || mountedIds.length > 0) && mountedIds.length > 0) {
         globalThis.setTimeout?.(() => {
-          surface.close?.({ ...payload, reason: "mobile" });
+          for (const surfaceId of mountedIds) {
+            const surface = this.getSurface(surfaceId);
+            const payload = this._lastPayloadBySurface[surfaceId] || {};
+            surface?.close?.({ ...payload, reason: "mobile" });
+          }
         }, 0);
       }
     } else if (wasMobileMode && this.width < MIN_WIDTH) {
