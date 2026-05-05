@@ -80,16 +80,18 @@ The canvas makes agent work visible. You can watch it browse, inspect what chang
 
 ## LibreOffice Integration
 
-<img alt="Cowork on Documents" src="https://github.com/user-attachments/assets/5ceb8f2c-cb5a-41d0-b7a8-7d5da6375aa1" />
+<img alt="Cowork on Documents" width="1406" height="720" src="https://github.com/user-attachments/assets/4ad71888-4f0d-484a-b68b-631ad99187d7" />
 <br>
 
 Create, open, and cowork with the AI on documents, spreadsheets, and presentation decks with the LibreOffice stack.
 
 The document canvas supports Markdown by default, with LibreOffice-native ODT, ODS, and ODP workflows when binary office artifacts are needed. Agents can create substantial deliverables, read their contents, apply precise saved edits, preserve version history, and generate native ODS charts directly inside spreadsheets. Microsoft Office compatibility imports and exports remain available when explicitly requested.
 
+Markdown, Writer, Spreadsheet, and Presentation files share a compact active-file header with save, rename, close, and creation controls in both canvas and modal views.
+
 ## Native Browser With Annotations and Extensions
 
-<img alt="Native Browser" src="https://github.com/user-attachments/assets/4a2a9f8a-470f-4f24-94b7-c5fbbebe9008" />
+<img alt="Native Browser" width="1406" height="720" src="https://github.com/user-attachments/assets/8d425af6-fb27-4d46-ade9-8ffa34c7382c" />
 <br>
 
 Agent Zero includes a direct Playwright-powered Browser tool with a visible WebUI viewer. The agent can navigate pages, inspect readable page content, and act through typed page references such as `[link 3]`, `[button 6]`, and `[input text 8]` and use vision.

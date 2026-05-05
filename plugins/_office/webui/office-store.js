@@ -558,7 +558,7 @@ const model = {
 
   installDesktopDocumentSession(session) {
     this.setDesktopIntentionalShutdown(false);
-    this.tabs = this.tabs.filter((tab) => this.isVisibleOfficeTab(tab));
+    this.tabs = this.tabs.filter((tab) => !this.isDesktopOfficeDocument(tab));
     let desktopTab = this.tabs.find((tab) => this.isDesktopSession(tab));
     if (!desktopTab) {
       desktopTab = {
@@ -580,13 +580,24 @@ const model = {
       };
       this.tabs.unshift(desktopTab);
     }
-    const desktopTabId = desktopTab.tab_id;
-    this.session = { ...session, tab_id: session.tab_id || uniqueTabId(session) };
-    this.activeTabId = desktopTabId;
+    const documentSession = { ...session, tab_id: session.tab_id || uniqueTabId(session) };
+    const existingIndex = this.tabs.findIndex((tab) => (
+      (documentSession.file_id && tab.file_id === documentSession.file_id)
+      || (documentSession.path && tab.path === documentSession.path)
+    ));
+    if (existingIndex >= 0) {
+      this.tabs.splice(existingIndex, 1, documentSession);
+    } else {
+      this.tabs.push(documentSession);
+    }
+    this.session = documentSession;
+    this.activeTabId = documentSession.tab_id;
     this.editorText = "";
     this.dirty = false;
     this.resetHistory("");
     this.queueRender({ focus: true });
+    this.restoreDesktopFrames();
+    this.requestDesktopViewportSync({ force: true });
     this.updateDesktopMonitor();
   },
 
@@ -655,6 +666,11 @@ const model = {
     this.updateDesktopMonitor();
     this.ensureActiveTab();
     await this.refresh();
+  },
+
+  async closeActiveFile() {
+    if (!this.session || this.isDesktopSession() || this.loading) return;
+    await this.closeTab(this.session.tab_id);
   },
 
   async save() {
@@ -800,7 +816,7 @@ const model = {
   replaceSession(previous, next) {
     this.session = next;
     const index = this.tabs.findIndex((tab) => tab.tab_id === (previous?.tab_id || next.tab_id));
-    if (index >= 0 && this.isVisibleOfficeTab(next)) this.tabs.splice(index, 1, next);
+    if (index >= 0) this.tabs.splice(index, 1, next);
     this.queueRender();
     this.updateDesktopMonitor();
   },
@@ -987,8 +1003,12 @@ const model = {
     return Boolean(tab && this.hasOfficialOffice(tab) && !this.isDesktopSession(tab) && this.isBinaryOffice(tab));
   },
 
+  hasActiveFile(tab = this.session) {
+    return Boolean(tab && !this.isDesktopSession(tab) && (this.isMarkdown(tab) || this.isDesktopOfficeDocument(tab)));
+  },
+
   isVisibleOfficeTab(tab = {}) {
-    return Boolean(this.isDesktopSession(tab) || this.isMarkdown(tab));
+    return Boolean(this.hasActiveFile(tab));
   },
 
   visibleTabs() {
@@ -2259,6 +2279,101 @@ const model = {
     return "draft";
   },
 
+  async runNewMenuAction(action = "") {
+    const normalized = String(action || "").trim().toLowerCase();
+    if (normalized === "open") return await this.openFileBrowser();
+    if (normalized === "markdown") return await this.create("document", "md");
+    if (normalized === "writer") return await this.create("document", "odt");
+    if (normalized === "spreadsheet") return await this.create("spreadsheet", "ods");
+    if (normalized === "presentation") return await this.create("presentation", "odp");
+    return null;
+  },
+
+  installHeaderNewMenu(header = null) {
+    if (!header || header.querySelector(".office-header-actions")) return () => {};
+
+    const root = globalThis.document.createElement("div");
+    root.className = "office-header-actions";
+    root.innerHTML = `
+      <button type="button" class="office-header-new-button" aria-haspopup="menu" aria-expanded="false">
+        <span class="material-symbols-outlined" aria-hidden="true">add</span>
+        <span>New</span>
+        <span class="material-symbols-outlined office-new-chevron" aria-hidden="true">expand_more</span>
+      </button>
+      <div class="office-new-menu" role="menu" hidden>
+        <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="open">
+          <span class="material-symbols-outlined" aria-hidden="true">folder_open</span>
+          <span>Open</span>
+        </button>
+        <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="markdown">
+          <span class="material-symbols-outlined" aria-hidden="true">article</span>
+          <span>Markdown</span>
+        </button>
+        <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="writer">
+          <span class="material-symbols-outlined" aria-hidden="true">description</span>
+          <span>Writer</span>
+        </button>
+        <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="spreadsheet">
+          <span class="material-symbols-outlined" aria-hidden="true">table_chart</span>
+          <span>Spreadsheet</span>
+        </button>
+        <button type="button" class="office-new-menu-item" role="menuitem" data-office-new-action="presentation">
+          <span class="material-symbols-outlined" aria-hidden="true">co_present</span>
+          <span>Presentation</span>
+        </button>
+      </div>
+    `;
+
+    const button = root.querySelector(".office-header-new-button");
+    const menu = root.querySelector(".office-new-menu");
+    const setOpen = (open) => {
+      root.classList.toggle("is-open", open);
+      button?.setAttribute("aria-expanded", open.toString());
+      if (menu) menu.hidden = !open;
+    };
+    const onButtonClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(!root.classList.contains("is-open"));
+    };
+    const onDocumentClick = (event) => {
+      if (!root.contains(event.target)) setOpen(false);
+    };
+    const onDocumentKeydown = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+
+    button?.addEventListener("click", onButtonClick);
+    for (const item of root.querySelectorAll("[data-office-new-action]")) {
+      item.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const action = event.currentTarget?.dataset?.officeNewAction || "";
+        setOpen(false);
+        await this.runNewMenuAction(action);
+      });
+    }
+    globalThis.document.addEventListener("click", onDocumentClick);
+    globalThis.document.addEventListener("keydown", onDocumentKeydown);
+
+    const firstHeaderAction = header.querySelector(
+      ".modal-surface-switcher, .modal-dock-button, .office-modal-focus-button, .modal-close",
+    );
+    if (firstHeaderAction) {
+      firstHeaderAction.insertAdjacentElement("beforebegin", root);
+    } else {
+      header.appendChild(root);
+    }
+
+    setOpen(false);
+    return () => {
+      button?.removeEventListener("click", onButtonClick);
+      globalThis.document.removeEventListener("click", onDocumentClick);
+      globalThis.document.removeEventListener("keydown", onDocumentKeydown);
+      root.remove();
+    };
+  },
+
   setupFloatingModal(element = null) {
     const root = element || globalThis.document?.querySelector(".office-panel");
     const modal = root?.closest?.(".modal");
@@ -2289,6 +2404,8 @@ const model = {
     let startWidth = 0;
     let startHeight = 0;
     let resizeMode = "";
+
+    const newMenuCleanup = this.installHeaderNewMenu(header);
 
     const currentBounds = () => {
       const rect = inner.getBoundingClientRect();
@@ -2516,6 +2633,7 @@ const model = {
       globalThis.setTimeout(ensurePosition, 0);
     }
     this._floatingCleanup = () => {
+      newMenuCleanup?.();
       cleanup.splice(0).reverse().forEach((entry) => entry());
       modal?.classList?.remove("modal-floating", "modal-no-backdrop");
       inner.classList.remove("is-dragging", "is-resizing", "is-focus-mode");
