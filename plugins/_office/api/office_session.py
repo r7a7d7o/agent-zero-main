@@ -76,7 +76,7 @@ class OfficeSession(ApiHandler):
             origin=self._origin(request),
         )
         if str(doc.get("extension") or "").lower() in libreoffice_desktop.OFFICIAL_EXTENSIONS:
-            desktop = libreoffice_desktop.get_manager().open(doc)
+            desktop = libreoffice_desktop.get_manager().open(doc, refresh=input.get("refresh") is True)
             if not desktop.get("available"):
                 document_store.close_session(session_id=store_session["session_id"])
                 return {

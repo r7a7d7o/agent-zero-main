@@ -2,7 +2,7 @@ import { store as officeStore } from "/plugins/_office/webui/office-store.js";
 
 void officeStore;
 
-function waitForElement(selector, timeoutMs = 3000) {
+function waitForElement(selector, timeoutMs = 10000) {
   const found = document.querySelector(selector);
   if (found) return Promise.resolve(found);
   return new Promise((resolve) => {
@@ -42,6 +42,7 @@ export default async function registerOfficeSurface(canvas) {
     },
     async open(payload = {}) {
       const panel = await waitForElement('[data-surface-id="office"] .office-panel');
+      if (!panel) throw new Error("Office canvas panel did not mount.");
       const office = globalThis.Alpine?.store?.("office");
       await office?.onMount?.(panel, { mode: "canvas" });
       await office?.onOpen?.(payload);

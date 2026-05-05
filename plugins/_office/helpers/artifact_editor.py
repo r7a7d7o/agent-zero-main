@@ -139,7 +139,13 @@ def _refresh_open_editor_sessions(file_id: str) -> None:
         markdown_sessions.get_manager().refresh_document(file_id)
     except Exception:
         # Direct artifact edits should never fail just because no canvas is open.
-        return
+        pass
+    try:
+        from plugins._office.helpers import libreoffice_desktop
+
+        libreoffice_desktop.get_manager().refresh_document(file_id)
+    except Exception:
+        pass
 
 
 def normalize_operation(

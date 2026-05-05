@@ -268,6 +268,8 @@ const model = {
       await this.openSession({
         path: payload.path || "",
         file_id: payload.file_id || "",
+        refresh: payload.refresh === true,
+        source: payload.source || "",
       });
     } else if (this._desktopIntentionalShutdown) {
       this.session = null;
@@ -2261,15 +2263,18 @@ const model = {
   },
 
   tabTitle(tab = {}) {
+    tab = tab || {};
     return tab.title || tab.document?.basename || basename(tab.path);
   },
 
   tabLabel(tab = {}) {
+    tab = tab || {};
     const title = this.tabTitle(tab);
     return tab.dirty ? `${title} unsaved` : title;
   },
 
   tabIcon(tab = {}) {
+    tab = tab || {};
     const ext = String(tab.extension || tab.document?.extension || "").toLowerCase();
     if (this.isDesktopSession(tab)) return "desktop_windows";
     if (ext === "md") return "article";
