@@ -1,14 +1,18 @@
+import { store as officeStore } from "/plugins/_office/webui/office-store.js";
+import { ensureModalOpen } from "/js/modals.js";
+import { open as openSurface } from "/js/surfaces.js";
+
 const SYNC_WINDOW_MS = 10 * 60 * 1000;
-const DESKTOP_OFFICE_FORMATS = new Set(["odt", "ods", "odp", "docx", "xlsx", "pptx"]);
+const DESKTOP_DOCUMENT_EXTENSIONS = new Set(["odt", "ods", "odp", "docx", "xlsx", "pptx"]);
 const syncedDocumentResults = new Set();
 
-export default async function syncDocumentResultsIntoOpenCanvas(context) {
+export default async function syncDocumentResultsIntoOpenOfficeModal(context) {
   if (!context?.results?.length || context.historyEmpty) return;
 
   for (const { args } of context.results) {
     const payload = getDocumentPayload(args);
     if (getToolName(payload) !== "document_artifact") continue;
-    if (!shouldSyncOpenOfficeCanvas(args, payload)) continue;
+    if (!shouldSyncOpenOfficeModal(args, payload)) continue;
 
     const document = payload.document && typeof payload.document === "object" ? payload.document : {};
     const path = payload.path || document.path || "";
@@ -25,14 +29,16 @@ export default async function syncDocumentResultsIntoOpenCanvas(context) {
     if (syncedDocumentResults.has(key)) continue;
     syncedDocumentResults.add(key);
 
-    if (!isOfficeCanvasOrModalOpen() && shouldColdOpenOfficeCanvas(payload, document)) {
-      await openOfficeCanvasFromResult({ path, file_id: fileId });
+    if (shouldOpenDocumentUiFromResult(payload, document)) {
+      globalThis.setTimeout(() => {
+        void openDocumentUiFromResult({ path, file_id: fileId }, payload, document);
+      }, 0);
       continue;
     }
 
     globalThis.setTimeout(async () => {
-      if (!isOfficeCanvasOrModalOpen()) return;
-      const office = globalThis.Alpine?.store?.("office");
+      if (!isOfficeModalOpen()) return;
+      const office = officeStore;
       if (!office || isDirtySameDocument(office, { path, file_id: fileId })) return;
       await office.openSession?.({
         path,
@@ -63,8 +69,14 @@ function pickPayloadFields(args = {}) {
     "tool_name",
     "action",
     "canvas_surface",
+    "extension",
     "file_id",
     "format",
+    "open_canvas",
+    "open_document",
+    "open_desktop",
+    "open_in_canvas",
+    "open_in_desktop",
     "path",
     "version",
     "last_modified",
@@ -78,54 +90,62 @@ function getToolName(payload = {}) {
   return String(payload._tool_name || payload.tool_name || "").trim();
 }
 
-function shouldSyncOpenOfficeCanvas(args = {}, payload = {}) {
+function shouldSyncOpenOfficeModal(args = {}, payload = {}) {
   if (!isFresh(args.timestamp, payload.last_modified || payload.document?.last_modified)) return false;
   const action = String(payload.action || "").trim().toLowerCase().replace("-", "_");
   return ["create", "open", "edit", "restore_version"].includes(action);
 }
 
-function shouldColdOpenOfficeCanvas(payload = {}, document = {}) {
-  const action = String(payload.action || "").trim().toLowerCase().replace("-", "_");
-  if (!["create", "open"].includes(action)) return false;
-  return DESKTOP_OFFICE_FORMATS.has(documentFormat(payload, document));
+function shouldOpenDocumentUiFromResult(payload = {}, document = {}) {
+  if (!isExplicitDocumentUiRequest(payload)) return false;
+  return Boolean(documentExtension(payload, document));
 }
 
-async function openOfficeCanvasFromResult(document = {}) {
-  const canvas = globalThis.Alpine?.store?.("rightCanvas")
-    || (await import("/components/canvas/right-canvas-store.js")).store;
-  await canvas?.open?.("office", {
-    path: document.path || "",
-    file_id: document.file_id || "",
+function isExplicitDocumentUiRequest(payload = {}) {
+  const action = String(payload.action || "").trim().toLowerCase().replace("-", "_");
+  return action === "open"
+    || truthy(payload.open_in_canvas)
+    || truthy(payload.open_canvas)
+    || truthy(payload.open_document)
+    || truthy(payload.open_in_desktop)
+    || truthy(payload.open_desktop);
+}
+
+async function openDocumentUiFromResult(target = {}, payload = {}, document = {}) {
+  if (isDesktopDocument(payload, document)) {
+    await openSurface("desktop", {
+      path: target.path || "",
+      file_id: target.file_id || "",
+      refresh: true,
+      source: "tool-result-open",
+    });
+    return;
+  }
+
+  await ensureModalOpen("/plugins/_office/webui/main.html");
+  await officeStore.openSession?.({
+    path: target.path || "",
+    file_id: target.file_id || "",
     refresh: true,
-    source: "tool-result-sync",
+    source: "tool-result-open",
   });
 }
 
-function documentFormat(payload = {}, document = {}) {
+function isDesktopDocument(payload = {}, document = {}) {
+  return DESKTOP_DOCUMENT_EXTENSIONS.has(documentExtension(payload, document));
+}
+
+function documentExtension(payload = {}, document = {}) {
   return String(
     payload.format
       || payload.extension
       || document.extension
-      || extensionOf(payload.path || document.path || ""),
-  ).trim().toLowerCase().replace(/^\./, "");
+      || document.format
+      || "",
+  ).toLowerCase();
 }
 
-function extensionOf(path = "") {
-  const name = String(path || "").split("?")[0].split("#")[0].split("/").filter(Boolean).pop() || "";
-  const index = name.lastIndexOf(".");
-  return index >= 0 ? name.slice(index + 1) : "";
-}
-
-function isOfficeCanvasAlreadyOpen() {
-  const canvas = globalThis.Alpine?.store?.("rightCanvas");
-  return Boolean(canvas?.isOpen && canvas?.activeSurfaceId === "office");
-}
-
-function isOfficeCanvasOrModalOpen() {
-  return Boolean(isOfficeCanvasAlreadyOpen() || isOfficeModalAlreadyOpen());
-}
-
-function isOfficeModalAlreadyOpen() {
+function isOfficeModalOpen() {
   return Boolean(
     globalThis.isModalOpen?.("/plugins/_office/webui/main.html")
       || globalThis.isModalOpen?.("plugins/_office/webui/main.html")
@@ -141,6 +161,13 @@ function isDirtySameDocument(office, document = {}) {
     (fileId && office.session.file_id === fileId)
       || (path && office.session.path === path),
   );
+}
+
+function truthy(value) {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  if (typeof value === "number") return value !== 0;
+  return ["1", "true", "yes", "y", "on"].includes(String(value).trim().toLowerCase());
 }
 
 function isFresh(...timestamps) {

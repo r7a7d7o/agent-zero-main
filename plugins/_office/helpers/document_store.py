@@ -40,7 +40,7 @@ ODF_MIMETYPES = {
     "odp": "application/vnd.oasis.opendocument.presentation",
 }
 
-STATE_DIR = Path(files.get_abs_path("usr", "plugins", PLUGIN_NAME, "documents"))
+STATE_DIR = Path(files.get_abs_path("usr", PLUGIN_NAME, "documents"))
 DB_PATH = STATE_DIR / "documents.sqlite3"
 BACKUP_DIR = STATE_DIR / "backups"
 WORKDIR = Path(files.get_abs_path("usr", "workdir"))

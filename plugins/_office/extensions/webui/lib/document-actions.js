@@ -2,6 +2,9 @@ import {
   createActionButton,
   copyToClipboard,
 } from "/components/messages/action-buttons/simple-action-buttons.js";
+import { ensureModalOpen } from "/js/modals.js";
+import { open as openSurface } from "/js/surfaces.js";
+import { store as officeStore } from "/plugins/_office/webui/office-store.js";
 
 function basename(path = "") {
   const value = String(path || "").split("?")[0].split("#")[0];
@@ -33,15 +36,40 @@ export function documentFromLog(args = {}, result = {}) {
   };
 }
 
-export async function openOfficeCanvas(kvps = {}) {
-  const canvas = globalThis.Alpine?.store?.("rightCanvas")
-    || (await import("/components/canvas/right-canvas-store.js")).store;
-  await canvas?.open?.("office", {
+export async function openDocumentInDesktop(kvps = {}) {
+  await openSurface("desktop", {
     path: kvps.path || "",
     file_id: kvps.file_id || "",
     refresh: true,
     source: "message-action",
   });
+}
+
+export async function openDocumentArtifact(kvps = {}) {
+  if (usesDesktop(kvps)) {
+    await openDocumentInDesktop(kvps);
+    return;
+  }
+  await ensureModalOpen("/plugins/_office/webui/main.html");
+  await officeStore.openSession?.({
+    path: kvps.path || "",
+    file_id: kvps.file_id || "",
+    refresh: true,
+    source: "message-action",
+  });
+}
+
+function usesDesktop(doc = {}) {
+  const format = String(doc.format || doc.extension || "").toLowerCase();
+  return ["odt", "ods", "odp", "docx", "xlsx", "pptx"].includes(format);
+}
+
+function desktopActionLabel(doc = {}) {
+  const format = String(doc.format || doc.extension || "").toLowerCase();
+  if (["odt", "docx"].includes(format)) return "Edit in Writer";
+  if (["ods", "xlsx"].includes(format)) return "Edit in Calc";
+  if (["odp", "pptx"].includes(format)) return "Edit in Impress";
+  return "Open Document";
 }
 
 export function downloadDocument(doc = {}) {
@@ -59,7 +87,8 @@ export function buildDocumentFileActionButtons(document = {}) {
   const hasTarget = Boolean(document?.path || document?.file_id);
   const buttons = [];
   if (hasTarget) {
-    buttons.push(createActionButton("dock_to_right", "Open in canvas", () => openOfficeCanvas(document)));
+    const icon = usesDesktop(document) ? "desktop_windows" : "article";
+    buttons.push(createActionButton(icon, desktopActionLabel(document), () => openDocumentArtifact(document)));
   }
   if (document?.path) {
     buttons.push(

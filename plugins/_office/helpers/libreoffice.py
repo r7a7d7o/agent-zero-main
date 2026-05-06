@@ -36,9 +36,9 @@ def collect_status() -> dict[str, Any]:
         "message": "LibreOffice is available." if soffice else "LibreOffice is not installed in this runtime.",
     }
     try:
-        from plugins._office.helpers import libreoffice_desktop
+        from plugins._desktop.helpers import desktop_session
 
-        status["desktop"] = libreoffice_desktop.collect_desktop_status()
+        status["desktop"] = desktop_session.collect_desktop_status()
     except Exception as exc:
         status["desktop"] = {"ok": False, "healthy": False, "error": str(exc)}
     return status

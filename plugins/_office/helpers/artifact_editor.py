@@ -141,9 +141,9 @@ def _refresh_open_editor_sessions(file_id: str) -> None:
         # Direct artifact edits should never fail just because no canvas is open.
         pass
     try:
-        from plugins._office.helpers import libreoffice_desktop
+        from plugins._desktop.helpers import desktop_session
 
-        libreoffice_desktop.get_manager().refresh_document(file_id)
+        desktop_session.get_manager().refresh_document(file_id)
     except Exception:
         pass
 
