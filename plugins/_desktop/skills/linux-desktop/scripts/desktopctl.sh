@@ -3,8 +3,8 @@ set -euo pipefail
 
 SESSION="${A0_DESKTOP_SESSION:-agent-zero-desktop}"
 BASE_DIR="${A0_BASE_DIR:-/a0}"
-PROFILE_DIR="${A0_DESKTOP_PROFILE:-$BASE_DIR/tmp/_office/desktop/profiles/$SESSION}"
-MANIFEST="${A0_DESKTOP_MANIFEST:-$BASE_DIR/tmp/_office/desktop/sessions/$SESSION.json}"
+PROFILE_DIR="${A0_DESKTOP_PROFILE:-$BASE_DIR/usr/_desktop/profiles/$SESSION}"
+MANIFEST="${A0_DESKTOP_MANIFEST:-$BASE_DIR/usr/_desktop/sessions/$SESSION.json}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DESKTOP_STATE_HELPER="$SCRIPT_DIR/../../../helpers/desktop_state.py"
 DESKTOP_STATE_PYTHON="${A0_DESKTOP_STATE_PYTHON:-$(command -v /usr/bin/python3 || command -v python3 || true)}"

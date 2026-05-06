@@ -15,7 +15,7 @@ from urllib.parse import quote, urlencode
 from helpers import files
 
 
-STATE_DIR = Path(files.get_abs_path("tmp", "virtual_desktop"))
+STATE_DIR = Path(files.get_abs_path("usr", "_desktop", "virtual_desktop"))
 DEFAULT_WIDTH = 1440
 DEFAULT_HEIGHT = 900
 MAX_WIDTH = 1920

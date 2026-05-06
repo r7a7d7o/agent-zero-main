@@ -19,7 +19,7 @@ allowed_tools:
 
 # Linux Desktop Interface
 
-Use the Desktop as a full Linux GUI when the user explicitly needs a visual workflow, an installed desktop app, or manual layout polish that is awkward through structured file edits alone. Agent Zero may warm the persistent Desktop runtime during initial startup, but visible Desktop/canvas use remains opt-in. The Desktop is opt-in at the UI level: do not open the canvas just because the user asks for a document. Use structured tools first for deterministic content changes, then use the Desktop for inspection, GUI-only actions, and final visual confirmation.
+Use the Desktop as a full Linux GUI when the user explicitly needs a visual workflow, an installed desktop app, or manual layout polish that is awkward through structured file edits alone. Agent Zero may warm the persistent Desktop runtime during initial startup, but visible Desktop surface use remains opt-in. The Desktop is opt-in at the UI level: do not open a surface just because the user asks for a document. Use structured tools first for deterministic content changes, then use the Desktop for inspection, GUI-only actions, and final visual confirmation.
 
 ## Operating Model
 
@@ -35,10 +35,10 @@ The Desktop is an observe-act-verify control surface. Use this decision hierarch
 Keep these standing rules:
 
 1. Treat Markdown as first-class. For writing, notes, reports, and drafts with no explicit binary Office requirement, create Markdown and use the custom Markdown editor when the user opens the canvas.
-2. Treat ODF as first-class for LibreOffice office work: ODT in Writer, ODS in Calc, ODP in Impress. Use DOCX/XLSX/PPTX only for explicit Microsoft compatibility.
+2. Treat ODF as first-class for LibreOffice office work: ODT in Writer, ODS in Calc, ODP in Impress. Use DOCX/XLSX/PPTX only for explicit OOXML compatibility.
 3. Use the Desktop only when the user asks for the Desktop, a GUI app, binary Office visual work, or visual confirmation.
-4. Never open the Desktop/canvas automatically from a tool result if the user has not opened it. Offer the explicit Open in canvas action instead.
-5. Launch common apps from the Desktop icons, the header buttons, or `/a0/plugins/_office/skills/linux-desktop/scripts/desktopctl.sh`.
+4. Never open the Desktop surface automatically from a tool result if the user has not opened it. Offer an explicit Open in Desktop action instead.
+5. Launch common apps from the Desktop icons, the header buttons, or `/a0/plugins/_desktop/skills/linux-desktop/scripts/desktopctl.sh`.
 6. Use the external Agent Zero Browser for web browsing. Do not launch an operating-system browser in this version.
 7. Verify GUI work by observing the desktop state, checking window titles, and saving the file before reporting success. If exact terminal text matters, load or inspect the screenshot path returned by the final observation, not a screenshot captured before the text appeared.
 
@@ -47,7 +47,7 @@ Keep these standing rules:
 Use the helper script when the Desktop is already open and you need reliable app launches, clicks, keystrokes, or window checks from the agent shell. In the live Agent Zero runtime, prefer the absolute path so the command works from any current directory:
 
 ```bash
-DESKTOP=/a0/plugins/_office/skills/linux-desktop/scripts/desktopctl.sh
+DESKTOP=/a0/plugins/_desktop/skills/linux-desktop/scripts/desktopctl.sh
 $DESKTOP check
 $DESKTOP state --json
 $DESKTOP observe --json --screenshot
@@ -63,7 +63,7 @@ The script targets the persistent `agent-zero-desktop` X display, sets `DISPLAY`
 For direct app launches without coordinates:
 
 ```bash
-DESKTOP=/a0/plugins/_office/skills/linux-desktop/scripts/desktopctl.sh
+DESKTOP=/a0/plugins/_desktop/skills/linux-desktop/scripts/desktopctl.sh
 $DESKTOP launch writer
 $DESKTOP launch calc
 $DESKTOP launch impress
@@ -78,7 +78,7 @@ $DESKTOP key ctrl+s
 For live spreadsheet coworking, use the Calc helper instead of hand-written UNO snippets:
 
 ```bash
-DESKTOP=/a0/plugins/_office/skills/linux-desktop/scripts/desktopctl.sh
+DESKTOP=/a0/plugins/_desktop/skills/linux-desktop/scripts/desktopctl.sh
 $DESKTOP calc-set-cell /a0/usr/workdir/example.xlsx Sheet1 B2 "Cowork verified live"
 ```
 
@@ -87,7 +87,7 @@ This opens the workbook in the visible Desktop Calc session if needed, changes t
 For coordinate actions, clicks are explicitly last resort. First try `launch`, `open-path`, `wait-window`, `focus`, `key`, `paste-text`, `save`, or an app-native helper. If a coordinate action is still necessary, base it on a fresh screenshot observation and verify immediately afterward:
 
 ```bash
-DESKTOP=/a0/plugins/_office/skills/linux-desktop/scripts/desktopctl.sh
+DESKTOP=/a0/plugins/_desktop/skills/linux-desktop/scripts/desktopctl.sh
 $DESKTOP observe --json --screenshot
 $DESKTOP click 120 180
 $DESKTOP dblclick 120 180
@@ -101,7 +101,7 @@ $DESKTOP observe --json
 When browser automation is available, the higher-level QA flow is:
 
 1. Open `http://127.0.0.1:32080`.
-2. Open the Desktop canvas from the UI or with `Alpine.store("rightCanvas").open("office")`.
+2. Open the Desktop surface from the UI or with `Alpine.store("rightCanvas").open("desktop")`.
 3. Use browser mouse events into the Xpra iframe for real user-path testing.
 4. Cross-check with `desktopctl.sh location` and `desktopctl.sh windows PATTERN`.
 5. Capture the browser screenshot as visual evidence.
@@ -129,7 +129,7 @@ Guard the boundary between the shell and the target CLI carefully:
 Example for a nested CLI-agent smoke test:
 
 ```bash
-DESKTOP=/a0/plugins/_office/skills/linux-desktop/scripts/desktopctl.sh
+DESKTOP=/a0/plugins/_desktop/skills/linux-desktop/scripts/desktopctl.sh
 $DESKTOP focus "Terminal"
 $DESKTOP paste-text 'TARGET_CLI="example-cli-agent"; FALLBACK_CMD=""; if command -v "$TARGET_CLI" >/dev/null 2>&1; then "$TARGET_CLI"; elif [ -n "$FALLBACK_CMD" ]; then sh -lc "$FALLBACK_CMD"; else echo "CLI agent not found: $TARGET_CLI"; fi'
 $DESKTOP key Return

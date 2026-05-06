@@ -5,14 +5,16 @@ from typing import Any
 
 from helpers.extension import Extension
 from helpers.print_style import PrintStyle
-from plugins._office import hooks
+from helpers import virtual_desktop_routes
+from plugins._desktop import hooks
 
 
 _startup_preparation_thread: threading.Thread | None = None
 
 
-class OfficeStartupCleanup(Extension):
+class DesktopStartup(Extension):
     def execute(self, **kwargs):
+        virtual_desktop_routes.install_route_hooks()
         _start_background_runtime_preparation()
 
 
@@ -24,7 +26,7 @@ def _start_background_runtime_preparation() -> threading.Thread:
 
     _startup_preparation_thread = threading.Thread(
         target=_prepare_runtime_safely,
-        name="a0-office-document-runtime-preparation",
+        name="a0-desktop-runtime-preparation",
         daemon=True,
     )
     _startup_preparation_thread.start()
@@ -35,11 +37,11 @@ def _prepare_runtime_safely() -> None:
     try:
         _log_runtime_preparation_result(hooks.cleanup_stale_runtime_state())
     except Exception as exc:
-        PrintStyle.warning("Office document runtime preparation failed:", exc)
+        PrintStyle.warning("Desktop runtime preparation failed:", exc)
 
 
 def _log_runtime_preparation_result(result: dict[str, Any]) -> None:
     if result.get("errors"):
-        PrintStyle.warning("Office document runtime preparation reported errors:", result["errors"])
+        PrintStyle.warning("Desktop runtime preparation reported errors:", result["errors"])
     elif result.get("installed") or result.get("removed"):
-        PrintStyle.info("Office document runtime prepared:", result)
+        PrintStyle.info("Desktop runtime prepared:", result)

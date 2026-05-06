@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 SESSION_ID = "agent-zero-desktop"
 BASE_DIR = Path(os.environ.get("A0_BASE_DIR") or ("/a0" if Path("/a0").exists() else PROJECT_ROOT))
-STATE_DIR = BASE_DIR / "tmp" / "_office" / "desktop"
+STATE_DIR = BASE_DIR / "usr" / "_desktop"
 SESSION_DIR = STATE_DIR / "sessions"
 PROFILE_DIR = STATE_DIR / "profiles"
 SCREENSHOT_DIR = STATE_DIR / "screenshots"
@@ -40,7 +40,7 @@ def collect_state(*, include_screenshot: bool = False, screenshot_path: str | Pa
     capabilities = collect_capabilities()
     for name in ("xdotool", "xrandr", "xwininfo", "xprop"):
         if not capabilities.get(name):
-            errors.append(f"{name} is not installed; install Office runtime dependencies through the _office plugin hook.")
+            errors.append(f"{name} is not installed; install Desktop runtime dependencies through the _desktop plugin hook.")
 
     size = collect_display_size(env, capabilities, errors)
     pointer = collect_pointer(env, capabilities, errors)
@@ -81,7 +81,7 @@ def capture_screenshot(
 
     xwd = capabilities.get("xwd") or shutil.which("xwd") or ""
     if not xwd:
-        message = "xwd is not installed; install x11-apps through the _office plugin hook."
+        message = "xwd is not installed; install x11-apps through the _desktop plugin hook."
         local_errors.append(message)
         return {"ok": False, "path": "", "format": "", "captured_at": "", "error": message}
 
@@ -559,7 +559,7 @@ def compact_prompt_context(state: dict[str, Any] | None = None) -> str:
     if screenshot.get("recent") and screenshot.get("path"):
         lines.append(f"- recent_screenshot={screenshot['path']}")
     lines.append(
-        "- next=plugins/_office/skills/linux-desktop/scripts/desktopctl.sh observe --json --screenshot "
+        "- next=plugins/_desktop/skills/linux-desktop/scripts/desktopctl.sh observe --json --screenshot "
         "before any coordinate action; prefer focus/key/paste/save/app-native helpers first."
     )
     lines.append(
