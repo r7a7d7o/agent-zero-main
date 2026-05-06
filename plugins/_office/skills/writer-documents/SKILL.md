@@ -1,5 +1,5 @@
 ---
-name: word-documents
+name: writer-documents
 description: Use when creating, opening, or editing LibreOffice Writer ODT documents, or DOCX documents only when Microsoft Word compatibility is explicitly required.
 version: "1.1.0"
 author: "Agent Zero Core Team"
@@ -21,9 +21,9 @@ allowed_tools:
 
 # Writer Documents
 
-Use ODT for LibreOffice Writer documents. Use DOCX only when the user explicitly asks for Word/DOCX/Microsoft compatibility, provides an existing `.docx`, or needs that compatibility format. For ordinary writing with no binary requirement, use Markdown instead.
+Use ODT for LibreOffice Writer documents. Use DOCX only when the user explicitly asks for Word/DOCX/OOXML compatibility, provides an existing `.docx`, or needs that compatibility format. For ordinary writing with no binary requirement, use Markdown instead.
 
-The canvas is user-owned UI. Creating or editing an ODT or DOCX must save the file and return action buttons, but must not open the canvas automatically. Use Desktop/Writer only for explicit GUI requests, visual layout polish, or final visual confirmation.
+The document UI and Desktop are user-owned. Creating or editing an ODT or DOCX must save the file and return action buttons, but must not open a document modal or Desktop surface automatically. Use Desktop/Writer only for explicit GUI requests, visual layout polish, or final visual confirmation.
 
 ## Workflow
 
@@ -51,4 +51,4 @@ Practical rules:
 
 - Keep Writer content clean and structured. Use headings and paragraphs; avoid over-formatting unless requested.
 - Treat DOCX as a compatibility export/request, not the default Writer format.
-- Do not say the document is open. Say it was created or updated, and rely on the Open in canvas action for user-controlled viewing.
+- Do not say the document is open. Say it was created or updated, and rely on the Open in Desktop action for user-controlled viewing.

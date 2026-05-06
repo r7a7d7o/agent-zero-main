@@ -3,7 +3,7 @@ name: markdown-documents
 description: Use when creating or editing Markdown documents, notes, reports, briefs, drafts, or other editable writing where Markdown should be the primary artifact format.
 version: "1.0.0"
 author: "Agent Zero Core Team"
-tags: ["markdown", "md", "documents", "writing", "notes", "reports", "briefs", "canvas"]
+tags: ["markdown", "md", "documents", "writing", "notes", "reports", "briefs", "editor"]
 triggers:
   - "markdown"
   - "md"
@@ -18,9 +18,9 @@ allowed_tools:
 
 # Markdown Documents
 
-Markdown is the default document format for normal writing, notes, reports, briefs, drafts, and collaborative text work unless the user explicitly asks for a binary office file. When they do ask for a LibreOffice office file, prefer ODF: ODT for Writer, ODS for Spreadsheet/Calc, and ODP for Presentation/Impress. Use DOCX, XLSX, or PPTX only for explicit Microsoft compatibility.
+Markdown is the default document format for normal writing, notes, reports, briefs, drafts, and collaborative text work unless the user explicitly asks for a binary office file. When they do ask for a LibreOffice office file, prefer ODF: ODT for Writer, ODS for Spreadsheet/Calc, and ODP for Presentation/Impress. Use DOCX, XLSX, or PPTX only for explicit OOXML compatibility.
 
-The canvas is user-owned UI. Create or update the saved Markdown artifact, but never open the canvas automatically. The document message will provide explicit Download and Open in canvas actions.
+The document editor is user-owned UI. Create or update the saved Markdown artifact, but never open the document modal automatically. The document message will provide explicit Download, Open Document, or Desktop edit actions.
 
 ## Workflow
 
@@ -46,6 +46,6 @@ Minimal create:
 Practical rules:
 
 - Prefer Markdown over ODT/DOCX for writing unless a binary Writer/Word file is explicitly needed.
-- Keep agent-only cleanup simple: if the user asks to fix a typo, update the file and finish; do not force a canvas workflow.
+- Keep agent-only cleanup simple: if the user asks to fix a typo, update the file and finish; do not force a document-editor workflow.
 - Use clear headings and Markdown tables when they improve editability.
-- The custom Markdown editor is available when the user chooses Open in canvas.
+- The custom Markdown editor is available when the user chooses Open Document.

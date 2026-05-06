@@ -236,8 +236,9 @@ def parse_frontmatter(frontmatter_text: str) -> Tuple[Dict[str, Any], List[str]]
     if yaml is not None:
         try:
             parsed = yaml.safe_load(frontmatter_text)  # type: ignore[attr-defined]
-        except Exception:
-            parsed = None
+        except Exception as exc:
+            errors.append(f"Invalid YAML frontmatter: {exc}")
+            return {}, errors
         if parsed is not None:
             if not isinstance(parsed, dict):
                 errors.append("Frontmatter must be a mapping")
@@ -355,6 +356,10 @@ def delete_skill(
     skill_path = files.get_abs_path(skill_path)
     if runtime.is_development():
         skill_path = files.fix_dev_path(skill_path)
+
+    normalized_path = files.normalize_a0_path(skill_path)
+    if "/plugins/" in normalized_path and "/usr/plugins/" not in normalized_path:
+        raise PermissionError("Built-in plugin skills cannot be deleted")
 
     allowed_roots = get_skill_roots()
     for root in allowed_roots:

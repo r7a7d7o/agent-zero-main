@@ -1,11 +1,11 @@
 ---
-name: office-artifacts
-description: Use when creating, opening, reading, or editing editable document canvas artifacts such as Markdown documents, LibreOffice-native ODT/ODS/ODP files, and compatibility DOCX/XLSX/PPTX files with the document_artifact tool.
+name: document-artifacts
+description: Use when creating, opening, reading, or editing editable document artifacts such as Markdown documents, LibreOffice-native ODT/ODS/ODP files, and compatibility DOCX/XLSX/PPTX files with the document_artifact tool.
 version: "1.4.0"
 author: "Agent Zero Core Team"
-tags: ["documents", "markdown", "md", "odt", "ods", "odp", "docx", "xlsx", "pptx", "canvas", "spreadsheets", "presentations", "libreoffice", "opendocument"]
+tags: ["documents", "markdown", "md", "odt", "ods", "odp", "docx", "xlsx", "pptx", "editor", "spreadsheets", "presentations", "libreoffice", "opendocument"]
 triggers:
-  - "document canvas"
+  - "document artifact"
   - "markdown document"
   - "editable document"
   - "md"
@@ -24,16 +24,16 @@ allowed_tools:
 
 # Document Artifacts
 
-Use `document_artifact` for substantial deliverables that should remain editable in the custom document canvas or LibreOffice Desktop. Markdown remains the default for ordinary writing, notes, reports, briefs, and drafts when no binary office file is needed. For LibreOffice office files, ODF is first-class: use ODT for Writer, ODS for Spreadsheet/Calc, and ODP for Presentation/Impress. Use DOCX, XLSX, or PPTX only when the user explicitly asks for Microsoft compatibility, provides an existing file in that format, or needs that compatibility surface.
+Use `document_artifact` for substantial deliverables that should remain editable in the custom document editor or LibreOffice Desktop. Markdown remains the default for ordinary writing, notes, reports, briefs, and drafts when no binary office file is needed. For LibreOffice office files, ODF is first-class: use ODT for Writer, ODS for Spreadsheet/Calc, and ODP for Presentation/Impress. Use DOCX, XLSX, or PPTX only when the user explicitly asks for OOXML compatibility, provides an existing file in that format, or needs that compatibility format.
 
-The canvas is user-owned UI. Creating, reading, or editing an artifact must save the file and update its state, but it must not open the canvas automatically if the user has not opened it. Tool results provide explicit Download and Open in canvas actions for the user.
+The document UI and Desktop are user-owned. Creating, reading, or editing an artifact must save the file and update its state, but it must not open a document modal or Desktop surface automatically if the user has not asked for that UI. Tool results provide explicit Download, Open Document, or Desktop edit actions for the user. Use `document_artifact:open`, `open_in_canvas: true`, or `open_in_desktop: true` only when the user explicitly asks to open the document/editor/Desktop.
 
 For format-specific work, prefer the matching skill when available:
 
 - `markdown-documents` for Markdown-first editable writing.
-- `word-documents` for Writer/ODT files and DOCX compatibility files.
-- `excel-workbooks` for Calc/ODS spreadsheets and XLSX compatibility workbooks.
-- `presentation-decks` for Impress/ODP decks and PPTX compatibility decks.
+- `writer-documents` for Writer/ODT files and DOCX compatibility files.
+- `calc-spreadsheets` for Calc/ODS spreadsheets and XLSX compatibility workbooks.
+- `impress-presentations` for Impress/ODP decks and PPTX compatibility decks.
 
 ## Workflow
 
@@ -42,7 +42,7 @@ For format-specific work, prefer the matching skill when available:
 3. Apply saved changes with `document_artifact:edit`.
 4. Use `version_history` or `restore_version` when the user asks to audit or roll back.
 
-Canvas context may list opened files with `file_id`, path, version, size, and timestamp. It intentionally omits full file contents; use `read` when the content matters.
+Document context may list opened files with `file_id`, path, version, size, and timestamp. It intentionally omits full file contents; use `read` when the content matters.
 
 ## Minimal Calls
 
@@ -138,13 +138,13 @@ Arguments:
 
 ## Practical Rules
 
-- Prefer `file_id` from canvas context or prior tool output; use `path` when that is all you have.
+- Prefer `file_id` from document context or prior tool output; use `path` when that is all you have.
 - Use `read` before editing unless the current saved content is already known.
 - Do not create an artifact for tiny one-shot edits or answers the agent can finish cleanly in chat or by directly editing the file.
-- For document-style writing requests with no requested binary format, create Markdown and let the custom Markdown editor be the primary interactive surface.
-- For spreadsheet or presentation file requests with no Microsoft compatibility requirement, create ODS or ODP.
-- The Desktop runtime may be warmed during Agent Zero startup, but visible Desktop/canvas use remains opt-in. Treat LibreOffice GUI work as appropriate for explicit GUI requests, binary Office visual polish, or final layout inspection.
-- Never open the canvas automatically from a tool result. If the user has not opened the canvas, leave the saved artifact available through the normal UI affordance.
+- For document-style writing requests with no requested binary format, create Markdown and let the custom Markdown editor be the primary interactive editor.
+- For spreadsheet or presentation file requests with no OOXML compatibility requirement, create ODS or ODP.
+- The Desktop runtime may be warmed during Agent Zero startup, but visible Desktop surface use remains opt-in. Treat LibreOffice GUI work as appropriate for explicit GUI requests, binary Office visual polish, or final layout inspection.
+- Never open a document modal or Desktop surface automatically from a tool result. If the user has not opened it, leave the saved artifact available through the normal UI affordance.
 - Use native `create_chart` for embedded spreadsheet charts. Reach for Python/code execution only when the requested chart behavior is not supported by the tool.
-- Use `edit` for precise saved changes; use the visual document canvas for human/manual layout polish.
-- Direct edits update version history and refresh the canvas on edit/open results.
+- Use `edit` for precise saved changes; use the document editor or Desktop for human/manual layout polish.
+- Direct edits update version history and refresh the document UI on edit/open results.
