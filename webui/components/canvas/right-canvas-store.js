@@ -1,13 +1,21 @@
 import { createStore } from "/js/AlpineStore.js";
 import { callJsExtensions } from "/js/extensions.js";
+import {
+  SURFACE_MODE_DOCKED,
+  SURFACE_MODE_FLOATING,
+  closeSurfaceGroupModals,
+  getRegisteredSurfaces,
+  migratePersistedSurfaceState,
+  normalizeSurfaceId,
+  normalizeSurfaceMode,
+  registerSurface as registerSurfaceDefinition,
+} from "/js/surfaces.js";
 
 const STORAGE_KEY = "a0.rightCanvas";
 const DEFAULT_WIDTH = 720;
 const MIN_WIDTH = 0;
 const DESKTOP_BREAKPOINT = 1200;
 const MOBILE_BREAKPOINT = 768;
-const SURFACE_MODE_CANVAS = "canvas";
-const SURFACE_MODE_MODAL = "modal";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -21,10 +29,6 @@ function normalizeWidth(value, fallback = DEFAULT_WIDTH) {
   if (value === null || value === undefined || value === "") return fallback;
   const width = Number(value);
   return Number.isFinite(width) ? Math.max(MIN_WIDTH, Math.round(width)) : fallback;
-}
-
-function normalizeSurfaceMode(mode = "") {
-  return mode === SURFACE_MODE_MODAL ? SURFACE_MODE_MODAL : SURFACE_MODE_CANVAS;
 }
 
 const model = {
@@ -61,6 +65,7 @@ const model = {
 
     if (!this._registering) {
       this._registering = true;
+      await callJsExtensions("surfaces_register", this);
       await callJsExtensions("right_canvas_register_surfaces", this);
       this._registering = false;
       this.ensureActiveSurface();
@@ -69,6 +74,7 @@ const model = {
 
   registerSurface(surface) {
     if (!surface?.id) return;
+    const surfaceId = normalizeSurfaceId(surface.id);
     const normalized = {
       title: surface.id,
       icon: "web_asset",
@@ -80,6 +86,7 @@ const model = {
       modalPath: "",
       actionOnly: false,
       ...surface,
+      id: surfaceId,
     };
 
     const index = this.surfaces.findIndex((item) => item.id === normalized.id);
@@ -89,8 +96,9 @@ const model = {
       this.surfaces.push(normalized);
     }
     if (!this.surfaceModes[normalized.id]) {
-      this.surfaceModes[normalized.id] = SURFACE_MODE_CANVAS;
+      this.surfaceModes[normalized.id] = SURFACE_MODE_DOCKED;
     }
+    registerSurfaceDefinition(normalized);
     this.surfaces.sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
     if (!this._registering) {
       this.ensureActiveSurface();
@@ -109,7 +117,7 @@ const model = {
   },
 
   async open(surfaceId = "", payload = {}) {
-    const targetId = surfaceId || this.activeSurfaceId || this.panelSurfaces[0]?.id || "";
+    const targetId = normalizeSurfaceId(surfaceId || this.activeSurfaceId || this.panelSurfaces[0]?.id || "");
     const surface = this.getSurface(targetId);
     if (!surface) {
       return false;
@@ -133,7 +141,7 @@ const model = {
     this.activeSurfaceId = targetId;
     this.markSurfaceMounted(targetId);
     this.isOpen = true;
-    this.recordSurfaceMode(targetId, SURFACE_MODE_CANVAS, { persist: false });
+    this.recordSurfaceMode(targetId, SURFACE_MODE_DOCKED, { persist: false });
     this._lastPayloadBySurface[targetId] = payload || {};
     this.persist();
     this.applyLayoutState();
@@ -147,7 +155,7 @@ const model = {
   },
 
   markSurfaceMounted(surfaceId) {
-    const targetId = String(surfaceId || "").trim();
+    const targetId = normalizeSurfaceId(surfaceId);
     if (!targetId) return;
     this.mountedSurfaces = {
       ...this.mountedSurfaces,
@@ -156,7 +164,7 @@ const model = {
   },
 
   markSurfaceUnmounted(surfaceId) {
-    const targetId = String(surfaceId || "").trim();
+    const targetId = normalizeSurfaceId(surfaceId);
     if (!targetId || !this.mountedSurfaces[targetId]) return;
     const next = { ...this.mountedSurfaces };
     delete next[targetId];
@@ -170,7 +178,7 @@ const model = {
   },
 
   isSurfaceMounted(id) {
-    return Boolean(this.mountedSurfaces[String(id || "").trim()]);
+    return Boolean(this.mountedSurfaces[normalizeSurfaceId(id)]);
   },
 
   isSurfaceRendered(id) {
@@ -178,11 +186,12 @@ const model = {
   },
 
   isSurfaceVisible(id) {
-    return Boolean(this.isOpen && this.activeSurfaceId === id && this.isSurfaceMounted(id));
+    const targetId = normalizeSurfaceId(id);
+    return Boolean(this.isOpen && this.activeSurfaceId === targetId && this.isSurfaceMounted(targetId));
   },
 
-  recordSurfaceMode(surfaceId, mode = SURFACE_MODE_CANVAS, options = {}) {
-    const targetId = String(surfaceId || "").trim();
+  recordSurfaceMode(surfaceId, mode = SURFACE_MODE_DOCKED, options = {}) {
+    const targetId = normalizeSurfaceId(surfaceId);
     if (!targetId) return;
     this.surfaceModes = {
       ...this.surfaceModes,
@@ -192,37 +201,28 @@ const model = {
   },
 
   latestSurfaceMode(surfaceId) {
-    const targetId = String(surfaceId || "").trim();
+    const targetId = normalizeSurfaceId(surfaceId);
     return normalizeSurfaceMode(this.surfaceModes[targetId]);
   },
 
   async openLatest(surfaceId = "", payload = {}) {
-    const targetId = surfaceId || this.activeSurfaceId || this.panelSurfaces[0]?.id || "";
+    const targetId = normalizeSurfaceId(surfaceId || this.activeSurfaceId || this.panelSurfaces[0]?.id || "");
     if (!targetId) return false;
-    if (this.latestSurfaceMode(targetId) === SURFACE_MODE_MODAL) {
+    if (this.latestSurfaceMode(targetId) === SURFACE_MODE_FLOATING) {
       return await this.openModalSurface(targetId, payload);
     }
     return await this.open(targetId, payload);
   },
 
   async close() {
-    const mountedIds = this.mountedSurfaceIds();
     this.isOpen = false;
-    this.mountedSurfaces = {};
     this.persist();
     this.applyLayoutState();
-
-    for (const surfaceId of mountedIds) {
-      const surface = this.getSurface(surfaceId);
-      try {
-        await surface?.close?.(this._lastPayloadBySurface[surfaceId] || {});
-      } catch (error) {
-        console.error(`Canvas surface ${surfaceId} failed to close`, error);
-      }
-    }
+    return true;
   },
 
   async dockSurface(surfaceId, payload = {}) {
+    surfaceId = normalizeSurfaceId(surfaceId);
     if (this.isMobileMode) {
       return false;
     }
@@ -262,6 +262,11 @@ const model = {
     }
 
     const sourceModalPath = payload.sourceModalPath || modalPath;
+    if (sourceModalPath || modalPath) {
+      const closed = await closeSurfaceGroupModals();
+      if (closed === false) return false;
+      if (!sourceModalPath || !globalThis.isModalOpen?.(sourceModalPath)) return true;
+    }
     if (sourceModalPath && globalThis.isModalOpen?.(sourceModalPath)) {
       return (await globalThis.closeModal?.(sourceModalPath)) !== false;
     }
@@ -272,29 +277,18 @@ const model = {
   },
 
   async undockSurface(surfaceId = "", payload = {}) {
-    const targetId = surfaceId || this.activeSurfaceId;
+    const targetId = normalizeSurfaceId(surfaceId || this.activeSurfaceId);
     const surface = this.getSurface(targetId);
     const modalPath = payload.modalPath || surface?.modalPath || "";
     if (!surface || !modalPath) return false;
     const openModal = globalThis.ensureModalOpen || globalThis.openModal;
     if (!openModal) return false;
     if (this.activeSurfaceId === targetId) {
-      const mountedIds = this.mountedSurfaceIds();
       this.isOpen = false;
-      this.mountedSurfaces = {};
       this.persist();
       this.applyLayoutState();
-
-      for (const mountedId of mountedIds) {
-        const mountedSurface = this.getSurface(mountedId);
-        try {
-          await mountedSurface?.close?.(this._lastPayloadBySurface[mountedId] || {});
-        } catch (error) {
-          console.error(`Canvas surface ${mountedId} failed to close while undocking`, error);
-        }
-      }
     }
-    this.recordSurfaceMode(targetId, SURFACE_MODE_MODAL);
+    this.recordSurfaceMode(targetId, SURFACE_MODE_FLOATING);
     const modalPromise = openModal(modalPath);
     if (modalPromise?.catch) {
       modalPromise.catch((error) => console.error(`Canvas surface ${targetId} failed to undock`, error));
@@ -303,7 +297,7 @@ const model = {
   },
 
   async openModalSurface(surfaceId = "", payload = {}) {
-    const targetId = surfaceId || this.activeSurfaceId;
+    const targetId = normalizeSurfaceId(surfaceId || this.activeSurfaceId);
     const surface = this.getSurface(targetId);
     const modalPath = payload.modalPath || surface?.modalPath || "";
     if (!surface || !modalPath) return false;
@@ -311,23 +305,12 @@ const model = {
     if (!openModal) return false;
 
     if (this.isOpen && this.activeSurfaceId === targetId) {
-      const mountedIds = this.mountedSurfaceIds();
       this.isOpen = false;
-      this.mountedSurfaces = {};
       this.persist();
       this.applyLayoutState();
-
-      for (const mountedId of mountedIds) {
-        const mountedSurface = this.getSurface(mountedId);
-        try {
-          await mountedSurface?.close?.(this._lastPayloadBySurface[mountedId] || {});
-        } catch (error) {
-          console.error(`Canvas surface ${mountedId} failed to close before modal open`, error);
-        }
-      }
     }
 
-    this.recordSurfaceMode(targetId, SURFACE_MODE_MODAL);
+    this.recordSurfaceMode(targetId, SURFACE_MODE_FLOATING);
     const modalPromise = openModal(modalPath);
     if (modalPromise?.catch) {
       modalPromise.catch((error) => console.error(`Canvas surface ${targetId} failed to open as modal`, error));
@@ -344,7 +327,7 @@ const model = {
   },
 
   async toggle(surfaceId = "", payload = {}) {
-    const targetId = surfaceId || this.activeSurfaceId || this.panelSurfaces[0]?.id || "";
+    const targetId = normalizeSurfaceId(surfaceId || this.activeSurfaceId || this.panelSurfaces[0]?.id || "");
     if (this.isOpen && targetId === this.activeSurfaceId) {
       await this.close();
       return false;
@@ -444,7 +427,7 @@ const model = {
   restore() {
     this.width = this.defaultWidth();
     try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      const saved = migratePersistedSurfaceState(JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"));
       this.isOpen = false;
       this.activeSurfaceId = String(saved.activeSurfaceId || "");
       this.surfaceModes = Object.fromEntries(
@@ -502,7 +485,10 @@ const model = {
   },
 
   getSurface(id) {
-    return this.surfaces.find((surface) => surface.id === id) || null;
+    const targetId = normalizeSurfaceId(id);
+    return this.surfaces.find((surface) => surface.id === targetId)
+      || getRegisteredSurfaces().find((surface) => surface.id === targetId)
+      || null;
   },
 
   get railSurfaces() {
@@ -518,7 +504,7 @@ const model = {
   },
 
   isSurfaceActive(id) {
-    return this.activeSurfaceId === id;
+    return this.activeSurfaceId === normalizeSurfaceId(id);
   },
 
   activeTitle() {

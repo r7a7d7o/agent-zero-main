@@ -142,6 +142,8 @@ body.right-canvas-resizing {
 }
 
 .right-canvas-header {
+  position: relative;
+  z-index: 10;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -150,6 +152,7 @@ body.right-canvas-resizing {
   padding: 7px 8px 0 10px;
   border-bottom: 1px solid var(--right-canvas-border);
   background: color-mix(in srgb, var(--color-background) 91%, #000 9%);
+  overflow: visible;
 }
 
 .right-canvas-tabs {
@@ -214,14 +217,18 @@ body.right-canvas-resizing {
 }
 
 .right-canvas-toolbar {
+  position: relative;
+  z-index: 11;
   display: flex;
   align-items: center;
   gap: 5px;
   padding-bottom: 6px;
+  overflow: visible;
 }
 
 .right-canvas-panels {
   position: relative;
+  z-index: 1;
   display: flex;
   flex: 1 1 auto;
   min-width: 0;

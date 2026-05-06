@@ -1,5 +1,5 @@
-import { store as rightCanvasStore } from "/components/canvas/right-canvas-store.js";
 import { store as browserStore } from "/plugins/_browser/webui/browser-store.js";
+import { open as openSurface } from "/js/surfaces.js";
 
 const AUTO_OPEN_WINDOW_MS = 10 * 60 * 1000;
 const syncedBrowserCanvases = new Set();
@@ -19,6 +19,7 @@ export default async function syncBrowserResultsIntoOpenCanvas(context) {
     const contextId = getBrowserContextId(payload, result);
     const key = [
       args?.id || "",
+      contextId || "",
       browserId || "",
       result.currentUrl || result.state?.currentUrl || payload.url || "",
     ].join(":");
@@ -53,6 +54,8 @@ function pickPayloadFields(args = {}) {
     "action",
     "browser_id",
     "browserId",
+    "context_id",
+    "contextId",
     "url",
     "last_modified",
   ]) {
@@ -156,15 +159,11 @@ function hasOpened(key, persistedKey) {
 
 async function syncOpenBrowserCanvas(payload = {}) {
   if (!isBrowserCanvasAlreadyOpen()) return;
-  await rightCanvasStore.open("browser", payload);
+  await openSurface("browser", payload);
 }
 
 function isBrowserCanvasAlreadyOpen() {
-  return Boolean(
-    rightCanvasStore?.isOpen
-    && rightCanvasStore?.activeSurfaceId === "browser"
-    && !rightCanvasStore?.isMobileMode,
-  );
+  return Boolean(document.querySelector('[data-surface-id="browser"].is-active .browser-panel'));
 }
 
 async function browserAllowsToolAutofocus() {

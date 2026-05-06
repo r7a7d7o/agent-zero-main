@@ -62,10 +62,14 @@ class WsBrowser(WsHandler):
         if not AgentContext.get(context_id):
             return self._error("CONTEXT_NOT_FOUND", f"Context '{context_id}' was not found", data)
 
-        runtime = await get_runtime(context_id)
-        listing = await runtime.call("list")
-        browsers = listing.get("browsers") or []
-        if not browsers:
+        create_browser = self._bool(data.get("create_browser", data.get("createBrowser")))
+        runtime = await get_runtime(context_id, create=create_browser)
+        listing = {"browsers": [], "last_interacted_browser_id": None}
+        browsers: list[dict[str, Any]] = []
+        if runtime:
+            listing = await runtime.call("list")
+            browsers = listing.get("browsers") or []
+        if runtime and not browsers and create_browser:
             opened = await runtime.call("open", "")
             listing = await runtime.call("list")
             browsers = listing.get("browsers") or []
@@ -73,7 +77,7 @@ class WsBrowser(WsHandler):
                 listing["last_interacted_browser_id"] = opened.get("id")
         active_id = self._active_browser_id(listing, data.get("browser_id"))
         initial_viewport = self._viewport_from_data(data)
-        if active_id and initial_viewport:
+        if runtime and active_id and initial_viewport:
             await runtime.call(
                 "set_viewport",
                 active_id,
@@ -88,9 +92,10 @@ class WsBrowser(WsHandler):
         if existing:
             existing.cancel()
         viewer_id = str(data.get("viewer_id") or "")
-        self._streams[stream_key] = asyncio.create_task(
-            self._stream_frames(sid, context_id, active_id, viewer_id)
-        )
+        if runtime:
+            self._streams[stream_key] = asyncio.create_task(
+                self._stream_frames(sid, context_id, active_id, viewer_id)
+            )
 
         return {
             "context_id": context_id,
@@ -497,6 +502,14 @@ class WsBrowser(WsHandler):
     @staticmethod
     def _context_id(data: dict[str, Any]) -> str:
         return str(data.get("context_id") or data.get("context") or "").strip()
+
+    @staticmethod
+    def _bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _error(code: str, message: str, data: dict[str, Any]) -> WsResult:

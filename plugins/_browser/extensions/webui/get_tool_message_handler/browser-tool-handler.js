@@ -4,16 +4,15 @@ import {
 } from "/components/messages/action-buttons/simple-action-buttons.js";
 import { store as stepDetailStore } from "/components/modals/process-step-detail/step-detail-store.js";
 import { store as speechStore } from "/components/chat/speech/speech-store.js";
-import { store as rightCanvasStore } from "/components/canvas/right-canvas-store.js";
 import { store as browserStore } from "/plugins/_browser/webui/browser-store.js";
 import { getNamespacedClient } from "/js/websocket.js";
+import { open as openSurface } from "/js/surfaces.js";
 import {
   buildDetailPayload,
   cleanStepTitle,
   drawProcessStep,
 } from "/js/messages.js";
 
-const BROWSER_MODAL = "/plugins/_browser/webui/main.html";
 const BROWSER_SCREENSHOT_KVP_KEY = "Screenshot";
 const BROWSER_SCREENSHOT_STYLE_ID = "a0-browser-screenshot-kvp-style";
 const AUTO_OPEN_WINDOW_MS = 10 * 60 * 1000;
@@ -34,19 +33,8 @@ export default async function registerBrowserToolHandler(extData) {
   }
 }
 
-async function openBrowserCanvas(payload = {}) {
-  if (rightCanvasStore?.open) {
-    await rightCanvasStore.open("browser", payload);
-    return;
-  }
-
-  if (window.ensureModalOpen) {
-    await window.ensureModalOpen(BROWSER_MODAL);
-    return;
-  }
-  if (window.openModal) {
-    await window.openModal(BROWSER_MODAL);
-  }
+async function openBrowserSurface(payload = {}) {
+  await openSurface("browser", payload);
 }
 
 async function browserAllowsToolAutofocus() {
@@ -115,11 +103,7 @@ function isFreshToolMessage(timestamp) {
 }
 
 function isBrowserCanvasAlreadyOpen() {
-  return Boolean(
-    rightCanvasStore?.isOpen
-    && rightCanvasStore?.activeSurfaceId === "browser"
-    && !rightCanvasStore?.isMobileMode,
-  );
+  return Boolean(document.querySelector('[data-surface-id="browser"].is-active .browser-panel'));
 }
 
 // Allowlist: only these actions sync an already-open viewer to the target tab.
@@ -146,15 +130,16 @@ function syncOpenBrowserCanvas(args, result) {
   if (!shouldSyncOpenBrowserCanvas(args, result)) return;
   const kvps = args?.kvps || {};
   const browserId = browserIdFromResult(result, kvps);
-  const key = `${args.id || ""}:${kvps.action || ""}:${browserId || ""}:${result.currentUrl || result.state?.currentUrl || kvps.url || ""}`;
+  const contextId = browserContextIdFromResult(result, kvps);
+  const key = `${args.id || ""}:${contextId || ""}:${kvps.action || ""}:${browserId || ""}:${result.currentUrl || result.state?.currentUrl || kvps.url || ""}`;
   if (syncedBrowserCanvases.has(key)) return;
   syncedBrowserCanvases.add(key);
   requestAnimationFrame(async () => {
     if (!isBrowserCanvasAlreadyOpen()) return;
     if (!(await browserAllowsToolAutofocus())) return;
-    void rightCanvasStore.open("browser", {
+    void openSurface("browser", {
       browserId,
-      contextId: browserContextIdFromResult(result, kvps),
+      contextId,
       source: "tool-sync",
     });
   });
@@ -344,7 +329,7 @@ function renderBrowserScreenshotKvp(kvpsTable, resolveBrowserPayload, label) {
     event.stopPropagation();
     const canvasPayload = resolveBrowserPayload();
     if (!canvasPayload) return;
-    await openBrowserCanvas(canvasPayload);
+    await openBrowserSurface(canvasPayload);
   });
 
   cell.textContent = "";
@@ -465,15 +450,15 @@ function drawBrowserTool({
   const browserId = browserIdFromResult(browserResult, kvps);
   const browserCanvasPayload = buildBrowserCanvasPayload(browserResult, kvps);
   const browserPreviewLabel = browserId
-    ? `Open Browser canvas for Browser ${browserId}`
-    : "Open Browser canvas from screenshot";
+    ? `Open Browser surface for Browser ${browserId}`
+    : "Open Browser surface from screenshot";
   if (shouldRenderBrowserScreenshotKvp(browserResult, kvps)) {
     displayKvps[BROWSER_SCREENSHOT_KVP_KEY] = "";
   }
   const browserButton = createActionButton(
     "visibility",
     "Browser",
-    () => openBrowserCanvas(
+    () => openBrowserSurface(
       buildBrowserCanvasPayload(browserResult, kvps, "tool")
       || {
         browserId,

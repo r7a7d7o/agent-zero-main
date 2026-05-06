@@ -307,6 +307,17 @@
       background: color-mix(in srgb, var(--color-background) 94%, #000 6%);
     }
 
+    .modal-inner.browser-modal.is-focus-mode {
+      resize: none;
+      border-radius: 6px;
+    }
+
+    .modal-inner.browser-modal.is-focus-mode .browser-modal-focus-button {
+      color: var(--color-text);
+      border-color: color-mix(in srgb, var(--color-primary) 42%, var(--color-border));
+      background: color-mix(in srgb, var(--color-primary) 16%, var(--color-background));
+    }
+
     .modal.modal-floating {
       pointer-events: none;
     }

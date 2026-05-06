@@ -4,9 +4,9 @@ use for web browsing, page inspection, forms, downloads, and browser-only tasks
 state stays open per chat context
 refs come from content as typed markers: [link 3], [button 6], [image 1], [input text 8]
 
-Browser tool actions must not open the right canvas automatically. Use the tool headlessly unless the user opens the Browser canvas or explicitly asks for a visible browser view; if the Browser canvas is already open, it may reflect the active page.
+Browser tool actions must not open a Browser surface automatically. Use the tool headlessly unless the user opens the Browser surface or explicitly asks for a visible browser view; if the Browser surface is already open, it may reflect the active page.
 
-Browser does not automatically load screenshots or canvas images into model context. Screenshots are explicit only.
+Browser does not automatically load screenshots or surface images into model context. Screenshots are explicit only.
 
 actions: open list state set_active navigate back forward reload content detail screenshot click hover double_click right_click drag type submit type_submit scroll evaluate key_chord mouse wheel keyboard clipboard set_viewport select_option set_checked upload_file multi close close_all
 common args: action browser_id url ref target_ref text selector selectors script modifiers keys key include_content focus_popup event_type x y to_x to_y offset_x offset_y target_offset_x target_offset_y delta_x delta_y button quality full_page path paths value values checked width height calls
@@ -38,7 +38,7 @@ pointer and raw input:
 - keyboard presses key or types text into the active page
 - clipboard is copy, cut, or paste; for browser:clipboard pass action: "paste" and optional text
 - set_viewport resizes the page viewport with width and height
-- coordinates are Chromium viewport CSS pixels and match screenshots/Browser canvas
+- coordinates are Chromium viewport CSS pixels and match screenshots/Browser surface
 - ref offsets are relative to the target element top-left; refs default to element center
 
 forms:

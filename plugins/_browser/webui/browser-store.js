@@ -7,11 +7,12 @@ import { store as chatInputStore } from "/components/chat/input/input-store.js";
 import { store as pluginSettingsStore } from "/components/plugins/plugin-settings-store.js";
 import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
 import { store as rightCanvasStore } from "/components/canvas/right-canvas-store.js";
+import { openLatest as openLatestSurface, registerUrlHandler } from "/js/surfaces.js";
 
 const websocket = getNamespacedClient("/ws");
 websocket.addHandlers(["ws_webui"]);
 
-const EXTENSIONS_ROOT = "/a0/usr/plugins/_browser/extensions";
+const EXTENSIONS_ROOT = "/a0/usr/_browser/extensions";
 const BROWSER_SUBSCRIBE_TIMEOUT_MS = 60000;
 const BROWSER_FIRST_INSTALL_TIMEOUT_MS = 300000;
 const BROWSER_CONFIG_REFRESH_MS = 15000;
@@ -167,6 +168,7 @@ const model = {
   _contextCreatePromise: null,
   _lastSelectedContextId: "",
   _sessionRefreshPromise: null,
+  _sessionRefreshContextId: "",
   extensionMenuOpen: false,
   extensionInstallUrl: "",
   extensionActionLoading: false,
@@ -264,18 +266,24 @@ const model = {
     if (selectedContextId === this._lastSelectedContextId) return;
     this._lastSelectedContextId = selectedContextId;
     if (!this._surfaceMounted) return;
-    void this.refreshBrowserSessions(selectedContextId);
+    void this.syncViewerToSelectedContext(selectedContextId);
   },
 
   async refreshBrowserSessions(contextId = "") {
+    const requestedContextId = this.normalizeContextId(contextId || this.resolveContextId());
     if (this._sessionRefreshPromise) {
+      const inFlightContextId = this._sessionRefreshContextId;
       await this._sessionRefreshPromise;
+      if (requestedContextId && requestedContextId !== inFlightContextId) {
+        return await this.refreshBrowserSessions(requestedContextId);
+      }
       return;
     }
+    this._sessionRefreshContextId = requestedContextId;
     this._sessionRefreshPromise = (async () => {
       const response = await websocket.request(
         "browser_viewer_sessions",
-        { context_id: this.normalizeContextId(contextId || this.resolveContextId()) },
+        { context_id: requestedContextId },
         { timeoutMs: 10000 },
       );
       const data = firstOk(response);
@@ -289,6 +297,45 @@ const model = {
       console.warn("Browser session refresh failed", error);
     } finally {
       this._sessionRefreshPromise = null;
+      this._sessionRefreshContextId = "";
+    }
+  },
+
+  async syncViewerToSelectedContext(contextId = "") {
+    const selectedContextId = this.normalizeContextId(contextId || this.resolveContextId());
+    if (!selectedContextId) return;
+    await this.refreshBrowserSessions(selectedContextId);
+    if (!this._surfaceMounted || !this.isVisibleBrowserSurface()) return;
+
+    const targetBrowserId = this.firstBrowserInContext(selectedContextId)?.id || null;
+    if (
+      this.normalizeContextId(this.contextId) === selectedContextId
+      && (
+        !targetBrowserId
+        || this.sameBrowserTab(targetBrowserId, selectedContextId, this.activeBrowserId, this.activeBrowserContextId)
+      )
+    ) {
+      return;
+    }
+
+    this.loading = true;
+    this.error = "";
+    this.resetRenderedFrame();
+    this.resetViewportTracking();
+    this._surfaceSwitching = Boolean(targetBrowserId);
+    this.switchingBrowserId = targetBrowserId;
+    try {
+      await this.connectViewer({
+        browserId: targetBrowserId,
+        contextId: selectedContextId,
+        initialViewport: this.currentViewportSize(),
+      });
+      await this.syncViewportAfterSurfaceOpen(this._surfaceOpenSequence);
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.loading = false;
+      this._surfaceSwitching = false;
     }
   },
 
@@ -605,7 +652,9 @@ const model = {
     const requestedContextId = this.normalizeContextId(
       options.requestedContextId ?? options.contextId ?? options.context_id,
     );
-    let targetContextId = requestedContextId;
+    let targetContextId = requestedContextId
+      || this.contextIdForBrowserId(requestedBrowserId)
+      || this.resolveContextId();
     const nextMode = options?.nextMode || (options?.mode === "modal" ? "modal" : "canvas");
     if (nextMode === "canvas" && !this.isCanvasSurfaceVisible(element)) {
       this.loading = false;
@@ -719,15 +768,49 @@ const model = {
     return Boolean(rect && Math.round(rect.width || 0) >= 80 && Math.round(rect.height || 0) >= 80);
   },
 
+  isVisibleBrowserSurface() {
+    if (!this._surfaceMounted) return false;
+    if (this._mode === "canvas") {
+      return Boolean(rightCanvasStore?.isSurfaceVisible?.("browser"))
+        && this.isCanvasSurfaceVisible(globalThis.document?.querySelector?.(".browser-canvas-surface .browser-panel"));
+    }
+
+    const panel = globalThis.document?.querySelector?.(".modal .browser-panel");
+    const modal = panel?.closest?.(".modal");
+    if (!panel || !modal) return false;
+    if (modal.classList.contains("modal-surface-parked") || modal.classList.contains("surface-modal-parked")) {
+      return false;
+    }
+    const panelStyle = globalThis.getComputedStyle?.(panel);
+    if (panelStyle?.display === "none" || panelStyle?.visibility === "hidden") return false;
+    const rect = panel.getBoundingClientRect?.();
+    return Boolean(rect && Math.round(rect.width || 0) >= 80 && Math.round(rect.height || 0) >= 80);
+  },
+
   prepareSurfaceOpen(nextMode, requestedBrowserId = null, requestedContextId = "") {
-    const previousMode = this._mode;
-    const modeChanged = this._surfaceMounted && previousMode && previousMode !== nextMode;
     const targetBrowserId = requestedBrowserId || this.activeBrowserId || this.firstBrowserId(requestedContextId);
+    const targetContextId = this.normalizeContextId(
+      requestedContextId
+      || this.contextIdForBrowserId(targetBrowserId)
+      || this.resolveContextId()
+      || this.activeBrowserContextId
+      || this.contextId,
+    );
+    const targetChanged = Boolean(
+      targetBrowserId
+      && this.activeBrowserId
+      && !this.sameBrowserTab(targetBrowserId, targetContextId, this.activeBrowserId, this.activeBrowserContextId),
+    );
     this._mode = nextMode;
     this._surfaceMounted = true;
     this._surfaceOpenedAt = Date.now();
     this._lastViewportKey = "";
-    if (!modeChanged && (this.frameSrc || !targetBrowserId)) return;
+    if (this.frameSrc && !targetChanged) {
+      this._surfaceSwitching = false;
+      this.switchingBrowserId = null;
+      return;
+    }
+    if (!targetBrowserId) return;
 
     this.resetRenderedFrame();
     this.resetViewportTracking();
@@ -756,7 +839,7 @@ const model = {
       || Math.abs(this._lastViewport.height - viewport.height) > VIEWPORT_SYNC_SIZE_TOLERANCE;
     if (!changed) return;
 
-    this.resetRenderedFrame();
+    this.cancelFrameRender();
     this.resetViewportTracking();
     this._surfaceSwitching = true;
     this.switchingBrowserId = targetBrowserId;
@@ -863,6 +946,7 @@ const model = {
           context_id: contextId,
           browser_id: requestedBrowserId,
           viewer_id: viewerToken,
+          create_browser: Boolean(options.createBrowser || options.create_browser),
           viewport_width: initialViewport?.width,
           viewport_height: initialViewport?.height,
         },
@@ -1108,7 +1192,8 @@ const model = {
     const viewport = this.currentViewportSize();
     if (!this.frameSrc || !this._lastFrameDimensions || !viewport) return;
     if (this.frameMatchesViewport(this._lastFrameDimensions, viewport)) return;
-    this.resetRenderedFrame();
+    this.cancelFrameRender();
+    this.resetViewportTracking();
     if (this.activeBrowserId) {
       this._surfaceSwitching = true;
       this.switchingBrowserId = this.activeBrowserId;
@@ -1398,6 +1483,12 @@ const model = {
       if (scoped) return scoped;
     }
     return browsers[0] || null;
+  },
+
+  firstBrowserInContext(contextId = "") {
+    const normalizedContextId = this.normalizeContextId(contextId);
+    if (!normalizedContextId || !Array.isArray(this.browsers)) return null;
+    return this.browsers.find((browser) => this.normalizeContextId(browser?.context_id) === normalizedContextId) || null;
   },
 
   firstBrowserId(contextId = "") {
@@ -2456,8 +2547,8 @@ const model = {
     const header = modal?.querySelector?.(".modal-header");
     const stage = root?.querySelector?.(".browser-stage");
     if (!modal || !inner || !header) return;
-    modal.classList.add("modal-floating");
-    inner.classList.add("browser-modal");
+    modal.classList.add("surface-floating", "modal-floating");
+    inner.classList.add("surface-modal", "browser-modal");
     body?.classList?.add("browser-modal-body");
     this._stageElement = stage || null;
 
@@ -2468,7 +2559,54 @@ const model = {
 
     let drag = null;
     let resizeObserver = null;
+    let beforeFocusBounds = null;
     const viewportGap = 8;
+    const currentBounds = () => {
+      const bounds = inner.getBoundingClientRect();
+      return {
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height,
+      };
+    };
+    const normalizedBounds = (bounds = {}) => {
+      const maxWidth = Math.max(320, globalThis.innerWidth - viewportGap * 2);
+      const maxHeight = Math.max(300, globalThis.innerHeight - viewportGap * 2);
+      const width = Math.min(Math.max(320, Number(bounds.width || 320)), maxWidth);
+      const height = Math.min(Math.max(300, Number(bounds.height || 300)), maxHeight);
+      return {
+        left: Math.min(
+          Math.max(viewportGap, Number(bounds.left || viewportGap)),
+          Math.max(viewportGap, globalThis.innerWidth - width - viewportGap),
+        ),
+        top: Math.min(
+          Math.max(viewportGap, Number(bounds.top || viewportGap)),
+          Math.max(viewportGap, globalThis.innerHeight - height - viewportGap),
+        ),
+        width,
+        height,
+      };
+    };
+    const setBounds = (bounds = {}) => {
+      const next = normalizedBounds(bounds);
+      inner.style.position = "fixed";
+      inner.style.transform = "none";
+      inner.style.left = `${Math.round(next.left)}px`;
+      inner.style.top = `${Math.round(next.top)}px`;
+      inner.style.width = `${Math.round(next.width)}px`;
+      inner.style.height = `${Math.round(next.height)}px`;
+      inner.style.maxWidth = `${Math.max(320, globalThis.innerWidth - viewportGap * 2)}px`;
+      inner.style.maxHeight = `${Math.max(300, globalThis.innerHeight - viewportGap * 2)}px`;
+      this.queueViewportSync();
+      return next;
+    };
+    const focusBounds = () => ({
+      left: viewportGap,
+      top: viewportGap,
+      width: globalThis.innerWidth - viewportGap * 2,
+      height: globalThis.innerHeight - viewportGap * 2,
+    });
     const clampPosition = (left, top) => {
       const bounds = inner.getBoundingClientRect();
       const maxLeft = Math.max(viewportGap, globalThis.innerWidth - bounds.width - viewportGap);
@@ -2479,25 +2617,47 @@ const model = {
       };
     };
     const clampGeometry = () => {
-      const bounds = inner.getBoundingClientRect();
-      const left = Math.max(viewportGap, bounds.left);
-      const top = Math.max(viewportGap, bounds.top);
-      const maxWidth = Math.max(320, globalThis.innerWidth - viewportGap * 2);
-      const maxHeight = Math.max(300, globalThis.innerHeight - viewportGap * 2);
-      if (bounds.width > maxWidth) {
-        inner.style.width = `${maxWidth}px`;
+      if (inner.classList.contains("is-focus-mode")) {
+        setBounds(focusBounds());
+        return;
       }
-      if (bounds.height > maxHeight) {
-        inner.style.height = `${maxHeight}px`;
-      }
-      const next = clampPosition(left, top);
-      inner.style.left = `${next.left}px`;
-      inner.style.top = `${next.top}px`;
-      inner.style.maxWidth = `${Math.max(320, globalThis.innerWidth - next.left - viewportGap)}px`;
-      inner.style.maxHeight = `${Math.max(300, globalThis.innerHeight - next.top - viewportGap)}px`;
-      this.queueViewportSync();
+      setBounds(currentBounds());
     };
     clampGeometry();
+
+    const focusButton = globalThis.document.createElement("button");
+    focusButton.type = "button";
+    focusButton.className = "surface-button browser-modal-focus-button";
+    focusButton.innerHTML = '<span class="material-symbols-outlined" aria-hidden="true">fullscreen</span>';
+    const updateFocusButton = (active) => {
+      const label = active ? "Restore size" : "Focus mode";
+      focusButton.setAttribute("aria-label", label);
+      focusButton.setAttribute("title", label);
+      focusButton.querySelector(".material-symbols-outlined").textContent = active ? "fullscreen_exit" : "fullscreen";
+    };
+    const setFocusMode = (enabled) => {
+      if (enabled) {
+        beforeFocusBounds = currentBounds();
+        inner.classList.add("is-focus-mode");
+        setBounds(focusBounds());
+        updateFocusButton(true);
+        return;
+      }
+      inner.classList.remove("is-focus-mode");
+      setBounds(beforeFocusBounds || currentBounds());
+      beforeFocusBounds = null;
+      updateFocusButton(false);
+    };
+    updateFocusButton(false);
+    const closeButton = inner.querySelector(".modal-close");
+    if (closeButton) {
+      closeButton.insertAdjacentElement("beforebegin", focusButton);
+    } else {
+      header.appendChild(focusButton);
+    }
+    const onFocusClick = () => setFocusMode(!inner.classList.contains("is-focus-mode"));
+    focusButton.addEventListener("click", onFocusClick);
+
     globalThis.addEventListener("resize", clampGeometry);
     if (globalThis.ResizeObserver) {
       resizeObserver = new ResizeObserver(clampGeometry);
@@ -2537,6 +2697,7 @@ const model = {
     const onPointerDown = (event) => {
       if (event.button !== 0) return;
       if (event.target?.closest?.("button, input, select, textarea, a")) return;
+      if (inner.classList.contains("is-focus-mode")) return;
       const current = inner.getBoundingClientRect();
       drag = {
         x: event.clientX,
@@ -2553,6 +2714,8 @@ const model = {
     header.addEventListener("pointerdown", onPointerDown);
 
     this._floatingCleanup = () => {
+      focusButton.removeEventListener("click", onFocusClick);
+      focusButton.remove();
       header.removeEventListener("pointerdown", onPointerDown);
       globalThis.removeEventListener("pointermove", onPointerMove);
       globalThis.removeEventListener("pointerup", onPointerUp);
@@ -2560,6 +2723,7 @@ const model = {
       resizeObserver?.disconnect?.();
       this._stageResizeObserver?.disconnect?.();
       this._stageResizeObserver = null;
+      inner.classList.remove("is-focus-mode");
     };
   },
 
@@ -2601,3 +2765,10 @@ const model = {
 };
 
 export const store = createStore("browserPage", model);
+
+registerUrlHandler(async (intent = {}) => {
+  const url = String(intent.url || "").trim();
+  const payload = { url, source: intent.source || "surface-url-intent" };
+  await openLatestSurface("browser", payload);
+  return await store.openUrlIntent(url, { source: payload.source });
+});
