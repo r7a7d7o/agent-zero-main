@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from plugins._office.helpers import desktop_state
+from plugins._desktop.helpers import desktop_state
 
 
 def _completed(command, returncode=0, stdout="", stderr=""):

@@ -264,6 +264,32 @@ def test_browser_playwright_cache_uses_persistent_usr_path(monkeypatch, tmp_path
         "get_abs_path",
         lambda *parts: str(tmp_path.joinpath(*parts)),
     )
+    browser_binary = (
+        tmp_path
+        / "usr"
+        / "plugins"
+        / "_browser"
+        / "playwright"
+        / "chromium-1169"
+        / "chrome-linux"
+        / "chrome"
+    )
+    browser_binary.parent.mkdir(parents=True)
+    browser_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert get_playwright_cache_dir() == str(
+        tmp_path / "usr" / "plugins" / "_browser" / "playwright"
+    )
+    assert get_playwright_binary() == browser_binary
+
+
+def test_browser_playwright_cache_falls_back_to_existing_legacy_install(monkeypatch, tmp_path):
+    monkeypatch.delenv("A0_BROWSER_PLAYWRIGHT_CACHE_DIR", raising=False)
+    monkeypatch.setattr(
+        browser_playwright_module.files,
+        "get_abs_path",
+        lambda *parts: str(tmp_path.joinpath(*parts)),
+    )
     legacy_binary = (
         tmp_path
         / "tmp"
@@ -275,9 +301,11 @@ def test_browser_playwright_cache_uses_persistent_usr_path(monkeypatch, tmp_path
     legacy_binary.parent.mkdir(parents=True)
     legacy_binary.write_text("#!/bin/sh\n", encoding="utf-8")
 
-    assert get_playwright_cache_dir() == str(
-        tmp_path / "usr" / "plugins" / "_browser" / "playwright"
-    )
+    assert browser_playwright_module.get_playwright_cache_dirs() == [
+        tmp_path / "usr" / "plugins" / "_browser" / "playwright",
+        tmp_path / "usr" / "browser" / "playwright",
+        tmp_path / "tmp" / "playwright",
+    ]
     assert get_playwright_binary() == legacy_binary
 
 
@@ -288,7 +316,7 @@ def test_browser_extension_storage_uses_plugin_user_path(monkeypatch, tmp_path):
         lambda *parts: str(tmp_path.joinpath(*parts)),
     )
 
-    assert get_extensions_root() == tmp_path / "usr" / "plugins" / "_browser" / "extensions"
+    assert get_extensions_root() == tmp_path / "usr" / "_browser" / "extensions"
 
 
 def test_browser_extension_manager_uninstalls_only_managed_extensions(monkeypatch, tmp_path):
@@ -472,7 +500,8 @@ def test_browser_viewer_creates_chat_when_no_context_is_selected():
     assert "chatsStore.setSelected?.(contextId)" in js
     assert "this.contextId = existingContextId;" in js
     assert "this.contextId = contextId;" in js
-    assert "let targetContextId = requestedContextId;" in js
+    assert "let targetContextId = requestedContextId" in js
+    assert "|| this.resolveContextId();" in js
     assert "targetContextId = await this.ensureContextId();" in js
     assert "contextId: targetContextId" in js
     assert "No active chat context is selected." not in js
@@ -496,6 +525,30 @@ def test_browser_canvas_startup_waits_for_raw_viewport_settle():
     assert "isCurrentSurfaceOpen(surfaceSequence)" in js
     assert "isCanvasSurfaceVisible(element)" in js
     assert "scheduleViewportSyncForSurface" in js
+    assert "const targetChanged = Boolean(" in js
+    assert "if (this.frameSrc && !targetChanged)" in js
+    assert "this.cancelFrameRender();" in js
+    assert "this.resetRenderedFrame();" in js
+
+
+def test_browser_surface_handoffs_keep_existing_frame_until_replacement_arrives():
+    js = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js").read_text(
+        encoding="utf-8"
+    )
+    prepare_start = js.index("prepareSurfaceOpen(nextMode")
+    prepare_block = js[prepare_start: js.index("resetViewportTracking()", prepare_start)]
+    viewport_start = js.index("resetRenderedFrameIfViewportChanged(viewport =")
+    viewport_block = js[viewport_start: js.index("async waitForSurfaceViewport", viewport_start)]
+    clear_start = js.index("clearRenderedFrameIfViewportChanged()")
+    clear_block = js[clear_start: js.index("beginCommand()", clear_start)]
+
+    assert "modeChanged" not in prepare_block
+    assert "if (this.frameSrc && !targetChanged)" in prepare_block
+    assert "this.resetRenderedFrame();" in prepare_block
+    assert "this.cancelFrameRender();" in viewport_block
+    assert "this.resetRenderedFrame();" not in viewport_block
+    assert "this.cancelFrameRender();" in clear_block
+    assert "this.resetRenderedFrame();" not in clear_block
 
 
 def test_browser_canvas_surface_open_waits_for_visible_panel():
@@ -595,7 +648,7 @@ def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
         / "_browser"
         / "extensions"
         / "webui"
-        / "right_canvas_register_surfaces"
+        / "surfaces_register"
         / "register-browser.js"
     ).read_text(encoding="utf-8")
     browser_store = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js").read_text(
@@ -605,10 +658,11 @@ def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
         encoding="utf-8"
     )
     modals_js = (PROJECT_ROOT / "webui" / "js" / "modals.js").read_text(encoding="utf-8")
+    surfaces_js = (PROJECT_ROOT / "webui" / "js" / "surfaces.js").read_text(encoding="utf-8")
 
     assert "Open Browser" in button_html
-    assert "$store.rightCanvas ? $store.rightCanvas.open('browser')" in button_html
-    assert "window.ensureModalOpen ? window.ensureModalOpen('/plugins/_browser/webui/main.html')" in button_html
+    assert "import('/js/surfaces.js')" in button_html
+    assert "open('browser')" in button_html
     assert "$store.rightCanvas.toggle('browser')" not in button_html
     assert 'defaultOpenMode: "modal"' not in register_js
     assert "beginDockHandoff()" in register_js
@@ -623,11 +677,9 @@ def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
     assert "await surface.cancelDockHandoff?.(payload)" in canvas_store
     assert "async closeDockSourceModal" in canvas_store
 
-    assert "sourceModalPath: modal.path" in modals_js
-    assert "closeSourceModal: async () =>" in modals_js
-    assert "const closed = await closeModal(modal.path)" in modals_js
-    assert "const fallbackClosed = await closeModal()" in modals_js
-    assert "button.disabled = true" in modals_js
+    assert "dock(metadata.surfaceId" in surfaces_js
+    assert "button.disabled = true" in surfaces_js
+    assert "dockSurface(metadata.surfaceId" not in modals_js
 
     assert "beginSurfaceHandoff()" in browser_store
     assert "finishSurfaceHandoff()" in browser_store
@@ -635,28 +687,36 @@ def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
     assert "releaseSurfaceBindings()" in browser_store
     assert "this.releaseSurfaceBindings();" in browser_store
 
-    assert "async function openBrowserCanvas" in tool_handler
-    assert 'await rightCanvasStore.open("browser", payload);' in tool_handler
-    assert "window.ensureModalOpen" in tool_handler
-    assert "window.openModal" in tool_handler
+    assert "async function openBrowserSurface" in tool_handler
+    assert 'await openSurface("browser", payload);' in tool_handler
+    assert "rightCanvasStore" not in tool_handler
+    assert "window.ensureModalOpen" not in tool_handler
+    assert "window.openModal" not in tool_handler
     assert "function syncOpenBrowserCanvas" in tool_handler
     assert "async function syncOpenBrowserCanvas" in after_loop_handler
     assert "syncBrowserResultsIntoOpenCanvas" in after_loop_handler
+    assert '${contextId || ""}' in tool_handler
+    assert "contextId || \"\"" in after_loop_handler
+    assert '"context_id"' in after_loop_handler
+    assert '"contextId"' in after_loop_handler
+    assert "rightCanvasStore" not in after_loop_handler
     assert "window.ensureModalOpen" not in after_loop_handler
     assert "window.openModal" not in after_loop_handler
 
     for js in (tool_handler, after_loop_handler):
         assert "openBrowserModal" not in js
         assert "isBrowserCanvasAlreadyOpen" in js
-        assert "rightCanvasStore?.isOpen" in js
-        assert 'rightCanvasStore?.activeSurfaceId === "browser"' in js
+        assert '[data-surface-id="browser"].is-active .browser-panel' in js
         assert "autoOpenBrowserCanvas" not in js
         assert "autoOpenedBrowsers" not in js
         assert "syncedBrowserCanvases" in js
         assert "const FOCUS_ACTIONS = new Set" in js
         assert "FOCUS_ACTIONS.has(action)" in js
 
-    for js in (tool_handler, after_loop_handler, register_js, browser_store, modals_js):
+    assert 'id: "browser"' in surfaces_js
+    assert "/plugins/_browser/webui/main.html" in surfaces_js
+
+    for js in (tool_handler, after_loop_handler, register_js, browser_store, modals_js, surfaces_js):
         assert "globalThis.Alpine" not in js
         assert "Alpine?.store" not in js
         assert "Alpine.store" not in js
@@ -671,9 +731,23 @@ def test_browser_and_desktop_surface_buttons_remember_latest_window_mode():
     )
     modals_js = (PROJECT_ROOT / "webui" / "js" / "modals.js").read_text(encoding="utf-8")
     modals_css = (PROJECT_ROOT / "webui" / "css" / "modals.css").read_text(encoding="utf-8")
-    surface_button_block = modals_js[
-        modals_js.index("function createModalSurfaceButton"):
-        modals_js.index("function configureModalSurfaceSwitcher")
+    surfaces_js = (PROJECT_ROOT / "webui" / "js" / "surfaces.js").read_text(encoding="utf-8")
+    surfaces_css = (PROJECT_ROOT / "webui" / "css" / "surfaces.css").read_text(encoding="utf-8")
+    close_block = canvas_store[
+        canvas_store.index("async close()"):
+        canvas_store.index("async dockSurface")
+    ]
+    undock_block = canvas_store[
+        canvas_store.index("async undockSurface"):
+        canvas_store.index("async openModalSurface")
+    ]
+    open_modal_block = canvas_store[
+        canvas_store.index("async openModalSurface"):
+        canvas_store.index("async undockActiveSurface")
+    ]
+    surface_button_block = surfaces_js[
+        surfaces_js.index("function createModalSurfaceButton"):
+        surfaces_js.index("function configureModalSurfaceSwitcher")
     ]
 
     assert "surfaceModes: {}" in canvas_store
@@ -685,38 +759,57 @@ def test_browser_and_desktop_surface_buttons_remember_latest_window_mode():
     assert "isSurfaceVisible(id)" in canvas_store
     assert "async openLatest(surfaceId" in canvas_store
     assert "async openModalSurface(surfaceId" in canvas_store
-    assert "this.recordSurfaceMode(targetId, SURFACE_MODE_CANVAS" in canvas_store
-    assert "this.recordSurfaceMode(targetId, SURFACE_MODE_MODAL)" in canvas_store
+    assert "this.recordSurfaceMode(targetId, SURFACE_MODE_DOCKED" in canvas_store
+    assert "this.recordSurfaceMode(targetId, SURFACE_MODE_FLOATING)" in canvas_store
     assert "surfaceModes: this.surfaceModes" in canvas_store
     assert "normalizeSurfaceMode(mode)" in canvas_store
+    assert "migratePersistedSurfaceState" in canvas_store
+    assert "this.mountedSurfaces = {}" not in close_block
+    assert "surface?.close" not in close_block
+    assert "this.mountedSurfaces = {}" not in undock_block
+    assert "failed to close while undocking" not in undock_block
+    assert "this.mountedSurfaces = {}" not in open_modal_block
+    assert "failed to close before modal open" not in open_modal_block
 
     assert '@click="$store.rightCanvas.openLatest(surface.id)"' in canvas_html
     assert '@click="$store.rightCanvas.open(surface.id)"' in canvas_html
 
-    assert 'rightCanvasStore.recordSurfaceMode?.(metadata.surfaceId, "modal")' in modals_js
-    assert "configureModalSurfaceSwitcher" in modals_js
-    assert "modal-surface-switcher" in modals_js
-    assert "modal-surface-button" in modals_js
-    assert "SINGLE_VISIBLE_MODAL_SURFACE_PATHS" in modals_js
-    assert "modal-surface-parked" in modals_js
-    assert "parkSiblingSurfaceModals(activeModal)" in modals_js
+    assert "recordMode(metadata.surfaceId, SURFACE_MODE_FLOATING)" in surfaces_js
+    assert "configureModalSurfaceSwitcher" in surfaces_js
+    assert "surface-switcher" in surfaces_js
+    assert "surface-button" in surfaces_js
+    assert "SINGLE_VISIBLE_MODAL_SURFACE_PATHS" not in modals_js
+    assert "modal-surface-parked" in surfaces_js
+    assert "parkSiblingSurfaceModals(activeModal)" in surfaces_js
     assert "activateModal(modal)" in modals_js
+    assert "closeSurfaceGroupModals" not in modals_js
+    assert "closeSurfaceGroupModals" in surfaces_js
+    assert "const closed = await closeSurfaceGroupModals()" in surfaces_js
+    assert "globalThis.closeSurfaceGroupModals = closeSurfaceGroupModals" in surfaces_js
     assert "button.title = title" not in modals_js
     assert "button.title = metadata.title" not in modals_js
-    assert "rightCanvasStore.panelSurfaces" in modals_js
-    assert 'rightCanvasStore.recordSurfaceMode?.(surface.id, "modal")' in modals_js
+    assert "rightCanvasStore.panelSurfaces" not in modals_js
+    assert 'await recordMode(normalizedId, SURFACE_MODE_FLOATING)' in surfaces_js
     assert "const openPromise = ensureModalOpen(targetModalPath)" in surface_button_block
     assert "await closeModal(modal.path)" not in surface_button_block
     assert "modalRequiresExplicitClose" in modals_js
-    assert '"plugins/_browser/webui/main.html"' in modals_js
-    assert '"plugins/_office/webui/main.html"' in modals_js
+    assert "modalSurfaceMetadata" not in modals_js
+    assert "modal-content-loaded" in modals_js
+    assert '"plugins/_browser/webui/main.html"' not in modals_js
+    assert '"plugins/_office/webui/main.html"' not in modals_js
     assert "&& !modalRequiresExplicitClose(newModal)" in modals_js
     assert "if (modalRequiresExplicitClose(modalStack[modalStack.length - 1])) return;" in modals_js
-    assert ".modal-surface-switcher" in modals_css
-    assert ".modal-surface-button.is-active" in modals_css
-    assert ".modal-surface-image" in modals_css
-    assert ".modal.modal-surface-parked" in modals_css
-    assert "grid-auto-flow: column" in modals_css
+    assert ".modal-surface-switcher" not in modals_css
+    assert ".surface-switcher" in surfaces_css
+    assert ".surface-button" in surfaces_css
+    assert ".modal-surface-button.is-active" in surfaces_css
+    assert ".modal-surface-image" in surfaces_css
+    assert ".modal.modal-surface-parked" in surfaces_css
+    assert "grid-auto-flow: column" in surfaces_css
+    assert 'id: "browser"' in surfaces_js
+    assert 'id: "desktop"' in surfaces_js
+    assert "/plugins/_browser/webui/main.html" in surfaces_js
+    assert "/plugins/_desktop/webui/main.html" in surfaces_js
 
 
 def test_browser_tool_does_not_auto_open_canvas_policy_is_documented():
@@ -730,8 +823,8 @@ def test_browser_tool_does_not_auto_open_canvas_policy_is_documented():
         encoding="utf-8"
     )
 
-    assert "must not open the right canvas automatically" in prompt
-    assert "Use the tool headlessly unless the user opens the Browser canvas" in prompt
+    assert "must not open a Browser surface automatically" in prompt
+    assert "Use the tool headlessly unless the user opens the Browser surface" in prompt
     assert "optional visible WebUI viewer" in prompt
     assert "screenshot" in prompt
     assert "vision_load" in prompt
@@ -741,7 +834,7 @@ def test_browser_tool_does_not_auto_open_canvas_policy_is_documented():
     assert "browser-forms" in prompt
     assert "does not automatically load screenshots" in prompt
     assert "already open" in config
-    assert "already-open Browser canvas" in config_html
+    assert "already-open Browser surface" in config_html
 
 
 def test_browser_forms_skill_is_plugin_owned_and_discoverable():
@@ -849,6 +942,12 @@ def test_browser_viewer_uses_tabs_for_session_switching():
     assert "activeBrowserContextId" in browser_store
     assert "sameBrowserTab" in browser_store
     assert "applyBrowserListing" in browser_store
+    assert "syncViewerToSelectedContext(selectedContextId)" in browser_store
+    assert "async syncViewerToSelectedContext" in browser_store
+    assert "isVisibleBrowserSurface()" in browser_store
+    assert "firstBrowserInContext(selectedContextId)" in browser_store
+    assert "requestedContextId && requestedContextId !== inFlightContextId" in browser_store
+    assert "create_browser: Boolean(options.createBrowser || options.create_browser)" in browser_store
     assert "browserTabTooltip(browser)" in browser_store
     assert "browserChatTitle(browser = {})" in browser_store
     assert "contextId.slice" not in browser_store
@@ -1560,9 +1659,12 @@ async def test_browser_viewer_subscribe_unregisters_stream(monkeypatch):
                 return {"id": 1, "state": {"id": 1, "currentUrl": "about:blank"}}
             raise AssertionError(method)
 
+    fake_runtime = FakeRuntime()
+
     async def fake_get_runtime(context_id, create=True):
         assert context_id == "ctx"
-        return FakeRuntime()
+        assert create is False
+        return fake_runtime
 
     monkeypatch.setattr(ws_browser_module, "get_runtime", fake_get_runtime)
     monkeypatch.setattr(
@@ -1584,11 +1686,95 @@ async def test_browser_viewer_subscribe_unregisters_stream(monkeypatch):
     )
 
     assert result["context_id"] == "ctx"
+    assert result["active_browser_id"] is None
+    assert fake_runtime.opened is False
     assert ("sid-1", "ctx") in ws_browser_module.WsBrowser._streams
 
     await handler.on_disconnect("sid-1")
 
     assert ("sid-1", "ctx") not in ws_browser_module.WsBrowser._streams
+
+
+@pytest.mark.anyio
+async def test_browser_viewer_subscribe_can_create_blank_tab_when_requested(monkeypatch):
+    class FakeRuntime:
+        def __init__(self) -> None:
+            self.opened = False
+
+        async def call(self, method, *args):
+            if method == "list":
+                if self.opened:
+                    return {
+                        "browsers": [{"id": 1, "currentUrl": "about:blank", "title": ""}],
+                        "last_interacted_browser_id": 1,
+                    }
+                return {"browsers": [], "last_interacted_browser_id": None}
+            if method == "open":
+                self.opened = True
+                return {"id": 1, "state": {"id": 1, "currentUrl": "about:blank"}}
+            raise AssertionError(method)
+
+    fake_runtime = FakeRuntime()
+
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx"
+        assert create is True
+        return fake_runtime
+
+    monkeypatch.setattr(ws_browser_module, "get_runtime", fake_get_runtime)
+    monkeypatch.setattr(
+        ws_browser_module.AgentContext,
+        "get",
+        staticmethod(lambda context_id: SimpleNamespace(id=context_id)),
+    )
+
+    handler = ws_browser_module.WsBrowser(
+        SimpleNamespace(),
+        threading.RLock(),
+        manager=None,
+    )
+
+    result = await handler.process(
+        "browser_viewer_subscribe",
+        {"context_id": "ctx", "create_browser": True},
+        "sid-create",
+    )
+
+    assert result["active_browser_id"] == 1
+    assert fake_runtime.opened is True
+
+    await handler.on_disconnect("sid-create")
+
+
+@pytest.mark.anyio
+async def test_browser_viewer_subscribe_without_runtime_does_not_create_runtime(monkeypatch):
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx"
+        assert create is False
+        return None
+
+    monkeypatch.setattr(ws_browser_module, "get_runtime", fake_get_runtime)
+    monkeypatch.setattr(
+        ws_browser_module.AgentContext,
+        "get",
+        staticmethod(lambda context_id: SimpleNamespace(id=context_id)),
+    )
+
+    handler = ws_browser_module.WsBrowser(
+        SimpleNamespace(),
+        threading.RLock(),
+        manager=None,
+    )
+
+    result = await handler.process(
+        "browser_viewer_subscribe",
+        {"context_id": "ctx"},
+        "sid-empty",
+    )
+
+    assert result["active_browser_id"] is None
+    assert result["browsers"] == []
+    assert ("sid-empty", "ctx") not in ws_browser_module.WsBrowser._streams
 
 
 @pytest.mark.anyio

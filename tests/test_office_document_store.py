@@ -19,12 +19,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from plugins._office import hooks
+from plugins._desktop import hooks as desktop_hooks
+from plugins._desktop.helpers import desktop_session
 from plugins._office.helpers import (
     artifact_editor,
     canvas_context,
     document_store,
     libreoffice,
-    libreoffice_desktop,
     markdown_sessions,
 )
 
@@ -312,8 +313,8 @@ def test_odf_is_advertised_and_docx_remains_explicit_compatibility(office_state)
     assert "ODF is first-class for LibreOffice" in prompt
     assert "DOCX/XLSX/PPTX are compatibility formats" in prompt
     assert "`method` is accepted as an alias for action" in prompt
-    assert "they do not open the canvas automatically" in prompt
-    assert "Download and Open in canvas message actions" in prompt
+    assert "they do not open a surface automatically" in prompt
+    assert "explicit Download, Open Document, or Desktop edit message actions" in prompt
     doc = document_store.create_document("document", "Use ODT", "odt", "")
     assert doc["extension"] == "odt"
 
@@ -450,7 +451,7 @@ def test_thunar_defaults_preserve_existing_profile_settings(tmp_path):
         encoding="utf-8",
     )
 
-    libreoffice_desktop._write_thunar_defaults(thunar_xml)
+    desktop_session._write_thunar_defaults(thunar_xml)
 
     root = ET.parse(thunar_xml).getroot()
     values = {child.get("name"): child.get("value") for child in root.findall("property")}
@@ -459,14 +460,14 @@ def test_thunar_defaults_preserve_existing_profile_settings(tmp_path):
     assert values["last-show-hidden"] == "true"
 
 
-def test_official_libreoffice_desktop_status_and_url_contract(tmp_path, monkeypatch):
+def test_official_desktop_session_status_and_url_contract(tmp_path, monkeypatch):
     xpra_html = tmp_path / "xpra" / "www"
     xpra_html.mkdir(parents=True)
     (xpra_html / "index.html").write_text("xpra", encoding="utf-8")
 
-    monkeypatch.setattr(libreoffice_desktop.libreoffice, "find_soffice", lambda: "/usr/bin/soffice")
+    monkeypatch.setattr(desktop_session.libreoffice, "find_soffice", lambda: "/usr/bin/soffice")
     monkeypatch.setattr(
-        libreoffice_desktop.shutil,
+        desktop_session.shutil,
         "which",
         lambda name: f"/usr/bin/{name}"
         if name
@@ -484,11 +485,11 @@ def test_official_libreoffice_desktop_status_and_url_contract(tmp_path, monkeypa
         }
         else "",
     )
-    monkeypatch.setattr(libreoffice_desktop.virtual_desktop, "XPRA_HTML_ROOT_CANDIDATES", (xpra_html,))
-    monkeypatch.setattr(libreoffice_desktop.virtual_desktop, "_package_installed", lambda package: True)
+    monkeypatch.setattr(desktop_session.virtual_desktop, "XPRA_HTML_ROOT_CANDIDATES", (xpra_html,))
+    monkeypatch.setattr(desktop_session.virtual_desktop, "_package_installed", lambda package: True)
 
-    status = libreoffice_desktop.collect_desktop_status()
-    url = libreoffice_desktop._xpra_url("abc123")
+    status = desktop_session.collect_desktop_status()
+    url = desktop_session._xpra_url("abc123")
 
     assert status["healthy"] is True
     assert status["xpra_html_root"] == str(xpra_html)
@@ -502,6 +503,21 @@ def test_official_libreoffice_desktop_status_and_url_contract(tmp_path, monkeypa
     assert "quality=85" in url
     assert "speed=80" in url
     assert "printing=true" in url
+
+
+def test_desktop_gateway_patches_xpra_menu_script():
+    source = (PROJECT_ROOT / "helpers" / "virtual_desktop_routes.py").read_text(encoding="utf-8")
+
+    assert "XPRA_MENU_CUSTOM_PATCH" in source
+    assert 'upstream_path.endswith("/js/MenuCustom.js")' in source
+    assert "window.noWindowList" in source
+    assert "__a0SafeWindowList" in source
+    assert "XPRA_WINDOW_OFFSET_WARNING_PATCH" in source
+    assert "XPRA_WINDOW_SCRIPT_PATCH" in source
+    assert "a0_desktop_patch=20260506" in source
+    assert 'upstream_path.endswith("/index.html")' in source
+    assert 'upstream_path.endswith("/js/Window.js")' in source
+    assert "window does not fit in canvas, offsets:" in source
 
 
 def test_office_session_desktop_state_action_defaults_without_screenshot(monkeypatch):
@@ -527,7 +543,7 @@ def test_office_session_desktop_state_action_defaults_without_screenshot(monkeyp
             return {
                 "ok": True,
                 "display": ":120",
-                "profile_dir": "/a0/tmp/_office/desktop/profiles/agent-zero-desktop",
+                "profile_dir": "/a0/usr/_desktop/profiles/agent-zero-desktop",
                 "size": {"width": 1440, "height": 900},
                 "pointer": {"x": 0, "y": 0, "screen": 0, "window": 0},
                 "active_window": None,
@@ -537,7 +553,7 @@ def test_office_session_desktop_state_action_defaults_without_screenshot(monkeyp
                 "errors": [],
             }
 
-    monkeypatch.setattr(office_session.libreoffice_desktop, "get_manager", lambda: FakeManager())
+    monkeypatch.setattr(office_session.desktop_session, "get_manager", lambda: FakeManager())
     handler = office_session.OfficeSession(app=None, thread_lock=None)
     request = types.SimpleNamespace(headers={}, host_url="http://localhost:32080")
 
@@ -583,7 +599,7 @@ def test_office_session_desktop_shutdown_action_calls_manager(monkeypatch):
                 "source": source,
             }
 
-    monkeypatch.setattr(office_session.libreoffice_desktop, "get_manager", lambda: FakeManager())
+    monkeypatch.setattr(office_session.desktop_session, "get_manager", lambda: FakeManager())
     handler = office_session.OfficeSession(app=None, thread_lock=None)
     request = types.SimpleNamespace(headers={}, host_url="http://localhost:32080")
 
@@ -600,7 +616,50 @@ def test_office_session_desktop_shutdown_action_calls_manager(monkeypatch):
         monkeypatch.delattr(api_package, "office_session", raising=False)
 
 
-def test_official_libreoffice_desktop_manager_opens_binary_session(office_state, tmp_path, monkeypatch):
+def test_office_binary_open_requires_explicit_desktop_without_cold_session(office_state, monkeypatch):
+    api_module = types.ModuleType("helpers.api")
+
+    class ApiHandler:
+        def __init__(self, app=None, thread_lock=None):
+            self.app = app
+            self.thread_lock = thread_lock
+
+    api_module.ApiHandler = ApiHandler
+    api_module.Request = object
+    monkeypatch.setitem(sys.modules, "helpers.api", api_module)
+    monkeypatch.delitem(sys.modules, "plugins._office.api.office_session", raising=False)
+
+    from plugins._office.api import office_session
+
+    doc = document_store.create_document("document", "Cold Memo", "odt", "No surprise Desktop.")
+
+    def forbidden_session(*_args, **_kwargs):
+        raise AssertionError("cold binary open must not create a store session")
+
+    class ForbiddenManager:
+        def open(self, *_args, **_kwargs):
+            raise AssertionError("cold binary open must not open Desktop")
+
+    monkeypatch.setattr(office_session.document_store, "create_session", forbidden_session)
+    monkeypatch.setattr(office_session.desktop_session, "get_manager", lambda: ForbiddenManager())
+
+    handler = office_session.OfficeSession(app=None, thread_lock=None)
+    request = types.SimpleNamespace(headers={}, host_url="http://localhost:32080")
+    result = asyncio.run(handler.process({"action": "open", "file_id": doc["file_id"]}, request))
+
+    assert result["ok"] is True
+    assert result["requires_desktop"] is True
+    assert result["file_id"] == doc["file_id"]
+    assert "session_id" not in result
+    assert "store_session_id" not in result
+
+    monkeypatch.delitem(sys.modules, "plugins._office.api.office_session", raising=False)
+    api_package = sys.modules.get("plugins._office.api")
+    if api_package is not None:
+        monkeypatch.delattr(api_package, "office_session", raising=False)
+
+
+def test_official_desktop_session_manager_opens_binary_session(office_state, tmp_path, monkeypatch):
     class FakeProcess:
         pid = 4242
 
@@ -616,21 +675,21 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
         def kill(self):
             return None
 
-    monkeypatch.setattr(libreoffice_desktop, "STATE_DIR", tmp_path / "desktop")
-    monkeypatch.setattr(libreoffice_desktop, "SESSION_DIR", tmp_path / "desktop" / "sessions")
-    monkeypatch.setattr(libreoffice_desktop, "PROFILE_DIR", tmp_path / "desktop" / "profiles")
-    monkeypatch.setattr(libreoffice_desktop, "collect_desktop_status", lambda: {"healthy": True, "message": "ok"})
-    monkeypatch.setattr(libreoffice_desktop.libreoffice, "find_soffice", lambda: "/usr/bin/soffice")
-    monkeypatch.setattr(libreoffice_desktop, "_port_is_free", lambda port: True)
-    monkeypatch.setattr(libreoffice_desktop.virtual_desktop, "has_window", lambda **kwargs: True)
-    real_get_abs_path = libreoffice_desktop.files.get_abs_path
+    monkeypatch.setattr(desktop_session, "STATE_DIR", tmp_path / "desktop")
+    monkeypatch.setattr(desktop_session, "SESSION_DIR", tmp_path / "desktop" / "sessions")
+    monkeypatch.setattr(desktop_session, "PROFILE_DIR", tmp_path / "desktop" / "profiles")
+    monkeypatch.setattr(desktop_session, "collect_desktop_status", lambda: {"healthy": True, "message": "ok"})
+    monkeypatch.setattr(desktop_session.libreoffice, "find_soffice", lambda: "/usr/bin/soffice")
+    monkeypatch.setattr(desktop_session, "_port_is_free", lambda port: True)
+    monkeypatch.setattr(desktop_session.virtual_desktop, "has_window", lambda **kwargs: True)
+    real_get_abs_path = desktop_session.files.get_abs_path
 
     def fake_get_abs_path(*parts):
         if parts and parts[0] == "usr":
             return str(tmp_path.joinpath(*parts))
         return real_get_abs_path(*parts)
 
-    monkeypatch.setattr(libreoffice_desktop.files, "get_abs_path", fake_get_abs_path)
+    monkeypatch.setattr(desktop_session.files, "get_abs_path", fake_get_abs_path)
 
     def fake_spawn(self, session):
         session.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -639,11 +698,11 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     def fake_open_document(self, session, doc):
         session.processes[f"soffice-{doc['file_id']}"] = FakeProcess()
 
-    monkeypatch.setattr(libreoffice_desktop.LibreOfficeDesktopManager, "_spawn_desktop_locked", fake_spawn)
-    monkeypatch.setattr(libreoffice_desktop.LibreOfficeDesktopManager, "_open_document_locked", fake_open_document)
+    monkeypatch.setattr(desktop_session.DesktopSessionManager, "_spawn_desktop_locked", fake_spawn)
+    monkeypatch.setattr(desktop_session.DesktopSessionManager, "_open_document_locked", fake_open_document)
 
     doc = document_store.create_document("spreadsheet", "Official Sheet", "ods", "Name,Value\nA,1")
-    manager = libreoffice_desktop.LibreOfficeDesktopManager()
+    manager = desktop_session.DesktopSessionManager()
     payload = manager.open(doc)
 
     assert payload["available"] is True
@@ -792,7 +851,7 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
     assert "xmessage" in shutdown_script
     assert '"-buttons",' in shutdown_script
     desktop_helper = (
-        PROJECT_ROOT / "plugins" / "_office" / "helpers" / "libreoffice_desktop.py"
+        PROJECT_ROOT / "plugins" / "_desktop" / "helpers" / "desktop_session.py"
     ).read_text(encoding="utf-8")
     assert "_refresh_xfce_desktop" in desktop_helper
     assert "DBUS_SESSION_BUS_ADDRESS" in desktop_helper
@@ -803,7 +862,7 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
         / payload["session_id"]
         / ".config"
         / "autostart"
-        / "agent-zero-office-desktop.desktop"
+        / "agent-zero-desktop.desktop"
     )
     assert "prepare-xfce-profile.sh" in autostart.read_text(encoding="utf-8")
     profile_script = (
@@ -841,31 +900,31 @@ def test_official_libreoffice_desktop_manager_opens_binary_session(office_state,
         ).read_text(encoding="utf-8")
         assert "NoDisplay=true" in entry
         assert "Hidden=true" in entry
-    assert manager.proxy_for_token(payload["token"]) == ("127.0.0.1", libreoffice_desktop.XPRA_PORT_BASE)
+    assert manager.proxy_for_token(payload["token"]) == ("127.0.0.1", desktop_session.XPRA_PORT_BASE)
     assert manager.close(payload["session_id"], save_first=False)["closed"] == 0
     assert manager.close(payload["session_id"], save_first=False)["persistent"] is True
 
 
 def test_shutdown_panel_launcher_requires_second_click(tmp_path):
-    profile_dir = tmp_path / "desktop" / "profiles" / libreoffice_desktop.SYSTEM_SESSION_ID
+    profile_dir = tmp_path / "desktop" / "profiles" / desktop_session.SYSTEM_SESSION_ID
     profile_dir.mkdir(parents=True)
     desktop_path = tmp_path / "workdir"
     desktop_path.mkdir()
-    session = libreoffice_desktop.DesktopSession(
-        session_id=libreoffice_desktop.SYSTEM_SESSION_ID,
-        file_id=libreoffice_desktop.SYSTEM_FILE_ID,
+    session = desktop_session.DesktopSession(
+        session_id=desktop_session.SYSTEM_SESSION_ID,
+        file_id=desktop_session.SYSTEM_FILE_ID,
         extension="desktop",
         path=str(desktop_path),
-        title=libreoffice_desktop.SYSTEM_TITLE,
-        display=libreoffice_desktop.DISPLAY_BASE,
-        xpra_port=libreoffice_desktop.XPRA_PORT_BASE,
-        token=libreoffice_desktop.SYSTEM_SESSION_ID,
+        title=desktop_session.SYSTEM_TITLE,
+        display=desktop_session.DISPLAY_BASE,
+        xpra_port=desktop_session.XPRA_PORT_BASE,
+        token=desktop_session.SYSTEM_SESSION_ID,
         url="/desktop/session/agent-zero-desktop/index.html",
         profile_dir=profile_dir,
     )
-    script = libreoffice_desktop._write_shutdown_bridge_script(session)
-    request = libreoffice_desktop._shutdown_request_path(session)
-    arm = libreoffice_desktop._shutdown_arm_path(session)
+    script = desktop_session._write_shutdown_bridge_script(session)
+    request = desktop_session._shutdown_request_path(session)
+    arm = desktop_session._shutdown_arm_path(session)
     env = dict(os.environ)
     env.pop("DISPLAY", None)
 
@@ -882,7 +941,7 @@ def test_shutdown_panel_launcher_requires_second_click(tmp_path):
     assert not arm.exists()
 
 
-def test_libreoffice_desktop_sync_consumes_shutdown_marker(tmp_path, monkeypatch):
+def test_desktop_session_sync_consumes_shutdown_marker(tmp_path, monkeypatch):
     class FakeProcess:
         pid = 5252
         terminated = False
@@ -900,32 +959,32 @@ def test_libreoffice_desktop_sync_consumes_shutdown_marker(tmp_path, monkeypatch
         def kill(self):
             self.terminated = True
 
-    monkeypatch.setattr(libreoffice_desktop, "STATE_DIR", tmp_path / "desktop")
-    monkeypatch.setattr(libreoffice_desktop, "SESSION_DIR", tmp_path / "desktop" / "sessions")
-    monkeypatch.setattr(libreoffice_desktop, "PROFILE_DIR", tmp_path / "desktop" / "profiles")
+    monkeypatch.setattr(desktop_session, "STATE_DIR", tmp_path / "desktop")
+    monkeypatch.setattr(desktop_session, "SESSION_DIR", tmp_path / "desktop" / "sessions")
+    monkeypatch.setattr(desktop_session, "PROFILE_DIR", tmp_path / "desktop" / "profiles")
 
-    profile_dir = tmp_path / "desktop" / "profiles" / libreoffice_desktop.SYSTEM_SESSION_ID
+    profile_dir = tmp_path / "desktop" / "profiles" / desktop_session.SYSTEM_SESSION_ID
     profile_dir.mkdir(parents=True)
     desktop_path = tmp_path / "workdir"
     desktop_path.mkdir()
-    session = libreoffice_desktop.DesktopSession(
-        session_id=libreoffice_desktop.SYSTEM_SESSION_ID,
-        file_id=libreoffice_desktop.SYSTEM_FILE_ID,
+    session = desktop_session.DesktopSession(
+        session_id=desktop_session.SYSTEM_SESSION_ID,
+        file_id=desktop_session.SYSTEM_FILE_ID,
         extension="desktop",
         path=str(desktop_path),
-        title=libreoffice_desktop.SYSTEM_TITLE,
-        display=libreoffice_desktop.DISPLAY_BASE,
-        xpra_port=libreoffice_desktop.XPRA_PORT_BASE,
-        token=libreoffice_desktop.SYSTEM_SESSION_ID,
+        title=desktop_session.SYSTEM_TITLE,
+        display=desktop_session.DISPLAY_BASE,
+        xpra_port=desktop_session.XPRA_PORT_BASE,
+        token=desktop_session.SYSTEM_SESSION_ID,
         url="/desktop/session/agent-zero-desktop/index.html",
         profile_dir=profile_dir,
         processes={"xpra": FakeProcess()},
     )
-    manager = libreoffice_desktop.LibreOfficeDesktopManager()
+    manager = desktop_session.DesktopSessionManager()
     manager._sessions[session.session_id] = session
     manager._write_manifest(session)
-    libreoffice_desktop._write_url_bridge_script(session)
-    shutdown_request = libreoffice_desktop._shutdown_request_path(session)
+    desktop_session._write_url_bridge_script(session)
+    shutdown_request = desktop_session._shutdown_request_path(session)
     shutdown_request.write_text('{"source": "tray", "created_at": 123.0}\n', encoding="utf-8")
     save_calls = []
     monkeypatch.setattr(
@@ -940,54 +999,175 @@ def test_libreoffice_desktop_sync_consumes_shutdown_marker(tmp_path, monkeypatch
     assert result["intentional_shutdown"] is True
     assert result["source"] == "tray"
     assert result["closed"] == 1
-    assert save_calls == [(libreoffice_desktop.SYSTEM_SESSION_ID, "")]
+    assert save_calls == [(desktop_session.SYSTEM_SESSION_ID, "")]
     assert not shutdown_request.exists()
-    assert not (libreoffice_desktop.SESSION_DIR / f"{session.session_id}.json").exists()
+    assert not (desktop_session.SESSION_DIR / f"{session.session_id}.json").exists()
     assert manager.get(session.session_id) is None
 
 
-def test_libreoffice_desktop_cleanup_preserves_live_owner_manifest(tmp_path, monkeypatch):
+def test_desktop_session_cleanup_preserves_live_owner_manifest(tmp_path, monkeypatch):
     session_dir = tmp_path / "sessions"
+    legacy_session_dir = tmp_path / "legacy-sessions"
     session_dir.mkdir()
+    legacy_session_dir.mkdir()
     manifest = session_dir / "live.json"
     manifest.write_text(
         json.dumps({"owner_pid": os.getpid(), "pids": {"xpra": 987654}}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(libreoffice_desktop, "SESSION_DIR", session_dir)
+    legacy_manifest = legacy_session_dir / "stale.json"
+    legacy_manifest.write_text(
+        json.dumps({"owner_pid": 987650, "pids": {"xpra": 987651, "xfce": 987652}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(desktop_session, "SESSION_DIR", session_dir)
+    monkeypatch.setattr(desktop_session, "LEGACY_SESSION_DIRS", (legacy_session_dir,))
+    killed = []
+
+    def fake_kill_pid(pid):
+        killed.append(pid)
+        return True
+
     monkeypatch.setattr(
-        libreoffice_desktop,
+        desktop_session,
         "_kill_pid",
-        lambda _pid: pytest.fail("cleanup should not kill a desktop owned by a live UI process"),
+        fake_kill_pid,
     )
 
-    result = libreoffice_desktop.cleanup_stale_runtime_state()
+    result = desktop_session.cleanup_stale_runtime_state()
 
-    assert result["killed"] == []
+    assert result["killed"] == [987651, 987652]
+    assert killed == [987651, 987652]
     assert manifest.exists()
+    assert not legacy_manifest.exists()
 
 
-def test_libreoffice_desktop_removes_stale_lock_file(tmp_path):
+def test_desktop_session_removes_stale_lock_file(tmp_path):
     doc_path = tmp_path / "Deck.pptx"
     doc_path.write_text("pptx", encoding="utf-8")
     lock_path = tmp_path / ".~lock.Deck.pptx#"
     lock_path.write_text("stale", encoding="utf-8")
-    session = libreoffice_desktop.DesktopSession(
+    session = desktop_session.DesktopSession(
         session_id="session",
         file_id="file",
         extension="pptx",
         path=str(doc_path),
         title=doc_path.name,
-        display=libreoffice_desktop.DISPLAY_BASE,
-        xpra_port=libreoffice_desktop.XPRA_PORT_BASE,
+        display=desktop_session.DISPLAY_BASE,
+        xpra_port=desktop_session.XPRA_PORT_BASE,
         token="token",
         url="/desktop/session/token/index.html",
         profile_dir=tmp_path / "profile",
     )
 
-    libreoffice_desktop.LibreOfficeDesktopManager()._remove_stale_lock_file(session)
+    desktop_session.DesktopSessionManager()._remove_stale_lock_file(session)
 
     assert not lock_path.exists()
+
+
+def _isolate_office_cleanup_hook(monkeypatch, tmp_path):
+    monkeypatch.setattr(hooks, "RETIRED_WEB_APT_SOURCE_FILE", tmp_path / "missing.sources")
+    monkeypatch.setattr(hooks, "RETIRED_WEB_APT_KEYRING_FILE", tmp_path / "missing.gpg")
+    monkeypatch.setattr(hooks, "RETIRED_WEB_SUPERVISOR_FILE", tmp_path / "missing.conf")
+    monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [])
+    monkeypatch.setattr(hooks, "CLEANUP_MARKER", tmp_path / "state" / "cleanup.done")
+    monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
+    monkeypatch.setattr(hooks, "_kill_old_processes", lambda errors: None)
+    monkeypatch.setattr(hooks, "_ensure_runtime_dependencies", lambda installed, errors: None)
+    monkeypatch.setattr(hooks, "_purge_packages", lambda removed, errors, **kwargs: None)
+    monkeypatch.setattr(hooks.shutil, "which", lambda name: "")
+
+
+def test_cleanup_hook_migrates_legacy_document_state_without_removing_source(tmp_path, monkeypatch):
+    _isolate_office_cleanup_hook(monkeypatch, tmp_path)
+    legacy_documents = tmp_path / "usr" / "plugins" / "_office" / "documents"
+    document_state = tmp_path / "usr" / "_office" / "documents"
+    legacy_documents.mkdir(parents=True)
+    (legacy_documents / "documents.sqlite3").write_text("legacy-db\n", encoding="utf-8")
+    (legacy_documents / "backups").mkdir()
+    (legacy_documents / "backups" / "draft.md").write_text("backup\n", encoding="utf-8")
+
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", document_state)
+    monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [legacy_documents])
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
+
+    result = hooks.cleanup_stale_runtime_state(force=True)
+
+    assert result["ok"] is True
+    assert result["migrated"] == [f"{legacy_documents} -> {document_state}"]
+    assert (legacy_documents / "documents.sqlite3").exists()
+    assert (document_state / "documents.sqlite3").read_text(encoding="utf-8") == "legacy-db\n"
+    assert (document_state / "backups" / "draft.md").read_text(encoding="utf-8") == "backup\n"
+
+
+def test_cleanup_hook_prefers_existing_new_document_state_without_merge(tmp_path, monkeypatch):
+    _isolate_office_cleanup_hook(monkeypatch, tmp_path)
+    legacy_documents = tmp_path / "legacy-documents"
+    document_state = tmp_path / "usr" / "_office" / "documents"
+    legacy_documents.mkdir(parents=True)
+    document_state.mkdir(parents=True)
+    (legacy_documents / "documents.sqlite3").write_text("legacy-db\n", encoding="utf-8")
+    (document_state / "documents.sqlite3").write_text("new-db\n", encoding="utf-8")
+
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", document_state)
+    monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [legacy_documents])
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
+
+    result = hooks.cleanup_stale_runtime_state(force=True)
+
+    assert result["ok"] is True
+    assert result["migrated"] == []
+    assert result["warnings"] == [
+        f"Legacy Office document state left in place because {document_state} already exists: {legacy_documents}"
+    ]
+    assert (legacy_documents / "documents.sqlite3").read_text(encoding="utf-8") == "legacy-db\n"
+    assert (document_state / "documents.sqlite3").read_text(encoding="utf-8") == "new-db\n"
+
+
+def test_office_hook_desktop_compat_forwards_runtime_result(monkeypatch):
+    monkeypatch.setattr(
+        desktop_hooks,
+        "cleanup_stale_runtime_state",
+        lambda: {
+            "installed": ["xpra-server"],
+            "removed": ["firefox-esr"],
+            "warnings": ["desktop warning"],
+            "errors": ["desktop error"],
+        },
+    )
+    installed = []
+    removed = []
+    warnings = []
+    errors = []
+
+    hooks._ensure_desktop_runtime_compat(installed, removed, warnings, errors)
+
+    assert installed == ["xpra-server"]
+    assert removed == ["firefox-esr"]
+    assert warnings == ["desktop warning"]
+    assert errors == ["desktop error"]
+
+
+def test_cleanup_hook_delegates_desktop_runtime_for_legacy_self_update(tmp_path, monkeypatch):
+    _isolate_office_cleanup_hook(monkeypatch, tmp_path)
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
+    monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
+    calls = []
+
+    def fake_desktop_compat(installed, removed, warnings, errors):
+        calls.append("desktop")
+        installed.append("xpra-server")
+        removed.append("firefox-esr")
+        warnings.append("desktop runtime prepared through office compatibility hook")
+
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", fake_desktop_compat)
+
+    result = hooks.cleanup_stale_runtime_state(force=True)
+
+    assert calls == ["desktop"]
+    assert result["installed"] == ["xpra-server"]
+    assert result["removed"] == ["firefox-esr"]
+    assert result["warnings"] == ["desktop runtime prepared through office compatibility hook"]
 
 
 def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeypatch):
@@ -1003,17 +1183,20 @@ def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeyp
     (runtime_dir / "nested").mkdir(parents=True, exist_ok=True)
     (runtime_dir / "nested" / "state.txt").write_text("old\n", encoding="utf-8")
 
-    monkeypatch.setattr(hooks, "APT_SOURCE_FILE", source)
-    monkeypatch.setattr(hooks, "APT_KEYRING_FILE", keyring)
-    monkeypatch.setattr(hooks, "SUPERVISOR_FILE", supervisor)
-    monkeypatch.setattr(hooks, "RUNTIME_DIRS", [runtime_dir])
+    monkeypatch.setattr(hooks, "RETIRED_WEB_APT_SOURCE_FILE", source)
+    monkeypatch.setattr(hooks, "RETIRED_WEB_APT_KEYRING_FILE", keyring)
+    monkeypatch.setattr(hooks, "RETIRED_WEB_SUPERVISOR_FILE", supervisor)
+    monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [runtime_dir])
     monkeypatch.setattr(hooks, "CLEANUP_MARKER", marker)
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
+    monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
     monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
     monkeypatch.setattr(hooks, "_kill_old_processes", lambda errors: None)
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
 
     def fake_ensure(installed, errors):
         assert not source.exists()
-        installed.append("xpra")
+        installed.append("libreoffice-core")
 
     def fake_purge(removed, errors, **kwargs):
         return None
@@ -1026,7 +1209,7 @@ def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeyp
     skipped = hooks.cleanup_stale_runtime_state()
 
     assert first["ok"] is True
-    assert first["installed"] == ["xpra"]
+    assert first["installed"] == ["libreoffice-core"]
     assert second["ok"] is True
     assert skipped["skipped"] is True
     assert not source.exists()
@@ -1037,12 +1220,8 @@ def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeyp
 
 
 def test_office_startup_defers_persistent_desktop_runtime(monkeypatch):
-    calls = []
     cleanup_calls = []
     started_threads = []
-    routes_module = types.ModuleType("plugins._office.helpers.libreoffice_desktop_routes")
-    routes_module.install_route_hooks = lambda: calls.append("routes")
-    monkeypatch.setitem(sys.modules, "plugins._office.helpers.libreoffice_desktop_routes", routes_module)
     monkeypatch.delitem(
         sys.modules,
         "plugins._office.extensions.python.startup_migration._20_office_routes",
@@ -1073,12 +1252,11 @@ def test_office_startup_defers_persistent_desktop_runtime(monkeypatch):
 
     office_startup.OfficeStartupCleanup(agent=None).execute()
 
-    assert calls == ["routes"]
     assert cleanup_calls == []
     assert len(started_threads) == 1
-    assert started_threads[0].name == "a0-office-runtime-preparation"
+    assert started_threads[0].name == "a0-office-document-runtime-preparation"
     assert started_threads[0].daemon is True
-    assert not hasattr(office_startup, "libreoffice_desktop")
+    assert not hasattr(office_startup, "desktop_session")
 
     started_threads[0].target()
     assert cleanup_calls == ["cleanup"]
@@ -1089,14 +1267,17 @@ def test_cleanup_hook_reruns_when_stale_packages_exist_after_old_marker(tmp_path
     marker.parent.mkdir(parents=True)
     marker.write_text("old\n", encoding="utf-8")
 
-    monkeypatch.setattr(hooks, "APT_SOURCE_FILE", tmp_path / "missing.sources")
-    monkeypatch.setattr(hooks, "APT_KEYRING_FILE", tmp_path / "missing.gpg")
-    monkeypatch.setattr(hooks, "SUPERVISOR_FILE", tmp_path / "missing.conf")
-    monkeypatch.setattr(hooks, "RUNTIME_DIRS", [])
+    monkeypatch.setattr(hooks, "RETIRED_WEB_APT_SOURCE_FILE", tmp_path / "missing.sources")
+    monkeypatch.setattr(hooks, "RETIRED_WEB_APT_KEYRING_FILE", tmp_path / "missing.gpg")
+    monkeypatch.setattr(hooks, "RETIRED_WEB_SUPERVISOR_FILE", tmp_path / "missing.conf")
+    monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [])
     monkeypatch.setattr(hooks, "CLEANUP_MARKER", marker)
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
+    monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
     monkeypatch.setattr(hooks, "_installed_packages", lambda packages: ["coolwsd"])
     monkeypatch.setattr(hooks, "_ensure_runtime_dependencies", lambda installed, errors: None)
     monkeypatch.setattr(hooks, "_kill_old_processes", lambda errors: None)
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
 
     def fake_purge(removed, errors, **kwargs):
         removed.extend(kwargs["installed_packages"])
@@ -1115,19 +1296,21 @@ def test_cleanup_hook_removes_retired_supervisor_program_after_marker(tmp_path, 
     marker.write_text("ok\n", encoding="utf-8")
     calls = []
 
-    monkeypatch.setattr(hooks, "APT_SOURCE_FILE", tmp_path / "missing.sources")
-    monkeypatch.setattr(hooks, "APT_KEYRING_FILE", tmp_path / "missing.gpg")
-    monkeypatch.setattr(hooks, "SUPERVISOR_FILE", tmp_path / "missing.conf")
-    monkeypatch.setattr(hooks, "RUNTIME_DIRS", [])
+    monkeypatch.setattr(hooks, "RETIRED_WEB_APT_SOURCE_FILE", tmp_path / "missing.sources")
+    monkeypatch.setattr(hooks, "RETIRED_WEB_APT_KEYRING_FILE", tmp_path / "missing.gpg")
+    monkeypatch.setattr(hooks, "RETIRED_WEB_SUPERVISOR_FILE", tmp_path / "missing.conf")
+    monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [])
     monkeypatch.setattr(hooks, "CLEANUP_MARKER", marker)
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
+    monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
     monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
     monkeypatch.setattr(hooks, "_ensure_runtime_dependencies", lambda installed, errors: None)
-    monkeypatch.setattr(hooks, "_cleanup_desktop_sessions", lambda errors: None)
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
     monkeypatch.setattr(hooks.shutil, "which", lambda name: "/usr/bin/supervisorctl" if name == "supervisorctl" else "")
 
     def fake_supervisorctl(*args):
         calls.append(args)
-        if args == ("status", hooks.SUPERVISOR_PROGRAM):
+        if args == ("status", hooks.RETIRED_WEB_SUPERVISOR_PROGRAM):
             return types.SimpleNamespace(
                 returncode=0,
                 stdout="a0_office_collabora BACKOFF can't find command\n",
@@ -1143,22 +1326,22 @@ def test_cleanup_hook_removes_retired_supervisor_program_after_marker(tmp_path, 
     assert result["skipped"] is True
     assert result["errors"] == []
     assert calls == [
-        ("status", hooks.SUPERVISOR_PROGRAM),
-        ("stop", hooks.SUPERVISOR_PROGRAM),
-        ("remove", hooks.SUPERVISOR_PROGRAM),
+        ("status", hooks.RETIRED_WEB_SUPERVISOR_PROGRAM),
+        ("stop", hooks.RETIRED_WEB_SUPERVISOR_PROGRAM),
+        ("remove", hooks.RETIRED_WEB_SUPERVISOR_PROGRAM),
         ("reread",),
         ("update",),
     ]
 
 
-def test_cleanup_hook_installs_missing_libreoffice_desktop_dependencies(monkeypatch):
+def test_cleanup_hook_installs_missing_desktop_session_dependencies(monkeypatch):
     calls = []
     installed_state = {"xpra": False}
 
-    monkeypatch.setattr(hooks.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(hooks.shutil, "which", lambda name: f"/usr/bin/{name}" if name in {"apt-get", "dpkg-query"} else "")
-    monkeypatch.setattr(hooks, "RUNTIME_PACKAGES", ("xpra",))
-    monkeypatch.setattr(hooks, "_package_installed", lambda package: installed_state.get(package, False))
+    monkeypatch.setattr(desktop_hooks.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(desktop_hooks.shutil, "which", lambda name: f"/usr/bin/{name}" if name in {"apt-get", "dpkg-query"} else "")
+    monkeypatch.setattr(desktop_hooks, "RUNTIME_PACKAGES", ("xpra",))
+    monkeypatch.setattr(desktop_hooks, "_package_installed", lambda package: installed_state.get(package, False))
 
     def fake_run(command, **kwargs):
         calls.append(command)
@@ -1166,11 +1349,11 @@ def test_cleanup_hook_installs_missing_libreoffice_desktop_dependencies(monkeypa
             installed_state["xpra"] = True
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    monkeypatch.setattr(desktop_hooks.subprocess, "run", fake_run)
     installed = []
     errors = []
 
-    hooks._ensure_runtime_dependencies(installed, errors)
+    desktop_hooks._ensure_runtime_dependencies(installed, errors)
 
     assert installed == ["xpra"]
     assert errors == []
@@ -1184,19 +1367,19 @@ def test_cleanup_hook_enables_official_xpra_repo_when_kali_lacks_candidate(tmp_p
     keyring = tmp_path / "keyrings" / "xpra.asc"
     source = tmp_path / "sources.list.d" / "xpra.sources"
 
-    monkeypatch.setattr(hooks.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(desktop_hooks.os, "geteuid", lambda: 0)
     monkeypatch.setattr(
-        hooks.shutil,
+        desktop_hooks.shutil,
         "which",
         lambda name: f"/usr/bin/{name}" if name in {"apt-get", "dpkg-query", "apt-cache"} else "",
     )
-    monkeypatch.setattr(hooks, "RUNTIME_PACKAGES", ("xpra",))
-    monkeypatch.setattr(hooks, "XPRA_KEYRING_FILE", keyring)
-    monkeypatch.setattr(hooks, "XPRA_SOURCE_FILE", source)
-    monkeypatch.setattr(hooks, "_download", lambda url: b"xpra-key")
-    monkeypatch.setattr(hooks, "_read_os_release", lambda: {"ID": "kali", "VERSION_CODENAME": "kali-rolling"})
-    monkeypatch.setattr(hooks, "_dpkg_architecture", lambda: "amd64")
-    monkeypatch.setattr(hooks, "_package_installed", lambda package: installed_state.get(package, False))
+    monkeypatch.setattr(desktop_hooks, "RUNTIME_PACKAGES", ("xpra",))
+    monkeypatch.setattr(desktop_hooks, "XPRA_KEYRING_FILE", keyring)
+    monkeypatch.setattr(desktop_hooks, "XPRA_SOURCE_FILE", source)
+    monkeypatch.setattr(desktop_hooks, "_download", lambda url: b"xpra-key")
+    monkeypatch.setattr(desktop_hooks, "_read_os_release", lambda: {"ID": "kali", "VERSION_CODENAME": "kali-rolling"})
+    monkeypatch.setattr(desktop_hooks, "_dpkg_architecture", lambda: "amd64")
+    monkeypatch.setattr(desktop_hooks, "_package_installed", lambda package: installed_state.get(package, False))
 
     def fake_run(command, **kwargs):
         calls.append(command)
@@ -1206,11 +1389,11 @@ def test_cleanup_hook_enables_official_xpra_repo_when_kali_lacks_candidate(tmp_p
             installed_state["xpra"] = True
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    monkeypatch.setattr(desktop_hooks.subprocess, "run", fake_run)
     installed = []
     errors = []
 
-    hooks._ensure_runtime_dependencies(installed, errors)
+    desktop_hooks._ensure_runtime_dependencies(installed, errors)
 
     assert errors == []
     assert installed == ["xpra"]
@@ -1227,19 +1410,19 @@ def test_cleanup_hook_uses_trixie_xpra_components_for_kali_arm64(tmp_path, monke
     keyring = tmp_path / "keyrings" / "xpra.asc"
     source = tmp_path / "sources.list.d" / "xpra.sources"
 
-    monkeypatch.setattr(hooks.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(desktop_hooks.os, "geteuid", lambda: 0)
     monkeypatch.setattr(
-        hooks.shutil,
+        desktop_hooks.shutil,
         "which",
         lambda name: f"/usr/bin/{name}" if name in {"apt-get", "dpkg-query", "apt-cache"} else "",
     )
-    monkeypatch.setattr(hooks, "RUNTIME_PACKAGES", ("xpra-server", "xpra-x11", "xpra-html5"))
-    monkeypatch.setattr(hooks, "XPRA_KEYRING_FILE", keyring)
-    monkeypatch.setattr(hooks, "XPRA_SOURCE_FILE", source)
-    monkeypatch.setattr(hooks, "_download", lambda url: b"xpra-key")
-    monkeypatch.setattr(hooks, "_read_os_release", lambda: {"ID": "kali", "VERSION_CODENAME": "kali-rolling"})
-    monkeypatch.setattr(hooks, "_dpkg_architecture", lambda: "arm64")
-    monkeypatch.setattr(hooks, "_package_installed", lambda package: installed_state.get(package, False))
+    monkeypatch.setattr(desktop_hooks, "RUNTIME_PACKAGES", ("xpra-server", "xpra-x11", "xpra-html5"))
+    monkeypatch.setattr(desktop_hooks, "XPRA_KEYRING_FILE", keyring)
+    monkeypatch.setattr(desktop_hooks, "XPRA_SOURCE_FILE", source)
+    monkeypatch.setattr(desktop_hooks, "_download", lambda url: b"xpra-key")
+    monkeypatch.setattr(desktop_hooks, "_read_os_release", lambda: {"ID": "kali", "VERSION_CODENAME": "kali-rolling"})
+    monkeypatch.setattr(desktop_hooks, "_dpkg_architecture", lambda: "arm64")
+    monkeypatch.setattr(desktop_hooks, "_package_installed", lambda package: installed_state.get(package, False))
 
     def fake_run(command, **kwargs):
         calls.append(command)
@@ -1250,11 +1433,11 @@ def test_cleanup_hook_uses_trixie_xpra_components_for_kali_arm64(tmp_path, monke
                 installed_state[package] = True
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    monkeypatch.setattr(desktop_hooks.subprocess, "run", fake_run)
     installed = []
     errors = []
 
-    hooks._ensure_runtime_dependencies(installed, errors)
+    desktop_hooks._ensure_runtime_dependencies(installed, errors)
 
     assert errors == []
     assert installed == ["xpra-server", "xpra-x11", "xpra-html5"]
@@ -1281,18 +1464,18 @@ def test_cleanup_hook_skips_optional_xpra_client_codec_conflict(monkeypatch):
         "      but none of the choices are installable: [no choices]"
     )
 
-    monkeypatch.setattr(hooks.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(desktop_hooks.os, "geteuid", lambda: 0)
     monkeypatch.setattr(
-        hooks.shutil,
+        desktop_hooks.shutil,
         "which",
         lambda name: f"/usr/bin/{name}" if name in {"apt-get", "dpkg-query", "apt-cache"} else "",
     )
     monkeypatch.setattr(
-        hooks,
+        desktop_hooks,
         "RUNTIME_PACKAGES",
         ("xpra-server", "xpra-client", "xpra-client-gtk3", "xpra-x11", "xpra-html5"),
     )
-    monkeypatch.setattr(hooks, "_package_installed", lambda package: installed_state.get(package, False))
+    monkeypatch.setattr(desktop_hooks, "_package_installed", lambda package: installed_state.get(package, False))
 
     def fake_run(command, **kwargs):
         calls.append(command)
@@ -1302,11 +1485,11 @@ def test_cleanup_hook_skips_optional_xpra_client_codec_conflict(monkeypatch):
             return types.SimpleNamespace(returncode=100, stdout="", stderr=codec_error)
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    monkeypatch.setattr(desktop_hooks.subprocess, "run", fake_run)
     installed = []
     errors = []
 
-    hooks._ensure_runtime_dependencies(installed, errors)
+    desktop_hooks._ensure_runtime_dependencies(installed, errors)
 
     assert installed == []
     assert errors == []
@@ -1321,14 +1504,14 @@ def test_cleanup_hook_reports_required_xpra_codec_conflict(monkeypatch):
         "      but none of the choices are installable: [no choices]"
     )
 
-    monkeypatch.setattr(hooks.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(desktop_hooks.os, "geteuid", lambda: 0)
     monkeypatch.setattr(
-        hooks.shutil,
+        desktop_hooks.shutil,
         "which",
         lambda name: f"/usr/bin/{name}" if name in {"apt-get", "dpkg-query", "apt-cache"} else "",
     )
-    monkeypatch.setattr(hooks, "RUNTIME_PACKAGES", ("xpra-server",))
-    monkeypatch.setattr(hooks, "_package_installed", lambda package: False)
+    monkeypatch.setattr(desktop_hooks, "RUNTIME_PACKAGES", ("xpra-server",))
+    monkeypatch.setattr(desktop_hooks, "_package_installed", lambda package: False)
 
     def fake_run(command, **kwargs):
         if command[:2] == ["apt-cache", "policy"]:
@@ -1337,11 +1520,11 @@ def test_cleanup_hook_reports_required_xpra_codec_conflict(monkeypatch):
             return types.SimpleNamespace(returncode=100, stdout="", stderr=codec_error)
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    monkeypatch.setattr(desktop_hooks.subprocess, "run", fake_run)
     installed = []
     errors = []
 
-    hooks._ensure_runtime_dependencies(installed, errors)
+    desktop_hooks._ensure_runtime_dependencies(installed, errors)
 
     assert installed == []
     assert errors == [codec_error]
