@@ -250,9 +250,10 @@ export async function openModal(modalPath, beforeClose = null) {
         .then(async (doc) => {
           // Set the title from the document
           modal.title.innerHTML = doc.title || modalPath;
-          if (doc.html && doc.html.classList) {
+          const htmlElement = doc.documentElement;
+          if (htmlElement && htmlElement.classList) {
             const inner = modal.element.querySelector(".modal-inner");
-            if (inner) inner.classList.add(...doc.html.classList);
+            if (inner) inner.classList.add(...htmlElement.classList);
           }
           if (doc.body && doc.body.classList) {
             modal.body.classList.add(...doc.body.classList);

@@ -6,6 +6,8 @@ import { store as notificationStore } from "/components/notifications/notificati
 const VIEW_MODE_STORAGE_KEY = "settingsActiveTab";
 const DEFAULT_TAB = "agent";
 const UPDATE_STATUS_REFRESH_COOLDOWN_MS = 60 * 1000;
+// Match the modal header/padding breathing room before promoting a section link.
+const SECTION_ACTIVATION_OFFSET = 56;
 
 const TAB_ITEMS = Object.freeze([
   {
@@ -93,7 +95,10 @@ const model = {
   settings: null,
   additional: null,
   workdirFileStructureTestOutput: "",
-  navMode: "categories",
+  _activeSection: null,
+  _paneScrollHandler: null,
+  _paneScrollPane: null,
+  _scrollSyncFrame: null,
   _updateStatusRefreshedAt: 0,
   
   // Tab state
@@ -103,8 +108,12 @@ const model = {
   },
   set activeTab(value) {
     const previous = this._activeTab;
-    this._activeTab = value;
-    this.applyActiveTab(previous, value);
+    this._activeTab = this.normalizeTabId(value);
+    this.applyActiveTab(previous, this._activeTab);
+  },
+
+  get activeSection() {
+    return this._activeSection || this.getFirstSectionId(this.activeTab);
   },
 
   // Lifecycle
@@ -112,8 +121,9 @@ const model = {
     // Restore persisted tab
     try {
       const saved = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
-      if (saved) this._activeTab = saved;
+      if (saved) this._activeTab = this.normalizeTabId(saved);
     } catch {}
+    this._activeSection = this.getFirstSectionId(this._activeTab);
   },
 
   async onOpen() {
@@ -138,28 +148,49 @@ const model = {
 
     this.refreshUpdateStatus();
 
+    const hashSectionId = this.getHashSectionId();
+    const openedHashSection = hashSectionId
+      ? this.activateSection(hashSectionId, { persist: false })
+      : false;
+
     // Trigger tab activation for current tab
+    this._activeTab = this.normalizeTabId(this._activeTab);
     this.applyActiveTab(null, this._activeTab);
+    this.bindPaneScroll();
+
+    if (openedHashSection) {
+      this.scrollToSection(hashSectionId);
+    }
   },
 
   cleanup() {
+    this.unbindPaneScroll();
     this.settings = null;
     this.additional = null;
     this.error = null;
     this.isLoading = false;
-    this.navMode = "categories";
   },
 
   // Tab management
   applyActiveTab(previous, current) {
+    if (!this.sectionBelongsToTab(this._activeSection, current)) {
+      this._activeSection = this.getFirstSectionId(current);
+    }
+
     // Persist
     try {
       localStorage.setItem(VIEW_MODE_STORAGE_KEY, current);
     } catch {}
+
+    this.bindPaneScroll();
   },
 
   switchTab(tabName) {
     this.activeTab = tabName;
+  },
+
+  normalizeTabId(tabName) {
+    return TAB_ITEMS.some((item) => item.id === tabName) ? tabName : DEFAULT_TAB;
   },
 
   get navItems() {
@@ -174,26 +205,118 @@ const model = {
     return this.activeTabItem?.sections || [];
   },
 
-  enterTab(tabName) {
-    this.activeTab = tabName;
-    this.navMode = "sections";
-    this.resetPaneScroll();
-    if (tabName === "backup") this.refreshUpdateStatus();
+  getFirstSectionId(tabName = this.activeTab) {
+    const tab = TAB_ITEMS.find((item) => item.id === tabName) || TAB_ITEMS[0];
+    return tab?.sections?.[0]?.id || null;
   },
 
-  backToCategories() {
-    this.navMode = "categories";
+  getTabIdForSection(sectionId) {
+    if (!sectionId) return null;
+    const tab = TAB_ITEMS.find((item) =>
+      item.sections?.some((section) => section.id === sectionId)
+    );
+    return tab?.id || null;
+  },
+
+  sectionBelongsToTab(sectionId, tabName = this.activeTab) {
+    if (!sectionId) return false;
+    return this.getTabIdForSection(sectionId) === tabName;
+  },
+
+  getHashSectionId() {
+    const rawHash = window.location.hash || "";
+    if (!rawHash.startsWith("#section-")) return null;
+    try {
+      return decodeURIComponent(rawHash.slice(1));
+    } catch {
+      return rawHash.slice(1);
+    }
+  },
+
+  activateSection(sectionId, { persist = true } = {}) {
+    const tabId = this.getTabIdForSection(sectionId);
+    if (!tabId) return false;
+
+    const previous = this._activeTab;
+    this._activeTab = tabId;
+    this._activeSection = sectionId;
+    if (persist) {
+      this.applyActiveTab(previous, tabId);
+    }
+    if (tabId === "backup") this.refreshUpdateStatus();
+    return true;
+  },
+
+  enterTab(tabName) {
+    this.activeTab = tabName;
+    this._activeSection = this.getFirstSectionId(this.activeTab);
+    this.resetPaneScroll();
+    if (tabName === "backup") this.refreshUpdateStatus();
   },
 
   resetPaneScroll() {
     requestAnimationFrame(() => {
       const pane = this.getSettingsPane();
-      if (pane) pane.scrollTop = 0;
+      if (pane) {
+        pane.scrollTop = 0;
+        this.updateActiveSectionFromScroll();
+      }
     });
   },
 
   getSettingsPane() {
     return document.querySelector(".modal-inner.settings-modal .settings-pane");
+  },
+
+  bindPaneScroll() {
+    requestAnimationFrame(() => {
+      const pane = this.getSettingsPane();
+      if (!pane || this._paneScrollPane === pane) {
+        if (pane) this.updateActiveSectionFromScroll();
+        return;
+      }
+
+      this.unbindPaneScroll();
+      this._paneScrollPane = pane;
+      this._paneScrollHandler = () => this.updateActiveSectionFromScroll();
+      pane.addEventListener("scroll", this._paneScrollHandler, { passive: true });
+      this.updateActiveSectionFromScroll();
+    });
+  },
+
+  unbindPaneScroll() {
+    if (this._paneScrollPane && this._paneScrollHandler) {
+      this._paneScrollPane.removeEventListener("scroll", this._paneScrollHandler);
+    }
+    if (this._scrollSyncFrame) {
+      cancelAnimationFrame(this._scrollSyncFrame);
+    }
+    this._paneScrollPane = null;
+    this._paneScrollHandler = null;
+    this._scrollSyncFrame = null;
+  },
+
+  updateActiveSectionFromScroll() {
+    if (this._scrollSyncFrame) return;
+    this._scrollSyncFrame = requestAnimationFrame(() => {
+      this._scrollSyncFrame = null;
+      const pane = this.getSettingsPane();
+      if (!pane) return;
+
+      const paneRect = pane.getBoundingClientRect();
+      const activationTop = paneRect.top + SECTION_ACTIVATION_OFFSET;
+      let activeId = this.getFirstSectionId(this.activeTab);
+
+      for (const section of this.sectionItems) {
+        const target = this.getSectionTarget(section.id, pane);
+        if (!target || target.offsetParent === null) continue;
+        if (target.getBoundingClientRect().top <= activationTop) {
+          activeId = section.id;
+        }
+      }
+
+      this._activeSection = activeId;
+    });
   },
 
   get selfUpdate() {
@@ -210,7 +333,9 @@ const model = {
 
   scrollToSection(sectionId, event = null) {
     event?.preventDefault?.();
-    this.navMode = "sections";
+    if (!this.activateSection(sectionId)) {
+      this._activeSection = sectionId;
+    }
 
     const performScroll = () => {
       const pane = this.getSettingsPane();
@@ -231,6 +356,7 @@ const model = {
         behavior: "smooth",
       });
       history.replaceState(null, "", `#${sectionId}`);
+      this.updateActiveSectionFromScroll();
     };
 
     requestAnimationFrame(() => requestAnimationFrame(performScroll));
