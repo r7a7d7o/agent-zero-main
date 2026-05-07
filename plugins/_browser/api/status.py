@@ -12,10 +12,8 @@ class Status(ApiHandler):
     async def process(self, input: dict, request: Request) -> dict:
         browser_config = get_browser_config()
         launch_config = build_browser_launch_config(browser_config)
-        runtime_binary = get_playwright_binary(
-            full_browser=launch_config["requires_full_browser"]
-        )
-        chromium_binary = get_playwright_binary(full_browser=True)
+        runtime_binary = get_playwright_binary()
+        chromium_binary = runtime_binary
         return {
             "plugin": "_browser",
             "playwright": {

@@ -783,9 +783,7 @@ class _BrowserRuntimeCore:
         browser_config = get_browser_config()
         launch_config = build_browser_launch_config(browser_config)
         configure_playwright_env()
-        browser_binary = ensure_playwright_binary(
-            full_browser=launch_config["requires_full_browser"]
-        )
+        browser_binary = ensure_playwright_binary()
 
         self.playwright = await async_playwright().start()
         launch_kwargs: dict[str, Any] = {

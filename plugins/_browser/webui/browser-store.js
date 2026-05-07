@@ -2757,7 +2757,7 @@ const model = {
 
   loadingMessage() {
     if (this.browserInstallExpected) {
-      const cacheDir = this.status?.playwright?.cache_dir || "/a0/usr/plugins/_browser/playwright";
+      const cacheDir = this.status?.playwright?.cache_dir || "/a0/tmp/playwright";
       return `Installing Chromium for the first Browser run. This can take a few minutes; future starts reuse ${cacheDir}.`;
     }
     return "Loading";

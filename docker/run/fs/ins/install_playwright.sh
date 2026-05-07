@@ -7,8 +7,8 @@ set -e
 # install playwright if not installed (should be from requirements.txt)
 uv pip install playwright
 
-# set PW installation path to persistent Browser plugin user storage
-export PLAYWRIGHT_BROWSERS_PATH=/a0/usr/plugins/_browser/playwright
+# set PW installation path to temporary Browser runtime storage
+export PLAYWRIGHT_BROWSERS_PATH=/a0/tmp/playwright
 mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
 
 # install chromium with dependencies

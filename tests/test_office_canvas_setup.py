@@ -199,10 +199,12 @@ def test_plugin_owned_runtime_state_paths_are_declared():
 
     assert 'PLUGIN_NAME = "_office"' in office_documents
     assert 'STATE_DIR = Path(files.get_abs_path("usr", PLUGIN_NAME, "documents"))' in office_documents
-    assert 'PLAYWRIGHT_CACHE_DIR = ("usr", "plugins", "_browser", "playwright")' in browser_playwright
+    assert 'PLAYWRIGHT_CACHE_DIR = ("tmp", "playwright")' in browser_playwright
+    assert '"usr", "plugins", "_browser", "playwright"' in browser_playwright
     assert "Path(files.get_abs_path(*PLAYWRIGHT_CACHE_DIR))" in browser_playwright
+    assert "find_playwright_binary(_primary_cache_dir())" in browser_playwright
     assert "Path(files.get_abs_path(*EXTENSIONS_ROOT_DIR))" in browser_extensions
-    assert "PLAYWRIGHT_BROWSERS_PATH=/a0/usr/plugins/_browser/playwright" in docker_playwright
+    assert "PLAYWRIGHT_BROWSERS_PATH=/a0/tmp/playwright" in docker_playwright
 
 
 def test_document_artifacts_only_open_desktop_from_explicit_document_ui_requests():

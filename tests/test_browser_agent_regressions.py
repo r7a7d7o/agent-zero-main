@@ -257,56 +257,97 @@ def test_browser_launch_config_uses_full_chromium_for_all_sessions(tmp_path):
     assert "--headless=new" not in launch["args"]
 
 
-def test_browser_playwright_cache_uses_persistent_usr_path(monkeypatch, tmp_path):
+def _patch_playwright_cache_root(monkeypatch, tmp_path):
     monkeypatch.delenv("A0_BROWSER_PLAYWRIGHT_CACHE_DIR", raising=False)
     monkeypatch.setattr(
         browser_playwright_module.files,
         "get_abs_path",
         lambda *parts: str(tmp_path.joinpath(*parts)),
     )
-    browser_binary = (
-        tmp_path
-        / "usr"
-        / "plugins"
-        / "_browser"
-        / "playwright"
-        / "chromium-1169"
-        / "chrome-linux"
-        / "chrome"
-    )
+
+
+def _write_playwright_binary(cache_dir: Path) -> Path:
+    browser_binary = cache_dir / "chromium-1169" / "chrome-linux" / "chrome"
     browser_binary.parent.mkdir(parents=True)
     browser_binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    return browser_binary
+
+
+def test_browser_playwright_cache_uses_tmp_path(monkeypatch, tmp_path):
+    _patch_playwright_cache_root(monkeypatch, tmp_path)
+    primary_cache = tmp_path / "tmp" / "playwright"
+    browser_binary = _write_playwright_binary(primary_cache)
 
     assert get_playwright_cache_dir() == str(
-        tmp_path / "usr" / "plugins" / "_browser" / "playwright"
+        tmp_path / "tmp" / "playwright"
     )
+    assert browser_playwright_module.get_playwright_cache_dirs() == [
+        tmp_path / "tmp" / "playwright",
+        tmp_path / "usr" / "plugins" / "_browser" / "playwright",
+        tmp_path / "usr" / "browser" / "playwright",
+    ]
     assert get_playwright_binary() == browser_binary
 
 
-def test_browser_playwright_cache_falls_back_to_existing_legacy_install(monkeypatch, tmp_path):
-    monkeypatch.delenv("A0_BROWSER_PLAYWRIGHT_CACHE_DIR", raising=False)
-    monkeypatch.setattr(
-        browser_playwright_module.files,
-        "get_abs_path",
-        lambda *parts: str(tmp_path.joinpath(*parts)),
+def test_browser_playwright_binary_ignores_retired_usr_cache(monkeypatch, tmp_path):
+    _patch_playwright_cache_root(monkeypatch, tmp_path)
+    _write_playwright_binary(
+        tmp_path / "usr" / "plugins" / "_browser" / "playwright"
     )
-    legacy_binary = (
-        tmp_path
-        / "tmp"
-        / "playwright"
-        / "chromium-1169"
-        / "chrome-linux"
-        / "chrome"
-    )
-    legacy_binary.parent.mkdir(parents=True)
-    legacy_binary.write_text("#!/bin/sh\n", encoding="utf-8")
 
+    assert get_playwright_binary() is None
+
+
+def test_browser_playwright_cache_migrates_valid_retired_usr_cache(monkeypatch, tmp_path):
+    _patch_playwright_cache_root(monkeypatch, tmp_path)
+    retired_cache = tmp_path / "usr" / "plugins" / "_browser" / "playwright"
+    _write_playwright_binary(retired_cache)
+
+    result = browser_hooks_module.cleanup_playwright_cache()
+
+    assert result["errors"] == []
+    assert result["migrated"] == str(retired_cache)
+    assert get_playwright_binary() == (
+        tmp_path / "tmp" / "playwright" / "chromium-1169" / "chrome-linux" / "chrome"
+    )
+    assert not retired_cache.exists()
+
+
+def test_browser_playwright_cache_removes_retired_usr_cache_when_tmp_valid(
+    monkeypatch, tmp_path
+):
+    _patch_playwright_cache_root(monkeypatch, tmp_path)
+    primary_cache = tmp_path / "tmp" / "playwright"
+    retired_cache = tmp_path / "usr" / "plugins" / "_browser" / "playwright"
+    _write_playwright_binary(primary_cache)
+    _write_playwright_binary(retired_cache)
+
+    result = browser_hooks_module.cleanup_playwright_cache()
+
+    assert result["errors"] == []
+    assert result["migrated"] == ""
+    assert str(retired_cache) in result["removed"]
+    assert get_playwright_binary() == (
+        primary_cache / "chromium-1169" / "chrome-linux" / "chrome"
+    )
+    assert not retired_cache.exists()
+
+
+def test_browser_playwright_cache_missing_dirs_do_not_raise(monkeypatch, tmp_path):
+    _patch_playwright_cache_root(monkeypatch, tmp_path)
+
+    result = browser_hooks_module.cleanup_playwright_cache()
+
+    assert result["errors"] == []
+    assert result["migrated"] == ""
+    assert result["removed"] == []
+    assert not (tmp_path / "tmp" / "playwright").exists()
     assert browser_playwright_module.get_playwright_cache_dirs() == [
+        tmp_path / "tmp" / "playwright",
         tmp_path / "usr" / "plugins" / "_browser" / "playwright",
         tmp_path / "usr" / "browser" / "playwright",
-        tmp_path / "tmp" / "playwright",
     ]
-    assert get_playwright_binary() == legacy_binary
+    assert get_playwright_binary() is None
 
 
 def test_browser_extension_storage_uses_plugin_user_path(monkeypatch, tmp_path):
@@ -1308,14 +1349,30 @@ async def test_browser_screencast_passes_wrong_viewport_frames_to_frontend_valid
     await screencast.stop()
 
 
-def test_browser_docker_installs_full_chromium_to_persistent_cache():
+def test_browser_docker_installs_full_chromium_to_tmp_cache():
     script = (
         PROJECT_ROOT / "docker" / "run" / "fs" / "ins" / "install_playwright.sh"
     ).read_text(encoding="utf-8")
 
-    assert "PLAYWRIGHT_BROWSERS_PATH=/a0/usr/plugins/_browser/playwright" in script
+    assert "PLAYWRIGHT_BROWSERS_PATH=/a0/tmp/playwright" in script
     assert "playwright install chromium" in script
     assert "--only-shell" not in script
+
+
+def test_browser_startup_migration_runs_playwright_cache_cleanup():
+    extension = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_browser"
+        / "extensions"
+        / "python"
+        / "startup_migration"
+        / "_20_browser_playwright_cache.py"
+    ).read_text(encoding="utf-8")
+
+    assert "class BrowserPlaywrightCacheMigration(Extension)" in extension
+    assert "hooks.cleanup_playwright_cache()" in extension
+    assert "PrintStyle.warning" in extension
 
 
 def test_browser_runtime_removes_stale_profile_singletons(monkeypatch, tmp_path):

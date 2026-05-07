@@ -9,9 +9,11 @@ FULL_CHROMIUM_PATTERNS = (
     "chromium-*/chrome-win/chrome.exe",
 )
 PLAYWRIGHT_CACHE_ENV = "A0_BROWSER_PLAYWRIGHT_CACHE_DIR"
-PLAYWRIGHT_CACHE_DIR = ("usr", "plugins", "_browser", "playwright")
-PREVIOUS_PLAYWRIGHT_CACHE_DIR = ("usr", "browser", "playwright")
-LEGACY_PLAYWRIGHT_CACHE_DIR = ("tmp", "playwright")
+PLAYWRIGHT_CACHE_DIR = ("tmp", "playwright")
+RETIRED_PLAYWRIGHT_CACHE_DIRS = (
+    ("usr", "plugins", "_browser", "playwright"),
+    ("usr", "browser", "playwright"),
+)
 
 
 def _primary_cache_dir() -> Path:
@@ -27,11 +29,7 @@ def get_playwright_cache_dir() -> str:
 
 def get_playwright_cache_dirs() -> list[Path]:
     primary = _primary_cache_dir()
-    candidates = [
-        primary,
-        Path(files.get_abs_path(*PREVIOUS_PLAYWRIGHT_CACHE_DIR)),
-        Path(files.get_abs_path(*LEGACY_PLAYWRIGHT_CACHE_DIR)),
-    ]
+    candidates = [primary, *get_retired_playwright_cache_dirs()]
     seen: set[str] = set()
     unique: list[Path] = []
     for candidate in candidates:
@@ -43,6 +41,10 @@ def get_playwright_cache_dirs() -> list[Path]:
     return unique
 
 
+def get_retired_playwright_cache_dirs() -> list[Path]:
+    return [Path(files.get_abs_path(*parts)) for parts in RETIRED_PLAYWRIGHT_CACHE_DIRS]
+
+
 def configure_playwright_env() -> str:
     cache_dir = get_playwright_cache_dir()
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
@@ -50,17 +52,20 @@ def configure_playwright_env() -> str:
     return cache_dir
 
 
-def get_playwright_binary(*, full_browser: bool = False) -> Path | None:
-    for cache_dir in get_playwright_cache_dirs():
-        for pattern in FULL_CHROMIUM_PATTERNS:
-            binary = next(cache_dir.glob(pattern), None)
-            if binary and binary.exists():
-                return binary
+def find_playwright_binary(cache_dir: Path) -> Path | None:
+    for pattern in FULL_CHROMIUM_PATTERNS:
+        binary = next(cache_dir.glob(pattern), None)
+        if binary and binary.exists():
+            return binary
     return None
 
 
-def ensure_playwright_binary(*, full_browser: bool = False) -> Path:
-    binary = get_playwright_binary(full_browser=full_browser)
+def get_playwright_binary() -> Path | None:
+    return find_playwright_binary(_primary_cache_dir())
+
+
+def ensure_playwright_binary() -> Path:
+    binary = get_playwright_binary()
     if binary:
         return binary
 
@@ -73,7 +78,7 @@ def ensure_playwright_binary(*, full_browser: bool = False) -> Path:
         env=env,
     )
 
-    binary = get_playwright_binary(full_browser=full_browser)
+    binary = get_playwright_binary()
     if not binary:
         raise RuntimeError("Playwright Chromium binary not found after installation")
     return binary
