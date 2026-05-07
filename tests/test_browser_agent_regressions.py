@@ -656,7 +656,7 @@ def test_browser_canvas_restarts_stream_after_page_navigation():
 
 
 def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
-    button_html = (
+    browser_button_path = (
         PROJECT_ROOT
         / "plugins"
         / "_browser"
@@ -664,7 +664,7 @@ def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
         / "webui"
         / "chat-input-bottom-actions-start"
         / "browser-button.html"
-    ).read_text(encoding="utf-8")
+    )
     tool_handler = (
         PROJECT_ROOT
         / "plugins"
@@ -701,10 +701,7 @@ def test_browser_entry_points_prefer_canvas_and_modal_dock_handoff():
     modals_js = (PROJECT_ROOT / "webui" / "js" / "modals.js").read_text(encoding="utf-8")
     surfaces_js = (PROJECT_ROOT / "webui" / "js" / "surfaces.js").read_text(encoding="utf-8")
 
-    assert "Open Browser" in button_html
-    assert "import('/js/surfaces.js')" in button_html
-    assert "open('browser')" in button_html
-    assert "$store.rightCanvas.toggle('browser')" not in button_html
+    assert not browser_button_path.exists()
     assert 'defaultOpenMode: "modal"' not in register_js
     assert "beginDockHandoff()" in register_js
     assert "beginSurfaceHandoff" in register_js
