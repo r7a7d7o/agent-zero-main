@@ -410,7 +410,6 @@ const model = {
       color: "",
       git_url: "",
       git_token: "",
-      llm: await this._createProjectLlmData(""),
     };
   },
 

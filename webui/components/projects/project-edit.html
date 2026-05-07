@@ -32,14 +32,19 @@
                     </div>
                     <x-component path="projects/project-edit-basic-data.html">
                     </x-component>
-                </div>
 
-                <div class="project-detail">
-                    <div class="project-detail-header">
-                        <span class="projects-project-card-title">LLM</span>
+                    <div class="settings-advanced-section project-advanced-section" x-data="{ advOpen: false }">
+                        <button type="button" class="settings-advanced-toggle" @click="advOpen = !advOpen">
+                            <span class="material-symbols-outlined settings-advanced-toggle-icon"
+                                :style="advOpen ? 'transform:rotate(90deg)' : ''">chevron_right</span>
+                            <span>Advanced Settings</span>
+                        </button>
+
+                        <div class="settings-advanced-body" x-show="advOpen" x-transition.opacity style="display: none;">
+                            <x-component path="projects/project-edit-llm.html">
+                            </x-component>
+                        </div>
                     </div>
-                    <x-component path="projects/project-edit-llm.html">
-                    </x-component>
                 </div>
 
                 <div class="project-detail">
@@ -103,6 +108,12 @@
 
     .project-detail-header {
         margin-bottom: 1em;
+    }
+
+    .project-advanced-section {
+        border-top: 1px solid var(--color-border);
+        margin-top: 1em;
+        padding-top: 0.5em;
     }
 </style>
 
