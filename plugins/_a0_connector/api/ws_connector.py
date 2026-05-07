@@ -15,10 +15,13 @@ from plugins._a0_connector.helpers.ws_runtime import (
     clear_sid_computer_use_metadata,
     clear_sid_remote_exec_metadata,
     clear_sid_remote_file_metadata,
+    computer_use_metadata_for_sid,
     fail_pending_computer_use_ops_for_sid,
-    fail_pending_file_ops_for_sid,
     fail_pending_exec_ops_for_sid,
+    fail_pending_file_ops_for_sid,
     register_sid,
+    remote_exec_metadata_for_sid,
+    remote_file_metadata_for_sid,
     resolve_pending_computer_use_op,
     resolve_pending_exec_op,
     resolve_pending_file_op,
@@ -96,25 +99,13 @@ class WsConnector(WsHandler):
         sid: str,
     ) -> dict[str, Any] | WsResult | None:
         if event == "connector_hello":
-            computer_use = data.get("computer_use")
-            remote_files = data.get("remote_files")
-            remote_exec = data.get("remote_exec")
-            if isinstance(computer_use, dict):
-                store_sid_computer_use_metadata(sid, computer_use)
-            else:
-                clear_sid_computer_use_metadata(sid)
-            if isinstance(remote_files, dict):
-                store_sid_remote_file_metadata(sid, remote_files)
-            else:
-                clear_sid_remote_file_metadata(sid)
-            if isinstance(remote_exec, dict):
-                store_sid_remote_exec_metadata(sid, remote_exec)
-            else:
-                clear_sid_remote_exec_metadata(sid)
+            self._store_remote_tool_metadata(data, sid)
+            self._associate_declared_context(data, sid)
             return {
                 "protocol": PROTOCOL_VERSION,
                 "features": WS_FEATURES,
                 "exec_config": build_exec_config(),
+                "remote_tools": self._remote_tool_state(sid),
             }
 
         if event == "connector_subscribe_context":
@@ -146,6 +137,53 @@ class WsConnector(WsHandler):
             )
 
         return None
+
+    def _store_remote_tool_metadata(self, data: dict[str, Any], sid: str) -> None:
+        computer_use = data.get("computer_use")
+        remote_files = data.get("remote_files")
+        remote_exec = data.get("remote_exec")
+        if isinstance(computer_use, dict):
+            store_sid_computer_use_metadata(sid, computer_use)
+        else:
+            clear_sid_computer_use_metadata(sid)
+        if isinstance(remote_files, dict):
+            store_sid_remote_file_metadata(sid, remote_files)
+        else:
+            clear_sid_remote_file_metadata(sid)
+        if isinstance(remote_exec, dict):
+            store_sid_remote_exec_metadata(sid, remote_exec)
+        else:
+            clear_sid_remote_exec_metadata(sid)
+
+    def _associate_declared_context(self, data: dict[str, Any], sid: str) -> str:
+        context_id = str(data.get("context_id", "") or "").strip()
+        if not context_id:
+            return ""
+
+        try:
+            from agent import AgentContext
+
+            if AgentContext.get(context_id) is None:
+                return ""
+        except Exception:
+            return ""
+
+        subscribe_sid_to_context(sid, context_id)
+        return context_id
+
+    def _remote_tool_state(self, sid: str) -> dict[str, Any]:
+        computer_use = computer_use_metadata_for_sid(sid) or {}
+        remote_files = remote_file_metadata_for_sid(sid) or {}
+        remote_exec = remote_exec_metadata_for_sid(sid) or {}
+        return {
+            "contexts": sorted(subscribed_contexts_for_sid(sid)),
+            "computer_use": bool(
+                computer_use.get("supported") and computer_use.get("enabled")
+            ),
+            "remote_files": bool(remote_files.get("enabled", False)),
+            "remote_file_writes": bool(remote_files.get("write_enabled", False)),
+            "remote_exec": bool(remote_exec.get("enabled", False)),
+        }
 
     async def _handle_subscribe_context(
         self,
