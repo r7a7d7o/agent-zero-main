@@ -111,6 +111,15 @@ const model = {
     }
   },
 
+  getToastDisplayTime(toast) {
+    const displayTime = Number(toast?.display_time);
+    return Number.isFinite(displayTime) ? displayTime : 3;
+  },
+
+  isPersistentToast(toast) {
+    return this.getToastDisplayTime(toast) <= 0;
+  },
+
   // NEW: Add notification to toast stack
   addToToastStack(notification) {
     // If notification has a group, remove any existing toasts with the same group
@@ -148,6 +157,8 @@ const model = {
     if (toastIndex < 0) return;
 
     const toast = this.toastStack[toastIndex];
+    if (this.isPersistentToast(toast)) return;
+
     if (toast.autoRemoveTimer) {
       clearTimeout(toast.autoRemoveTimer);
       toast.autoRemoveTimer = null;
@@ -159,11 +170,12 @@ const model = {
     if (toastIndex < 0) return;
 
     const toast = this.toastStack[toastIndex];
+    if (this.isPersistentToast(toast)) return;
 
     this.clearToastTimer(toastId);
     toast.autoRemoveTimer = setTimeout(() => {
       this.removeFromToastStack(toast.toastId);
-    }, toast.display_time * 1000);
+    }, this.getToastDisplayTime(toast) * 1000);
   },
 
   // NEW: Remove toast from stack
@@ -173,6 +185,7 @@ const model = {
       const toast = this.toastStack[index];
       if (toast.autoRemoveTimer) {
         clearTimeout(toast.autoRemoveTimer);
+        toast.autoRemoveTimer = null;
       }
       this.toastStack.splice(index, 1);
 
@@ -198,8 +211,9 @@ const model = {
     this.toastStack.forEach((toast) => {
       if (toast.autoRemoveTimer) {
         clearTimeout(toast.autoRemoveTimer);
-        if (withCallback) this.afterToastRemoved(toast, removedByUser);
+        toast.autoRemoveTimer = null;
       }
+      if (withCallback) this.afterToastRemoved(toast, removedByUser);
     });
     this.toastStack = [];
   },
@@ -208,8 +222,11 @@ const model = {
   cleanupExpiredToasts() {
     const now = Date.now();
     this.toastStack = this.toastStack.filter((toast) => {
+      if (this.isPersistentToast(toast)) {
+        return true;
+      }
       const age = now - toast.addedAt;
-      const maxAge = toast.display_time * 1000;
+      const maxAge = this.getToastDisplayTime(toast) * 1000;
 
       if (age > maxAge) {
         if (toast.autoRemoveTimer) {
@@ -624,10 +641,7 @@ const model = {
 
       if (existingToastIndex >= 0) {
         const existingToast = this.toastStack[existingToastIndex];
-        if (existingToast.autoRemoveTimer) {
-          clearTimeout(existingToast.autoRemoveTimer);
-        }
-        this.toastStack.splice(existingToastIndex, 1);
+        this.removeFromToastStack(existingToast.toastId);
       }
     }
 
@@ -653,9 +667,7 @@ const model = {
     }
 
     // Set auto-dismiss timer
-    toast.autoRemoveTimer = setTimeout(() => {
-      this.removeFromToastStack(toast.toastId);
-    }, notification.display_time * 1000);
+    this.restartToastTimer(toast.toastId);
 
     return notification.id;
   },

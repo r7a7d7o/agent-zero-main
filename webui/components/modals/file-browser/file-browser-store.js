@@ -610,14 +610,32 @@ const model = {
     return asciiMatch?.[1] || fallback;
   },
 
+  createDownloadToastGroup(prefix) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  },
+
+  showDownloadPreparingToast(group) {
+    window.toastFrontendInfo?.("Preparing download...", "Download", 0, group, undefined, true);
+  },
+
+  showDownloadStartedToast(group) {
+    window.toastFrontendInfo?.("Downloading...", "Download", 3, group, undefined, true);
+  },
+
+  showDownloadErrorToast(group, message) {
+    window.toastFrontendError?.(message || "Download failed", "Download Error", 8, group, undefined, true);
+  },
+
   async bulkDownloadFiles() {
     const selectedFiles = this.selectedFiles;
     if (!selectedFiles.length || this.isBulkBusy) return;
 
     this.isBulkBusy = true;
     this.closeDropdown();
+    const downloadToastGroup = this.createDownloadToastGroup("file-browser-bulk-download");
 
     try {
+      this.showDownloadPreparingToast(downloadToastGroup);
       const resp = await fetchApi("/download_work_dir_files", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -643,14 +661,11 @@ const model = {
       document.body.removeChild(link);
       setTimeout(() => URL.revokeObjectURL(url), 0);
 
-      window.toastFrontendSuccess(
-        `Prepared ${selectedFiles.length} ${selectedFiles.length === 1 ? "item" : "items"} as ZIP`,
-        "File Browser"
-      );
+      this.showDownloadStartedToast(downloadToastGroup);
     } catch (error) {
-      window.toastFrontendError(
-        error?.message || "Failed to download selected files",
-        "File Browser"
+      this.showDownloadErrorToast(
+        downloadToastGroup,
+        error?.message || "Failed to download selected files"
       );
     } finally {
       this.isBulkBusy = false;
@@ -756,10 +771,47 @@ const model = {
     }
   },
 
+  async downloadDirectory(file) {
+    const downloadToastGroup = this.createDownloadToastGroup("file-browser-directory-download");
+
+    try {
+      this.showDownloadPreparingToast(downloadToastGroup);
+      const resp = await fetchApi(`/download_work_dir_file?path=${encodeURIComponent(file.path)}`, {
+        method: "GET",
+      });
+
+      if (!resp.ok) {
+        const message = await resp.text();
+        throw new Error(message || "Download failed");
+      }
+
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const fallback = `${file.name}.zip`;
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = this.getDownloadFilename(resp, fallback);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      this.showDownloadStartedToast(downloadToastGroup);
+    } catch (error) {
+      this.showDownloadErrorToast(
+        downloadToastGroup,
+        error?.message || "Failed to download directory"
+      );
+    }
+  },
+
   downloadFile(file) {
+    if (file.is_dir) {
+      return this.downloadDirectory(file);
+    }
+
     const link = document.createElement("a");
     link.href = `/api/download_work_dir_file?path=${encodeURIComponent(file.path)}`;
-    link.download = file.is_dir ? `${file.name}.zip` : file.name;
+    link.download = file.name;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

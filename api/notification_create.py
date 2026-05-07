@@ -26,10 +26,10 @@ class NotificationCreate(ApiHandler):
         # Validate display_time
         try:
             display_time = int(display_time)
-            if display_time <= 0:
-                display_time = 3  # Reset to default if invalid
+            if display_time < 0:
+                display_time = 3  # Reset to default if negative
         except (ValueError, TypeError):
-            display_time = 3  # Reset to default if not convertible to int
+            display_time = 3  # Reset to default if not numeric
 
         # Validate notification type
         try:
