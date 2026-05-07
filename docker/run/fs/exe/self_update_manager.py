@@ -408,6 +408,24 @@ def run_command(
     return completed
 
 
+def clean_uv_cache(logger: AttemptLogger) -> None:
+    uv_path = shutil.which("uv")
+    if not uv_path:
+        logger.log("uv executable not found, skipping uv cache clean.")
+        return
+
+    logger.log("Cleaning uv cache before continuing self-update startup.")
+    try:
+        run_command(
+            [uv_path, "cache", "clean"],
+            cwd=None,
+            logger=logger,
+            error_message="Failed to clean uv cache during self-update.",
+        )
+    except Exception as exc:
+        logger.log(f"uv cache clean skipped after error: {exc}")
+
+
 def has_local_rollback_changes(repo_dir: Path) -> bool:
     status = git_output(repo_dir, "status", "--porcelain=v1", "--untracked-files=all")
     return bool(status.strip())
@@ -1180,6 +1198,7 @@ def docker_run_ui() -> int:
         logger.reset()
         logger.log(f"Consumed update file at {TRIGGER_FILE}")
         logger.log_block("Trigger file content", raw_text)
+        clean_uv_cache(logger)
 
         try:
             current = get_repo_version_info(REPO_DIR)

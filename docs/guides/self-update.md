@@ -21,11 +21,12 @@ Agent Zero includes a Docker-oriented self-update flow for switching to a specif
 1. The WebUI writes a YAML request file outside `/a0` so the request survives upgrades and downgrades.
 2. Agent Zero restarts.
 3. The durable updater in `/exe` reads the YAML request before starting the UI.
-4. If requested, it creates a zip backup of `/a0/usr`.
-5. It fetches the requested branch and update target from the official Agent Zero repository.
-6. It updates `/a0` while preserving gitignored paths such as `/a0/usr`.
-7. It starts Agent Zero again and waits for `/api/health` to become healthy.
-8. If the UI does not become healthy within the allowed time, it restores the previous checkout and starts that version again.
+4. It cleans the root `uv` cache when `uv` is available.
+5. If requested, it creates a zip backup of `/a0/usr`.
+6. It fetches the requested branch and update target from the official Agent Zero repository.
+7. It updates `/a0` while preserving gitignored paths such as `/a0/usr`.
+8. It starts Agent Zero again and waits for `/api/health` to become healthy.
+9. If the UI does not become healthy within the allowed time, it restores the previous checkout and starts that version again.
 
 ## Durable files
 
