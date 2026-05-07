@@ -7,11 +7,21 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from helpers import system_packages
 
+LIBREOFFICE_RUNTIME_PACKAGES = (
+    "libreoffice-core",
+    "libreoffice-writer",
+    "libreoffice-calc",
+    "libreoffice-impress",
+    "libreoffice-gtk3",
+    "python3-uno",
+)
 XPRA_SOURCE_FILE = Path("/etc/apt/sources.list.d/xpra.sources")
 XPRA_KEYRING_FILE = Path("/usr/share/keyrings/xpra.asc")
 XPRA_KEY_URL = "https://xpra.org/xpra.asc"
 RUNTIME_PACKAGES = (
+    *LIBREOFFICE_RUNTIME_PACKAGES,
     "xpra-server",
     "xpra-client",
     "xpra-client-gtk3",
@@ -102,14 +112,7 @@ def _purge_packages(
     installed = installed_packages if installed_packages is not None else []
     if not installed:
         return
-    result = subprocess.run(
-        ["apt-get", "purge", "-y", *installed],
-        check=False,
-        text=True,
-        capture_output=True,
-        timeout=180,
-        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
-    )
+    result = _run_apt_command(["apt-get", "purge", "-y", *installed], timeout=180)
     if result.returncode == 0:
         removed.extend(installed)
         return
@@ -161,14 +164,7 @@ def _install_runtime_packages(
     *,
     optional: bool = False,
 ) -> bool:
-    result = subprocess.run(
-        ["apt-get", "install", "-y", "--no-install-recommends", *packages],
-        check=False,
-        text=True,
-        capture_output=True,
-        timeout=900,
-        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
-    )
+    result = _run_apt_command(["apt-get", "install", "-y", "--no-install-recommends", *packages], timeout=900)
     if result.returncode == 0:
         installed.extend(packages)
         return True
@@ -185,14 +181,7 @@ def _is_xpra_codec_dependency_gap(output: str) -> bool:
 
 
 def _apt_update(errors: list[str]) -> bool:
-    result = subprocess.run(
-        ["apt-get", "update"],
-        check=False,
-        text=True,
-        capture_output=True,
-        timeout=300,
-        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
-    )
+    result = _run_apt_command(["apt-get", "update"], timeout=300)
     if result.returncode == 0:
         return True
     errors.append((result.stderr or result.stdout or "apt-get update failed").strip())
@@ -222,13 +211,9 @@ def _package_candidates_available(packages: list[str]) -> bool:
 
 def _ensure_xpra_repository(installed: list[str], errors: list[str]) -> None:
     if not _package_installed("ca-certificates"):
-        result = subprocess.run(
+        result = _run_apt_command(
             ["apt-get", "install", "-y", "--no-install-recommends", "ca-certificates"],
-            check=False,
-            text=True,
-            capture_output=True,
             timeout=180,
-            env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
         )
         if result.returncode != 0:
             errors.append((result.stderr or result.stdout or "apt-get install ca-certificates failed").strip())
@@ -252,6 +237,19 @@ def _ensure_xpra_repository(installed: list[str], errors: list[str]) -> None:
 def _download(url: str) -> bytes:
     with urllib.request.urlopen(url, timeout=45) as response:
         return response.read()
+
+
+def _run_apt_command(command: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
+    return system_packages.run_apt_with_retries(
+        lambda: subprocess.run(
+            command,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+        )
+    )
 
 
 def _xpra_repository_source() -> str:

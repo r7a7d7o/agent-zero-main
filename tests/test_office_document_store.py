@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from helpers import system_packages
 from plugins._office import hooks
 from plugins._desktop import hooks as desktop_hooks
 from plugins._desktop.helpers import desktop_session
@@ -1332,6 +1332,54 @@ def test_cleanup_hook_removes_retired_supervisor_program_after_marker(tmp_path, 
         ("reread",),
         ("update",),
     ]
+
+
+def test_office_runtime_dependency_install_waits_out_apt_locks(monkeypatch):
+    calls = []
+    installed_state = {"libreoffice-core": False}
+    update_attempts = {"count": 0}
+
+    monkeypatch.setattr(hooks.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        hooks.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in {"apt-get", "dpkg-query"} else "",
+    )
+    monkeypatch.setattr(hooks, "RUNTIME_PACKAGES", ("libreoffice-core",))
+    monkeypatch.setattr(hooks, "_package_installed", lambda package: installed_state.get(package, False))
+    monkeypatch.setattr(system_packages.time, "sleep", lambda _seconds: None)
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == ["apt-get", "update"]:
+            update_attempts["count"] += 1
+            if update_attempts["count"] == 1:
+                return types.SimpleNamespace(
+                    returncode=100,
+                    stdout="",
+                    stderr="E: Could not get lock /var/lib/apt/lists/lock. It is held by process 1829 (apt-get)",
+                )
+        if command[:2] == ["apt-get", "install"]:
+            installed_state["libreoffice-core"] = True
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+    installed = []
+    errors = []
+
+    hooks._ensure_runtime_dependencies(installed, errors)
+
+    assert errors == []
+    assert installed == ["libreoffice-core"]
+    assert calls[:2] == [["apt-get", "update"], ["apt-get", "update"]]
+    assert calls[2][:4] == ["apt-get", "install", "-y", "--no-install-recommends"]
+
+
+def test_desktop_runtime_packages_include_libreoffice_for_desktop_status():
+    assert set(desktop_hooks.LIBREOFFICE_RUNTIME_PACKAGES).issubset(desktop_hooks.RUNTIME_PACKAGES)
+    assert "libreoffice-writer" in desktop_hooks.RUNTIME_PACKAGES
+    assert "libreoffice-calc" in desktop_hooks.RUNTIME_PACKAGES
+    assert "libreoffice-impress" in desktop_hooks.RUNTIME_PACKAGES
 
 
 def test_cleanup_hook_installs_missing_desktop_session_dependencies(monkeypatch):
