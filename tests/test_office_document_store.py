@@ -1098,6 +1098,7 @@ def _isolate_office_cleanup_hook(monkeypatch, tmp_path):
     monkeypatch.setattr(hooks, "RETIRED_WEB_SUPERVISOR_FILE", tmp_path / "missing.conf")
     monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [])
     monkeypatch.setattr(hooks, "CLEANUP_MARKER", tmp_path / "state" / "cleanup.done")
+    monkeypatch.setattr(hooks, "_installed_retired_web_packages", lambda: [])
     monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
     monkeypatch.setattr(hooks, "_kill_old_processes", lambda errors: None)
     monkeypatch.setattr(hooks, "_ensure_runtime_dependencies", lambda installed, errors: None)
@@ -1175,6 +1176,52 @@ def test_office_hook_desktop_compat_forwards_runtime_result(monkeypatch):
     assert errors == ["desktop error"]
 
 
+def test_cleanup_hook_targets_legacy_collabora_runtime_artifacts():
+    assert Path("/opt/cool") in hooks.RETIRED_WEB_RUNTIME_DIRS
+    assert Path("/opt/collaboraoffice") in hooks.RETIRED_WEB_RUNTIME_DIRS
+    assert {
+        "collaboraoffice-ure",
+        "collaboraofficebasis-core",
+        "collaboraofficebasis-ooofonts",
+    }.issubset(hooks.RETIRED_WEB_PACKAGES)
+
+
+def test_installed_retired_web_packages_discovers_collabora_split_packages(monkeypatch):
+    monkeypatch.setattr(
+        hooks.shutil,
+        "which",
+        lambda name: "/usr/bin/dpkg-query" if name == "dpkg-query" else "",
+    )
+    monkeypatch.setattr(
+        hooks,
+        "_package_installed",
+        lambda package: package in {"coolwsd", "collaboraofficebasis-core"},
+    )
+
+    def fake_run(command, **kwargs):
+        assert command == ["dpkg-query", "-W", "-f=${binary:Package}\t${Status}\n", "collaboraoffice*"]
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "collaboraofficebasis-core\tinstall ok installed\n"
+                "collaboraofficebasis-extra-future\tinstall ok installed\n"
+                "collaboraofficebasis-config-files\tdeinstall ok config-files\n"
+                "notcollaboraoffice\tinstall ok installed\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(hooks.subprocess, "run", fake_run)
+
+    packages = hooks._installed_retired_web_packages()
+
+    assert packages == [
+        "coolwsd",
+        "collaboraofficebasis-core",
+        "collaboraofficebasis-extra-future",
+    ]
+
+
 def test_cleanup_hook_delegates_desktop_runtime_for_legacy_self_update(tmp_path, monkeypatch):
     _isolate_office_cleanup_hook(monkeypatch, tmp_path)
     monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
@@ -1202,6 +1249,8 @@ def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeyp
     keyring = tmp_path / "keyrings" / "retired.gpg"
     supervisor = tmp_path / "supervisor" / "retired.conf"
     runtime_dir = tmp_path / "runtime"
+    legacy_cool_dir = tmp_path / "opt" / "cool"
+    legacy_collabora_dir = tmp_path / "opt" / "collaboraoffice"
     marker = tmp_path / "state" / "cleanup.done"
 
     for path in (source, keyring, supervisor):
@@ -1209,14 +1258,19 @@ def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeyp
         path.write_text("old\n", encoding="utf-8")
     (runtime_dir / "nested").mkdir(parents=True, exist_ok=True)
     (runtime_dir / "nested" / "state.txt").write_text("old\n", encoding="utf-8")
+    (legacy_cool_dir / "state").mkdir(parents=True, exist_ok=True)
+    (legacy_cool_dir / "state" / "cool.txt").write_text("old\n", encoding="utf-8")
+    (legacy_collabora_dir / "program").mkdir(parents=True, exist_ok=True)
+    (legacy_collabora_dir / "program" / "office.txt").write_text("old\n", encoding="utf-8")
 
     monkeypatch.setattr(hooks, "RETIRED_WEB_APT_SOURCE_FILE", source)
     monkeypatch.setattr(hooks, "RETIRED_WEB_APT_KEYRING_FILE", keyring)
     monkeypatch.setattr(hooks, "RETIRED_WEB_SUPERVISOR_FILE", supervisor)
-    monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [runtime_dir])
+    monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [runtime_dir, legacy_cool_dir, legacy_collabora_dir])
     monkeypatch.setattr(hooks, "CLEANUP_MARKER", marker)
     monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
     monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
+    monkeypatch.setattr(hooks, "_installed_retired_web_packages", lambda: [])
     monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
     monkeypatch.setattr(hooks, "_kill_old_processes", lambda errors: None)
     monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
@@ -1243,6 +1297,8 @@ def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeyp
     assert not keyring.exists()
     assert not supervisor.exists()
     assert not runtime_dir.exists()
+    assert not legacy_cool_dir.exists()
+    assert not legacy_collabora_dir.exists()
     assert marker.exists()
 
 
@@ -1301,7 +1357,14 @@ def test_cleanup_hook_reruns_when_stale_packages_exist_after_old_marker(tmp_path
     monkeypatch.setattr(hooks, "CLEANUP_MARKER", marker)
     monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
     monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
-    monkeypatch.setattr(hooks, "_installed_packages", lambda packages: ["coolwsd"])
+    retired_web_packages = [
+        "coolwsd",
+        "collaboraoffice-ure",
+        "collaboraofficebasis-core",
+        "collaboraofficebasis-ooofonts",
+    ]
+    monkeypatch.setattr(hooks, "_installed_retired_web_packages", lambda: retired_web_packages)
+    monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
     monkeypatch.setattr(hooks, "_ensure_runtime_dependencies", lambda installed, errors: None)
     monkeypatch.setattr(hooks, "_kill_old_processes", lambda errors: None)
     monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
@@ -1314,7 +1377,7 @@ def test_cleanup_hook_reruns_when_stale_packages_exist_after_old_marker(tmp_path
     result = hooks.cleanup_stale_runtime_state()
 
     assert result["skipped"] is False
-    assert result["removed"] == ["coolwsd"]
+    assert result["removed"] == retired_web_packages
 
 
 def test_cleanup_hook_removes_retired_supervisor_program_after_marker(tmp_path, monkeypatch):
@@ -1330,6 +1393,7 @@ def test_cleanup_hook_removes_retired_supervisor_program_after_marker(tmp_path, 
     monkeypatch.setattr(hooks, "CLEANUP_MARKER", marker)
     monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
     monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
+    monkeypatch.setattr(hooks, "_installed_retired_web_packages", lambda: [])
     monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
     monkeypatch.setattr(hooks, "_ensure_runtime_dependencies", lambda installed, errors: None)
     monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)

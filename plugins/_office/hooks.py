@@ -22,6 +22,8 @@ RETIRED_WEB_APT_KEYRING_FILE = Path("/etc/apt/keyrings/collaboraonline-release-k
 RETIRED_WEB_SUPERVISOR_FILE = Path("/etc/supervisor/conf.d/a0_office_collabora.conf")
 RETIRED_WEB_SUPERVISOR_PROGRAM = "a0_office_collabora"
 RETIRED_WEB_RUNTIME_DIRS = [
+    Path("/opt/cool"),
+    Path("/opt/collaboraoffice"),
     Path("/a0/tmp/_office/collabora"),
     Path("/a0/usr/plugins/_office/collabora"),
     PROJECT_ROOT / "tmp" / "_office" / "collabora",
@@ -32,7 +34,9 @@ RETIRED_WEB_PACKAGES = (
     "coolwsd-deprecated",
     "code-brand",
     "collaboraoffice",
+    "collaboraoffice-ure",
     "collaboraofficebasis-calc",
+    "collaboraofficebasis-core",
     "collaboraofficebasis-draw",
     "collaboraofficebasis-en-us",
     "collaboraofficebasis-extension-pdf-import",
@@ -41,6 +45,7 @@ RETIRED_WEB_PACKAGES = (
     "collaboraofficebasis-impress",
     "collaboraofficebasis-math",
     "collaboraofficebasis-ooolinguistic",
+    "collaboraofficebasis-ooofonts",
     "collaboraofficebasis-writer",
 )
 RUNTIME_PACKAGES = (
@@ -90,7 +95,7 @@ def cleanup_stale_runtime_state(force: bool = False) -> dict[str, Any]:
         ]
         if path.exists() or path.is_symlink()
     ]
-    retired_web_packages = _installed_packages(RETIRED_WEB_PACKAGES)
+    retired_web_packages = _installed_retired_web_packages()
     cleanup_needed = force or not CLEANUP_MARKER.exists() or bool(retired_web_paths or retired_web_packages)
 
     if cleanup_needed:
@@ -294,6 +299,34 @@ def _installed_packages(packages: tuple[str, ...]) -> list[str]:
     return [package for package in packages if _package_installed(package)]
 
 
+def _installed_retired_web_packages() -> list[str]:
+    packages = [
+        *_installed_packages(RETIRED_WEB_PACKAGES),
+        *_installed_collabora_packages(),
+    ]
+    return list(dict.fromkeys(packages))
+
+
+def _installed_collabora_packages() -> list[str]:
+    if not shutil.which("dpkg-query"):
+        return []
+
+    result = subprocess.run(
+        ["dpkg-query", "-W", "-f=${binary:Package}\t${Status}\n", "collaboraoffice*"],
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+
+    packages: list[str] = []
+    for line in result.stdout.splitlines():
+        package, _, status = line.partition("\t")
+        if package.startswith("collaboraoffice") and "install ok installed" in status:
+            packages.append(package)
+    return packages
+
+
 def _purge_packages(
     removed: list[str],
     errors: list[str],
@@ -302,7 +335,7 @@ def _purge_packages(
 ) -> None:
     if os.geteuid() != 0 or not shutil.which("apt-get") or not shutil.which("dpkg-query"):
         return
-    installed = installed_packages if installed_packages is not None else _installed_packages(RETIRED_WEB_PACKAGES)
+    installed = installed_packages if installed_packages is not None else _installed_retired_web_packages()
     if not installed:
         return
     result = _run_apt_command(["apt-get", "purge", "-y", *installed], timeout=180)
