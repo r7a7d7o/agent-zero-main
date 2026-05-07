@@ -140,10 +140,6 @@
                             :disabled="context?.isSaving || context?.isLoading">
                         Default
                     </button>
-                    <button class="btn btn-cancel"
-                            @click="window.closeModal?.()">
-                        Cancel
-                    </button>
                     <button class="btn btn-field"
                             x-show="context.wizardFooter?.showNext?.()"
                             @click="context.wizardFooter?.onNext?.()"
@@ -155,6 +151,10 @@
                             @click="context.save()"
                             :disabled="context?.isSaving || context?.isLoading">
                         Save
+                    </button>
+                    <button class="btn btn-cancel"
+                            @click="window.closeModal?.()">
+                        Cancel
                     </button>
                 </div>
             </div>
