@@ -166,10 +166,15 @@ def test_desktop_plugin_owns_routes_runtime_surface_and_state_paths():
 
     assert "virtual_desktop_routes.install_route_hooks()" in desktop_startup
     assert 'action in {"open_document", "document"}' in desktop_api
+    assert '"status": desktop.get("status") or {}' in desktop_api
     assert 'callJsonApi("/plugins/_desktop/desktop_session"' in desktop_store
     assert 'callDesktop("open_document"' in desktop_store
     assert 'callOffice("create"' in desktop_store
     assert "open_in_desktop: isOfficialExtension(fmt)" in desktop_store
+    assert "DESKTOP_RUNTIME_INSTALL_MESSAGE" in desktop_store
+    assert "openDesktopWhenRuntimeReady" in desktop_store
+    assert "isDesktopRuntimeInstalling" in desktop_store
+    assert "Installing Agent Zero Desktop runtime dependencies" in desktop_session
     assert "__a0XpraOffsetWarnPatched" in desktop_store
     assert "window does not fit in canvas, offsets" in desktop_store
     assert "decode error packet" in desktop_store

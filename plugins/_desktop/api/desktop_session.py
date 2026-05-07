@@ -32,6 +32,7 @@ class DesktopSession(ApiHandler):
             return {
                 "ok": False,
                 "error": desktop.get("error") or "Desktop session is unavailable.",
+                "status": desktop.get("status") or {},
                 "desktop": desktop,
                 "libreoffice": libreoffice.collect_status(),
             }

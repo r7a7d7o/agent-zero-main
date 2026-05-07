@@ -12,6 +12,9 @@ const INPUT_PUSH_DELAY_MS = 650;
 const DESKTOP_HEARTBEAT_MS = 3500;
 const DESKTOP_RESIZE_DELAY_MS = 80;
 const DESKTOP_START_MESSAGE = "Starting Agent Zero Desktop environment";
+const DESKTOP_RUNTIME_INSTALL_MESSAGE = "Installing Agent Zero Desktop runtime dependencies. This can take a few minutes after an update.";
+const DESKTOP_RUNTIME_INSTALL_POLL_MS = 4000;
+const DESKTOP_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const XPRA_DESKTOP_PRIME_INTERVAL_MS = 220;
 const XPRA_DESKTOP_PRIME_ATTEMPTS = 120;
 const SYSTEM_DESKTOP_FILE_ID = "system-desktop";
@@ -122,6 +125,10 @@ function placeCaretAtEnd(element) {
   range.collapse(false);
   selection.removeAllRanges();
   selection.addRange(range);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }
 
 function normalizeDocument(doc = {}) {
@@ -453,7 +460,7 @@ const model = {
           this.message = progressMessage;
           this.error = "";
         }
-        const response = await callDesktop("desktop");
+        const response = await this.openDesktopWhenRuntimeReady(showProgress);
         if (response?.ok === false) throw new Error(response.error || "Desktop session could not be opened.");
         this.setDesktopIntentionalShutdown(false);
         const session = normalizeSession(response);
@@ -488,12 +495,43 @@ const model = {
       } finally {
         if (showProgress) {
           this.loading = false;
-          if (this.message === progressMessage) this.message = "";
+          if (this.message === progressMessage || this.message === DESKTOP_RUNTIME_INSTALL_MESSAGE) this.message = "";
         }
         this._desktopStarting = null;
       }
     })();
     return await this._desktopStarting;
+  },
+
+  async openDesktopWhenRuntimeReady(showProgress = true) {
+    const startedAt = Date.now();
+    let response = await callDesktop("desktop");
+    while (response?.ok === false && this.isDesktopRuntimeInstalling(response)) {
+      if (showProgress) {
+        this.loading = true;
+        this.error = "";
+        this.message = this.desktopRuntimeInstallMessage(response);
+      }
+      if (Date.now() - startedAt > DESKTOP_RUNTIME_INSTALL_TIMEOUT_MS) {
+        return {
+          ...response,
+          error: "Agent Zero Desktop runtime installation is still running. Please try again in a moment.",
+        };
+      }
+      await sleep(DESKTOP_RUNTIME_INSTALL_POLL_MS);
+      response = await callDesktop("desktop");
+    }
+    return response;
+  },
+
+  isDesktopRuntimeInstalling(response = {}) {
+    const status = response?.status || response?.desktop?.status || response?.libreoffice?.desktop || {};
+    return Boolean(status.installing || status.state === "installing" || status.preparation?.preparing);
+  },
+
+  desktopRuntimeInstallMessage(response = {}) {
+    const status = response?.status || response?.desktop?.status || response?.libreoffice?.desktop || {};
+    return String(status.message || DESKTOP_RUNTIME_INSTALL_MESSAGE);
   },
 
   async create(kind = "document", format = "") {

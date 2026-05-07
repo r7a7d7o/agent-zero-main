@@ -505,6 +505,33 @@ def test_official_desktop_session_status_and_url_contract(tmp_path, monkeypatch)
     assert "printing=true" in url
 
 
+def test_desktop_status_reports_installing_during_runtime_preparation(monkeypatch):
+    monkeypatch.setattr(
+        desktop_session.virtual_desktop,
+        "collect_status",
+        lambda: {
+            "binaries": {},
+            "packages": {},
+            "xpra_html_root": "",
+        },
+    )
+    monkeypatch.setattr(desktop_session.libreoffice, "find_soffice", lambda: "")
+    monkeypatch.setattr(desktop_session.shutil, "which", lambda _name: "")
+    monkeypatch.setattr(
+        desktop_session,
+        "_runtime_preparation_status",
+        lambda: {"preparing": True, "active_count": 1, "started_at": 123.0},
+    )
+
+    status = desktop_session.collect_desktop_status()
+
+    assert status["healthy"] is False
+    assert status["installing"] is True
+    assert status["state"] == "installing"
+    assert status["message"].startswith("Installing Agent Zero Desktop runtime dependencies")
+    assert "soffice" in status["missing"]
+
+
 def test_desktop_gateway_patches_xpra_menu_script():
     source = (PROJECT_ROOT / "helpers" / "virtual_desktop_routes.py").read_text(encoding="utf-8")
 

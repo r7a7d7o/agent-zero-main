@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -59,29 +61,89 @@ OPTIONAL_RUNTIME_PACKAGES = (
 RETIRED_RUNTIME_PACKAGES = (
     "firefox-esr",
 )
+_preparation_lock = threading.RLock()
+_preparation_state: dict[str, Any] = {
+    "preparing": False,
+    "active_count": 0,
+    "started_at": 0.0,
+    "completed_at": 0.0,
+    "result": None,
+    "error": "",
+}
 
 
 def cleanup_stale_runtime_state(force: bool = False) -> dict[str, Any]:
     """Prepare the Linux Desktop runtime and reap stale Desktop sessions."""
 
-    installed: list[str] = []
-    removed: list[str] = []
-    errors: list[str] = []
+    _begin_runtime_preparation()
+    result: dict[str, Any] | None = None
+    error = ""
+    try:
+        installed: list[str] = []
+        removed: list[str] = []
+        errors: list[str] = []
 
-    retired_packages = _installed_packages(RETIRED_RUNTIME_PACKAGES)
-    if retired_packages:
-        _purge_packages(removed, errors, installed_packages=retired_packages)
+        retired_packages = _installed_packages(RETIRED_RUNTIME_PACKAGES)
+        if retired_packages:
+            _purge_packages(removed, errors, installed_packages=retired_packages)
 
-    _ensure_runtime_dependencies(installed, errors)
-    _cleanup_desktop_sessions(errors)
+        _ensure_runtime_dependencies(installed, errors)
+        _cleanup_desktop_sessions(errors)
 
-    return {
-        "ok": not errors,
-        "skipped": False,
-        "removed": removed,
-        "installed": installed,
-        "errors": errors,
-    }
+        result = {
+            "ok": not errors,
+            "skipped": False,
+            "removed": removed,
+            "installed": installed,
+            "errors": errors,
+        }
+        return result
+    except Exception as exc:
+        error = str(exc)
+        raise
+    finally:
+        _finish_runtime_preparation(result=result, error=error)
+
+
+def runtime_preparation_status() -> dict[str, Any]:
+    with _preparation_lock:
+        return {
+            "preparing": bool(_preparation_state["preparing"]),
+            "active_count": int(_preparation_state["active_count"]),
+            "started_at": float(_preparation_state["started_at"]),
+            "completed_at": float(_preparation_state["completed_at"]),
+            "result": _preparation_state["result"],
+            "error": str(_preparation_state["error"]),
+        }
+
+
+def _begin_runtime_preparation() -> None:
+    with _preparation_lock:
+        if not _preparation_state["active_count"]:
+            _preparation_state["preparing"] = True
+            _preparation_state["started_at"] = time.time()
+            _preparation_state["completed_at"] = 0.0
+            _preparation_state["result"] = None
+            _preparation_state["error"] = ""
+        _preparation_state["active_count"] = int(_preparation_state["active_count"]) + 1
+
+
+def _finish_runtime_preparation(
+    *,
+    result: dict[str, Any] | None = None,
+    error: str = "",
+) -> None:
+    with _preparation_lock:
+        active_count = max(0, int(_preparation_state["active_count"]) - 1)
+        _preparation_state["active_count"] = active_count
+        if result is not None:
+            _preparation_state["result"] = result
+        if error:
+            _preparation_state["error"] = error
+        if active_count:
+            return
+        _preparation_state["preparing"] = False
+        _preparation_state["completed_at"] = time.time()
 
 
 def _installed_packages(packages: tuple[str, ...]) -> list[str]:

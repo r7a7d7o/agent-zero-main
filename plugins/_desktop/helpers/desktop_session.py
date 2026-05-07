@@ -43,6 +43,10 @@ BLOCKING_DIALOG_TITLES = ("Remote Files", "File Services")
 DISPLAY_START_TIMEOUT_SECONDS = 30.0
 PORT_START_TIMEOUT_SECONDS = 30.0
 STARTUP_GRACE_SECONDS = 45
+RUNTIME_INSTALL_MESSAGE = (
+    "Installing Agent Zero Desktop runtime dependencies. "
+    "This can take a few minutes after an update."
+)
 HIDDEN_XPRA_DESKTOP_ENTRIES = (
     "xpra.desktop",
     "xpra-gui.desktop",
@@ -1585,18 +1589,34 @@ def collect_desktop_status() -> dict[str, Any]:
     if desktop.get("binaries", {}).get("xpra") and desktop.get("packages", {}).get("xpra-x11") is False:
         missing.append("xpra-x11")
     healthy = not missing
+    preparation = _runtime_preparation_status()
+    installing = bool(preparation.get("preparing")) and not healthy
     return {
         "ok": True,
         "healthy": healthy,
-        "state": "healthy" if healthy else "missing",
+        "state": "healthy" if healthy else "installing" if installing else "missing",
+        "installing": installing,
+        "missing": missing,
+        "preparation": preparation,
         "binaries": binaries,
         "xpra_html_root": str(desktop.get("xpra_html_root") or ""),
         "message": (
             "Agent Zero Desktop sessions are available."
             if healthy
+            else RUNTIME_INSTALL_MESSAGE
+            if installing
             else f"Agent Zero Desktop sessions need: {', '.join(missing)}."
         ),
     }
+
+
+def _runtime_preparation_status() -> dict[str, Any]:
+    try:
+        from plugins._desktop import hooks
+
+        return hooks.runtime_preparation_status()
+    except Exception:
+        return {"preparing": False, "active_count": 0, "started_at": 0.0, "completed_at": 0.0}
 
 
 def cleanup_stale_runtime_state() -> dict[str, Any]:
