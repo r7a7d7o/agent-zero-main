@@ -14,7 +14,6 @@ trigger_patterns:
   - "native ui"
 allowed_tools:
   - computer_use_remote
-  - code_execution_remote
 ---
 
 # Computer Use Remote
@@ -24,6 +23,8 @@ allowed_tools:
 Load this skill before using `computer_use_remote` for local desktop and native UI tasks on the connected machine.
 
 If the task is browser-only and the user is flexible, prefer direct browser tooling because it is usually more reliable and token-efficient than screenshot-driven desktop control.
+
+If the task needs shell execution on the CLI host, load `code-execution-remote` separately rather than treating desktop control and shell execution as one affordance.
 
 ## Core Loop
 

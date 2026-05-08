@@ -1,7 +1,7 @@
 # text_editor_remote tool
 
 Reads, writes, and patches files on the machine where the subscribed A0 CLI is running.
-This is different from server-side file tools. Load `a0-cli-remote-workflows` before using it for edits.
+This is different from server-side file tools. Load `text-editor-remote` before using it for edits.
 
 Current access mode: `{{access_mode}}`
 

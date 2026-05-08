@@ -1,7 +1,7 @@
 # code_execution_remote tool
 
 Runs shell-backed execution on the machine where the subscribed A0 CLI is running.
-Load `a0-cli-remote-workflows` before using this tool for nontrivial local project work.
+Load `code-execution-remote` before using this tool for nontrivial local project work.
 
 Current local access mode: `{{access_mode}}`
 

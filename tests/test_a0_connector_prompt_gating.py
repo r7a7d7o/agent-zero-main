@@ -198,8 +198,8 @@ def test_computer_use_enabled_cli_adds_computer_stub():
     assert "code_execution_remote tool" not in prompt
 
 
-def test_remote_workflow_skills_parse():
-    connector_skill = _parse_skill_frontmatter(
+def test_remote_affordance_skills_parse():
+    legacy_connector_skill = (
         PROJECT_ROOT
         / "plugins"
         / "_a0_connector"
@@ -207,11 +207,40 @@ def test_remote_workflow_skills_parse():
         / "a0-cli-remote-workflows"
         / "SKILL.md"
     )
+    text_editor_skill = _parse_skill_frontmatter(
+        PROJECT_ROOT
+        / "plugins"
+        / "_a0_connector"
+        / "skills"
+        / "text-editor-remote"
+        / "SKILL.md"
+    )
+    code_execution_skill = _parse_skill_frontmatter(
+        PROJECT_ROOT
+        / "plugins"
+        / "_a0_connector"
+        / "skills"
+        / "code-execution-remote"
+        / "SKILL.md"
+    )
     computer_skill = _parse_skill_frontmatter(
         PROJECT_ROOT / "skills" / "computer-use-remote" / "SKILL.md"
     )
 
-    assert connector_skill["name"] == "a0-cli-remote-workflows"
-    assert connector_skill["description"]
+    assert not legacy_connector_skill.exists()
+    assert text_editor_skill["name"] == "text-editor-remote"
+    assert text_editor_skill["allowed_tools"] == ["text_editor_remote"]
+    assert code_execution_skill["name"] == "code-execution-remote"
+    assert code_execution_skill["allowed_tools"] == ["code_execution_remote"]
     assert computer_skill["name"] == "computer-use-remote"
-    assert computer_skill["description"]
+    assert computer_skill["allowed_tools"] == ["computer_use_remote"]
+
+
+def test_remote_tool_stubs_point_to_per_tool_skills():
+    text_stub = (PROMPT_ROOT / "agent.connector_tool.text_editor_remote.md").read_text(encoding="utf-8")
+    exec_stub = (PROMPT_ROOT / "agent.connector_tool.code_execution_remote.md").read_text(encoding="utf-8")
+
+    assert "Load `text-editor-remote`" in text_stub
+    assert "Load `code-execution-remote`" in exec_stub
+    assert "a0-cli-remote-workflows" not in text_stub
+    assert "a0-cli-remote-workflows" not in exec_stub
