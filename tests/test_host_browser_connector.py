@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from helpers.errors import RepairableException
 from plugins._a0_connector.helpers import ws_runtime
 from plugins._browser.helpers.connector_runtime import (
     ConnectorBrowserRuntime,
@@ -20,6 +21,19 @@ from plugins._browser.helpers.connector_runtime import (
 
 def _agent(context_id: str = "ctx-host"):
     return SimpleNamespace(context=SimpleNamespace(id=context_id))
+
+
+def test_host_required_runtime_error_is_repairable(monkeypatch):
+    from plugins._browser.helpers import selector as browser_selector
+
+    monkeypatch.setattr(
+        browser_selector,
+        "get_browser_config",
+        lambda agent=None: {"runtime_backend": "host_required"},
+    )
+
+    with pytest.raises(RepairableException, match="Bring Your Own Browser"):
+        asyncio.run(browser_selector.get_tool_runtime(_agent("ctx-host-required-missing")))
 
 
 def test_host_browser_metadata_selection_is_context_scoped():

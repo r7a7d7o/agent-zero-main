@@ -60,10 +60,14 @@
             <span class="browser-config-field-label">Browser location</span>
             <select x-model="$store.browserConfig.config.runtime_backend">
               <option value="container">Docker browser</option>
-              <option value="host_when_available">Use host when ready</option>
-              <option value="host_required">Require host browser</option>
+              <option value="host_required">Bring Your Own Browser</option>
             </select>
-            <span class="browser-config-field-help">Require host browser when pages must stay on this computer.</span>
+            <span
+              class="browser-config-field-help"
+              x-show="$store.browserConfig.config.runtime_backend === 'host_required'"
+            >
+              Use Google Chrome or a Chromium family browser. Visit chrome://inspect#remote-debugging and enable "Allow remote debugging".
+            </span>
           </label>
 
           <label class="browser-config-field">

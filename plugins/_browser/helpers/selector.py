@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from helpers.errors import RepairableException
 from plugins._browser.helpers.config import RUNTIME_BACKEND_KEY, get_browser_config
 from plugins._browser.helpers.runtime import get_runtime as get_container_runtime
 
@@ -22,10 +23,13 @@ async def get_tool_runtime(agent: Any):
 
     if backend == "host_required":
         detail = _host_browser_status_detail(context_id)
-        raise RuntimeError(
-            "Browser host_required mode is enabled, but no subscribed A0 CLI currently "
+        message = (
+            "Bring Your Own Browser mode is enabled, but no subscribed A0 CLI currently "
             "advertises host-browser support"
             + (f": {detail}" if detail else ".")
+        )
+        raise RepairableException(
+            f"{message} Connect A0 CLI to this chat, allow host browser access, and retry."
         )
 
     return await get_container_runtime(context_id)

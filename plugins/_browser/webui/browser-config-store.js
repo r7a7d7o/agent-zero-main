@@ -3,7 +3,7 @@ import { callJsonApi } from "/js/api.js";
 
 const BROWSER_EXTENSIONS_API = "/plugins/_browser/extensions";
 const BROWSER_STATUS_API = "/plugins/_browser/status";
-const RUNTIME_BACKENDS = new Set(["container", "host_when_available", "host_required"]);
+const RUNTIME_BACKENDS = new Set(["container", "host_required"]);
 const HOST_PRIVACY_POLICIES = new Set(["enforce_local", "warn", "allow"]);
 
 function normalizePathList(value) {
@@ -26,7 +26,7 @@ function ensureConfig(config) {
   config.extension_paths = normalizePathList(config.extension_paths);
   config.default_homepage = String(config.default_homepage || "about:blank").trim() || "about:blank";
   config.autofocus_active_page = normalizeBoolean(config.autofocus_active_page, true);
-  config.runtime_backend = normalizeChoice(config.runtime_backend, RUNTIME_BACKENDS, "container");
+  config.runtime_backend = normalizeRuntimeBackend(config.runtime_backend);
   config.host_browser_privacy_policy = normalizeChoice(
     config.host_browser_privacy_policy,
     HOST_PRIVACY_POLICIES,
@@ -40,6 +40,12 @@ function ensureConfig(config) {
 function normalizeChoice(value, allowed, fallback) {
   const normalized = String(value || "").trim().toLowerCase().replace(/-/g, "_");
   return allowed.has(normalized) ? normalized : fallback;
+}
+
+function normalizeRuntimeBackend(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/-/g, "_");
+  if (normalized === "host_when_available") return "host_required";
+  return RUNTIME_BACKENDS.has(normalized) ? normalized : "container";
 }
 
 function normalizeBoolean(value, fallback = true) {
@@ -122,8 +128,7 @@ export const store = createStore("browserConfig", {
 
   runtimeBackendLabel() {
     const value = this.config?.runtime_backend || "container";
-    if (value === "host_when_available") return "Use Host When Ready";
-    if (value === "host_required") return "Require Host Browser";
+    if (value === "host_required") return "Bring Your Own Browser";
     return "Docker Browser";
   },
 

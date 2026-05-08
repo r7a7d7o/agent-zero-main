@@ -10,8 +10,7 @@ autofocus_active_page: true
 
 # Runtime used by the agent-facing browser tool:
 # - container: use Agent Zero's Docker/server Playwright browser.
-# - host_when_available: use A0 CLI host browser when a subscribed CLI can provide it, otherwise container.
-# - host_required: require A0 CLI host browser and prepare it on first browser use when possible.
+# - host_required: Bring Your Own Browser through A0 CLI and prepare it on first browser use when possible.
 runtime_backend: "container"
 
 # Local-model enforcement for host-browser content:
