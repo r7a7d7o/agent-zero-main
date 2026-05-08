@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import json
+import time
+import uuid
+from pathlib import Path
 from typing import Any
 
+from helpers import files
+from helpers.print_style import PrintStyle
 from helpers.tool import Response, Tool
 from plugins._browser.helpers.selector import get_tool_runtime
+
+
+HISTORY_SCREENSHOT_QUALITY = 62
+HISTORY_SCREENSHOT_ACTION_DENYLIST = {"close", "close_all"}
 
 
 async def get_runtime(context_id: str, create: bool = True, agent: Any | None = None):
@@ -78,6 +87,8 @@ class Browser(Tool):
             if action == "open":
                 result = await runtime.call("open", url or "")
             elif action == "screenshot":
+                if not path:
+                    path = self._history_screenshot_path(action)
                 result = await runtime.call(
                     "screenshot_file",
                     browser_id,
@@ -258,6 +269,7 @@ class Browser(Tool):
                     message=f"Unknown browser action: {action}",
                     break_loop=False,
                 )
+            await self._record_history_screenshot(runtime, action, result, browser_id)
         except Exception as exc:
             return Response(message=f"Browser {action} failed: {exc}", break_loop=False)
 
@@ -285,6 +297,112 @@ class Browser(Tool):
         if selector:
             return {"selector": selector}
         return None
+
+    async def _record_history_screenshot(
+        self,
+        runtime: Any,
+        action: str,
+        result: Any,
+        requested_browser_id: int | str | None = None,
+    ) -> None:
+        if not getattr(self, "log", None):
+            return
+        if action in HISTORY_SCREENSHOT_ACTION_DENYLIST:
+            return
+
+        screenshot = result if action == "screenshot" and isinstance(result, dict) else None
+        if not self._screenshot_has_path(screenshot):
+            target_browser_id = self._browser_id_from_result(result) or requested_browser_id
+            output_path = self._history_screenshot_path(action)
+            if not output_path:
+                return
+            try:
+                screenshot = await runtime.call(
+                    "screenshot_file",
+                    target_browser_id,
+                    quality=HISTORY_SCREENSHOT_QUALITY,
+                    full_page=False,
+                    path=output_path,
+                )
+            except Exception as exc:
+                PrintStyle.debug(
+                    "Browser history screenshot capture failed:",
+                    f"browser_id={target_browser_id}",
+                    f"quality={HISTORY_SCREENSHOT_QUALITY}",
+                    f"path={output_path}",
+                    f"error={exc}",
+                )
+                return
+
+        if not self._screenshot_has_path(screenshot):
+            return
+
+        local_path = str(screenshot.get("path") or files.fix_dev_path(str(screenshot.get("a0_path") or "")))
+        if not local_path:
+            return
+        uri = f"img://{local_path}&t={time.time()}"
+        state = screenshot.get("state") if isinstance(screenshot.get("state"), dict) else {}
+        self.log.update(
+            Screenshot=uri,
+            browser_snapshot={
+                "uri": uri,
+                "path": local_path,
+                "a0_path": screenshot.get("a0_path") or files.normalize_a0_path(local_path),
+                "mime": screenshot.get("mime") or "image/jpeg",
+                "browser_id": screenshot.get("browser_id") or state.get("id") or requested_browser_id,
+                "context_id": screenshot.get("context_id") or state.get("context_id") or "",
+            },
+        )
+
+    def _history_screenshot_path(self, action: str) -> str:
+        if not getattr(self, "agent", None) or not getattr(self.agent, "context", None):
+            return ""
+        context_id = str(getattr(self.agent.context, "id", "") or "").strip()
+        if not context_id:
+            return ""
+        from helpers import persist_chat
+
+        token = str(getattr(getattr(self, "log", None), "id", "") or uuid.uuid4())
+        safe_action = files.safe_file_name(str(action or "browser"))
+        safe_token = files.safe_file_name(token)
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        return str(
+            Path(persist_chat.get_chat_folder_path(context_id))
+            / "browser"
+            / "screenshots"
+            / f"{timestamp}-{safe_action}-{safe_token}.jpg"
+        )
+
+    @staticmethod
+    def _browser_id_from_result(result: Any) -> Any:
+        if not isinstance(result, dict):
+            return None
+        browsers = result.get("browsers") if isinstance(result.get("browsers"), list) else []
+        last_interacted_id = result.get("last_interacted_browser_id")
+        listed_browser = None
+        if last_interacted_id is not None:
+            listed_browser = next(
+                (
+                    browser
+                    for browser in browsers
+                    if isinstance(browser, dict) and str(browser.get("id")) == str(last_interacted_id)
+                ),
+                None,
+            )
+        if listed_browser is None and browsers:
+            listed_browser = next((browser for browser in browsers if isinstance(browser, dict)), None)
+        state = result.get("state") if isinstance(result.get("state"), dict) else {}
+        return (
+            result.get("id")
+            or result.get("browser_id")
+            or state.get("id")
+            or last_interacted_id
+            or (listed_browser or {}).get("id")
+        )
+
+    @staticmethod
+    def _screenshot_has_path(screenshot: Any) -> bool:
+        return isinstance(screenshot, dict) and bool(screenshot.get("path") or screenshot.get("a0_path"))
 
     @staticmethod
     def _format_result(action: str, result: Any) -> str:

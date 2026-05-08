@@ -50,3 +50,4 @@ agent_history.gif
 
 .agent/**
 .claude/**
+.playwright-cli/

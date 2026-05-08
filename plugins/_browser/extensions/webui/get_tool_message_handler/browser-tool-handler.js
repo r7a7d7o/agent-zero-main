@@ -14,6 +14,7 @@ import {
 } from "/js/messages.js";
 
 const BROWSER_SCREENSHOT_KVP_KEY = "Screenshot";
+const BROWSER_SNAPSHOT_META_KEY = "browser_snapshot";
 const BROWSER_SCREENSHOT_STYLE_ID = "a0-browser-screenshot-kvp-style";
 const AUTO_OPEN_WINDOW_MS = 10 * 60 * 1000;
 const PREVIEW_REFRESH_MS = 2500;
@@ -62,7 +63,14 @@ function normalizeBrowserAction(kvps = {}) {
   return String(kvps.action || "").trim().toLowerCase().replace("-", "_");
 }
 
+function browserSnapshotMeta(kvps = {}) {
+  return kvps?.[BROWSER_SNAPSHOT_META_KEY] && typeof kvps[BROWSER_SNAPSHOT_META_KEY] === "object"
+    ? kvps[BROWSER_SNAPSHOT_META_KEY]
+    : {};
+}
+
 function browserIdFromResult(result = {}, kvps = {}) {
+  const snapshotMeta = browserSnapshotMeta(kvps);
   const browsers = Array.isArray(result.browsers) ? result.browsers : [];
   const lastInteractedId = result.last_interacted_browser_id;
   const listedBrowser = lastInteractedId
@@ -74,12 +82,14 @@ function browserIdFromResult(result = {}, kvps = {}) {
     || result.state?.id
     || result.last_interacted_browser_id
     || listedBrowser?.id
+    || snapshotMeta.browser_id
     || kvps.browser_id
     || null
   );
 }
 
 function browserContextIdFromResult(result = {}, kvps = {}) {
+  const snapshotMeta = browserSnapshotMeta(kvps);
   const browserId = browserIdFromResult(result, kvps);
   const browsers = Array.isArray(result.browsers) ? result.browsers : [];
   const listedBrowser = browserId
@@ -89,6 +99,7 @@ function browserContextIdFromResult(result = {}, kvps = {}) {
     result.context_id
     || result.state?.context_id
     || listedBrowser?.context_id
+    || snapshotMeta.context_id
     || kvps.context_id
     || kvps.contextId
     || null
@@ -183,6 +194,16 @@ function snapshotToObjectUrl(snapshot) {
     chunks.push(bytes);
   }
   return URL.createObjectURL(new Blob(chunks, { type: snapshot.mime || "image/jpeg" }));
+}
+
+function staticScreenshotUri(kvps = {}) {
+  const metaUri = browserSnapshotMeta(kvps).uri;
+  const value = kvps?.[BROWSER_SCREENSHOT_KVP_KEY] || metaUri || "";
+  return typeof value === "string" && value.startsWith("img://") ? value : "";
+}
+
+function staticScreenshotSrc(uri = "") {
+  return uri ? uri.replace("img://", "/api/image_get?path=") : "";
 }
 
 function releaseLiveScreenshotFrame(viewerId) {
@@ -299,7 +320,7 @@ function ensureBrowserScreenshotStyles() {
   document.head.appendChild(style);
 }
 
-function renderBrowserScreenshotKvp(kvpsTable, resolveBrowserPayload, label) {
+function renderBrowserScreenshotKvp(kvpsTable, resolveBrowserPayload, label, staticUri = "") {
   if (!kvpsTable || typeof resolveBrowserPayload !== "function") return;
   ensureBrowserScreenshotStyles();
 
@@ -334,11 +355,17 @@ function renderBrowserScreenshotKvp(kvpsTable, resolveBrowserPayload, label) {
 
   cell.textContent = "";
   cell.appendChild(button);
-  cell.__browserScreenshotCleanup = startBrowserScreenshotPreview(
-    button,
-    button.querySelector(".browser-screenshot-kvp-image"),
-    resolveBrowserPayload,
-  );
+  const image = button.querySelector(".browser-screenshot-kvp-image");
+  if (staticUri) {
+    image.src = staticScreenshotSrc(staticUri);
+    button.classList.add("has-frame");
+    cell.__browserScreenshotCleanup = () => {
+      image.removeAttribute("src");
+      button.classList.remove("has-frame");
+    };
+    return;
+  }
+  cell.__browserScreenshotCleanup = startBrowserScreenshotPreview(button, image, resolveBrowserPayload);
 }
 
 function startBrowserScreenshotPreview(button, image, resolveBrowserPayload) {
@@ -447,6 +474,7 @@ function drawBrowserTool({
   ].filter(Boolean);
   const contentText = String(content ?? "");
   const browserResult = parseBrowserResult(contentText);
+  const screenshotUri = staticScreenshotUri(kvps);
   const browserId = browserIdFromResult(browserResult, kvps);
   const browserCanvasPayload = buildBrowserCanvasPayload(browserResult, kvps);
   const browserPreviewLabel = browserId
@@ -455,6 +483,10 @@ function drawBrowserTool({
   if (shouldRenderBrowserScreenshotKvp(browserResult, kvps)) {
     displayKvps[BROWSER_SCREENSHOT_KVP_KEY] = "";
   }
+  if (screenshotUri) {
+    displayKvps[BROWSER_SCREENSHOT_KVP_KEY] = screenshotUri;
+  }
+  delete displayKvps[BROWSER_SNAPSHOT_META_KEY];
   const browserButton = createActionButton(
     "visibility",
     "Browser",
@@ -503,6 +535,7 @@ function drawBrowserTool({
       || buildBrowserCanvasPayload({}, kvps)
     ),
     browserPreviewLabel,
+    screenshotUri,
   );
   syncOpenBrowserCanvas(args, browserResult);
   return result;

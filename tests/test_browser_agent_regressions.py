@@ -1057,6 +1057,9 @@ def test_browser_viewer_uses_cdp_screencast_transport():
     browser_store = (
         PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-store.js"
     ).read_text(encoding="utf-8")
+    browser_tool_handler = (
+        PROJECT_ROOT / "plugins" / "_browser" / "extensions" / "webui" / "get_tool_message_handler" / "browser-tool-handler.js"
+    ).read_text(encoding="utf-8")
 
     assert 'runtime.call("screenshot"' in ws_browser
     assert "SCREENCAST_QUALITY = 92" in ws_browser
@@ -1096,6 +1099,10 @@ def test_browser_viewer_uses_cdp_screencast_transport():
     assert "this.applySnapshot(data.snapshot);" in browser_store
     assert "else if (!data.state)" in browser_store
     assert '"snapshot": snapshot' in ws_browser
+    assert 'const BROWSER_SNAPSHOT_META_KEY = "browser_snapshot";' in browser_tool_handler
+    assert "staticScreenshotUri(kvps)" in browser_tool_handler
+    assert "delete displayKvps[BROWSER_SNAPSHOT_META_KEY];" in browser_tool_handler
+    assert "startBrowserScreenshotPreview(button, image, resolveBrowserPayload)" in browser_tool_handler
     assert "FRAME_FALLBACK_SCREENSHOT_SECONDS" not in ws_browser
     assert '"frame_source": "state"' in ws_browser
     assert '"frame_source"] = "screencast"' in ws_browser
@@ -1665,6 +1672,84 @@ async def test_browser_tool_dispatches_v1_agent_actions(monkeypatch):
         ("set_checked", (1, 7), {"checked": False}),
         ("upload_file", (1, 8), {"path": "", "paths": ["/tmp/a.txt"]}),
     ]
+
+
+@pytest.mark.anyio
+async def test_browser_tool_records_static_history_screenshot(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeRuntime:
+        async def call(self, method, *args, **kwargs):
+            calls.append((method, args, kwargs))
+            if method == "open":
+                return {
+                    "id": 1,
+                    "state": {
+                        "id": 1,
+                        "context_id": "browser-context",
+                        "currentUrl": "https://example.com/",
+                        "title": "Example Domain",
+                    },
+                }
+            if method == "screenshot_file":
+                Path(kwargs["path"]).parent.mkdir(parents=True, exist_ok=True)
+                Path(kwargs["path"]).write_bytes(b"jpeg")
+                return {
+                    "browser_id": args[0],
+                    "path": kwargs["path"],
+                    "a0_path": "/a0/usr/chats/chat/browser/screenshots/open.jpg",
+                    "mime": "image/jpeg",
+                    "state": {"id": args[0], "context_id": "browser-context"},
+                }
+            raise AssertionError(method)
+
+    async def fake_get_runtime(context_id, create=True, agent=None):
+        del create, agent
+        assert context_id == "chat"
+        return FakeRuntime()
+
+    class FakeLog:
+        id = "tool-log-id"
+
+        def __init__(self):
+            self.updates = []
+
+        def update(self, **kwargs):
+            self.updates.append(kwargs)
+
+    monkeypatch.setattr(browser_tool_module, "get_runtime", fake_get_runtime)
+    monkeypatch.setitem(
+        sys.modules,
+        "helpers.persist_chat",
+        SimpleNamespace(
+            get_chat_folder_path=lambda context_id: str(tmp_path / "usr" / "chats" / context_id)
+        ),
+    )
+
+    log = FakeLog()
+    tool = browser_tool_module.Browser(
+        agent=SimpleNamespace(context=SimpleNamespace(id="chat")),
+        name="browser",
+        method=None,
+        args={"action": "open", "url": "https://example.com"},
+        message="",
+        loop_data=None,
+    )
+    tool.log = log
+
+    response = await tool.execute(action="open", url="https://example.com")
+
+    assert response.break_loop is False
+    assert calls[0] == ("open", ("https://example.com",), {})
+    assert calls[1][0] == "screenshot_file"
+    assert calls[1][1] == (1,)
+    assert calls[1][2]["quality"] == browser_tool_module.HISTORY_SCREENSHOT_QUALITY
+    assert calls[1][2]["full_page"] is False
+    assert Path(calls[1][2]["path"]).parent == tmp_path / "usr" / "chats" / "chat" / "browser" / "screenshots"
+    assert Path(calls[1][2]["path"]).read_bytes() == b"jpeg"
+    assert log.updates[-1]["Screenshot"].startswith("img://")
+    assert log.updates[-1]["browser_snapshot"]["browser_id"] == 1
+    assert log.updates[-1]["browser_snapshot"]["context_id"] == "browser-context"
 
 
 @pytest.mark.anyio
