@@ -36,6 +36,7 @@ def test_host_browser_metadata_selection_is_context_scoped():
                 "status": "ready",
                 "browser_family": "chrome",
                 "profile_label": "Default",
+                "content_helper_sha256": "abc123",
                 "features": ["open", "content"],
             },
         )
@@ -44,6 +45,7 @@ def test_host_browser_metadata_selection_is_context_scoped():
         rows = ws_runtime.host_browser_metadata_for_context(context_id)
         assert rows[0]["browser_family"] == "chrome"
         assert rows[0]["enabled"] is True
+        assert rows[0]["content_helper_sha256"] == "abc123"
     finally:
         ws_runtime.unregister_sid(sid)
 
@@ -323,6 +325,8 @@ def test_connector_runtime_ensures_preparable_host_browser_before_action(monkeyp
 
             assert result == {"id": 1, "state": {"runtime": "host"}}
             assert [payload["action"] for payload in emitted] == ["ensure", "open"]
+            assert "__spaceBrowserPageContent__" in emitted[0]["content_helper"]["source"]
+            assert emitted[0]["content_helper"]["sha256"]
         finally:
             ws_runtime.unregister_sid(sid)
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -40,6 +42,7 @@ from plugins._browser.helpers.config import (
 BROWSER_OP_EVENT = "connector_browser_op"
 BROWSER_OP_TIMEOUT = 120.0
 HOST_BROWSER_SCREENSHOT_DIR = ("tmp", "browser", "host-screenshots")
+CONTENT_HELPER_PATH = Path(__file__).resolve().parents[1] / "assets" / "browser-page-content.js"
 MAX_ARTIFACT_SIZE_BYTES = 25 * 1024 * 1024
 BASE64_DECODE_CHARS_PER_CHUNK = 64 * 1024
 _LOCAL_PROVIDERS = {"ollama", "lm_studio"}
@@ -167,15 +170,26 @@ class ConnectorBrowserRuntime:
         if self._needs_prepare(sid, payload):
             await self._send_browser_op(
                 sid,
-                {
-                    "op_id": str(uuid.uuid4()),
-                    "context_id": self.context_id,
-                    "action": "ensure",
-                },
+                self._with_content_helper(
+                    sid,
+                    {
+                        "op_id": str(uuid.uuid4()),
+                        "context_id": self.context_id,
+                        "action": "ensure",
+                    },
+                ),
             )
             sid = self._select_sid() or sid
 
-        return await self._send_browser_op(sid, payload)
+        return await self._send_browser_op(sid, self._with_content_helper(sid, payload))
+
+    def _with_content_helper(self, sid: str, payload: dict[str, Any]) -> dict[str, Any]:
+        metadata = host_browser_metadata_for_sid(sid) or {}
+        if str(metadata.get("content_helper_sha256") or "").strip().lower() == _content_helper_sha256():
+            return payload
+        payload = dict(payload)
+        payload["content_helper"] = _content_helper_payload()
+        return payload
 
     async def _send_browser_op(self, sid: str, payload: dict[str, Any]) -> Any:
         op_id = str(payload["op_id"])
@@ -333,6 +347,24 @@ class ConnectorBrowserRuntime:
                 f"reason={status.get('support_reason') or 'none'}"
             )
         return "; ".join(parts)
+
+
+@lru_cache(maxsize=1)
+def _content_helper_payload() -> dict[str, str]:
+    try:
+        source = CONTENT_HELPER_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(
+            f"Host-browser content helper could not be read from {CONTENT_HELPER_PATH}: {exc}"
+        ) from exc
+    return {
+        "source": source,
+        "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+    }
+
+
+def _content_helper_sha256() -> str:
+    return _content_helper_payload()["sha256"]
 
 
 def _agent_uses_local_chat_model(agent: Any) -> bool:

@@ -69,6 +69,7 @@ class HostBrowserMetadata:
     profile_label: str
     profile_path: str
     cdp_endpoint: str
+    content_helper_sha256: str
     features: tuple[str, ...]
     support_reason: str
     updated_at: float
@@ -371,6 +372,7 @@ def store_sid_host_browser_metadata(sid: str, payload: dict[str, Any]) -> HostBr
         profile_label=str(payload.get("profile_label", "") or "").strip(),
         profile_path=str(payload.get("profile_path", "") or "").strip(),
         cdp_endpoint=str(payload.get("cdp_endpoint", "") or "").strip(),
+        content_helper_sha256=str(payload.get("content_helper_sha256", "") or "").strip().lower(),
         features=features,
         support_reason=support_reason,
         updated_at=time.time(),
@@ -418,6 +420,7 @@ def host_browser_metadata_for_sid(sid: str) -> dict[str, Any] | None:
         "profile_label": metadata.profile_label,
         "profile_path": metadata.profile_path,
         "cdp_endpoint": metadata.cdp_endpoint,
+        "content_helper_sha256": metadata.content_helper_sha256,
         "features": list(metadata.features),
         "support_reason": metadata.support_reason,
         "updated_at": metadata.updated_at,
@@ -484,6 +487,7 @@ def all_host_browser_metadata() -> list[dict[str, Any]]:
                 "browser_family": metadata.browser_family,
                 "profile_label": metadata.profile_label,
                 "profile_path": metadata.profile_path,
+                "content_helper_sha256": metadata.content_helper_sha256,
                 "features": list(metadata.features),
                 "support_reason": metadata.support_reason,
                 "updated_at": metadata.updated_at,
