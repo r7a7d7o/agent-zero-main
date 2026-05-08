@@ -1091,7 +1091,11 @@ def test_browser_viewer_uses_cdp_screencast_transport():
     assert "this.frameState = data.state || null" not in browser_store
     assert "function loadFrameDimensions(src)" in browser_store
     assert "frameMatchesViewport(dimensions = null, viewport = null)" in browser_store
+    assert "shouldAcceptMismatchedFrame(dimensions = null)" in browser_store
     assert "requestViewportSyncAfterRejectedFrame()" in browser_store
+    assert "this.applySnapshot(data.snapshot);" in browser_store
+    assert "else if (!data.state)" in browser_store
+    assert '"snapshot": snapshot' in ws_browser
     assert "FRAME_FALLBACK_SCREENSHOT_SECONDS" not in ws_browser
     assert '"frame_source": "state"' in ws_browser
     assert '"frame_source"] = "screencast"' in ws_browser
@@ -1828,6 +1832,64 @@ async def test_browser_viewer_subscribe_can_create_blank_tab_when_requested(monk
     assert fake_runtime.opened is True
 
     await handler.on_disconnect("sid-create")
+
+
+@pytest.mark.anyio
+async def test_browser_viewer_subscribe_returns_initial_snapshot(monkeypatch):
+    calls = []
+
+    class FakeRuntime:
+        async def call(self, method, *args, **kwargs):
+            calls.append((method, args, kwargs))
+            if method == "list":
+                return {
+                    "browsers": [{"id": 1, "context_id": "ctx", "currentUrl": "https://example.com/"}],
+                    "last_interacted_browser_id": 1,
+                }
+            if method == "set_viewport":
+                return {"state": {"id": args[0], "currentUrl": "https://example.com/"}}
+            if method == "screenshot":
+                return {
+                    "browser_id": args[0],
+                    "mime": "image/jpeg",
+                    "image": "jpeg-data",
+                    "state": {"id": args[0], "context_id": "ctx", "currentUrl": "https://example.com/"},
+                }
+            raise AssertionError(method)
+
+    async def fake_get_runtime(context_id, create=True):
+        assert context_id == "ctx"
+        assert create is False
+        return FakeRuntime()
+
+    async def fake_all_browser_tabs():
+        return [{"id": 1, "context_id": "ctx", "currentUrl": "https://example.com/"}]
+
+    monkeypatch.setattr(ws_browser_module, "get_runtime", fake_get_runtime)
+    monkeypatch.setattr(ws_browser_module, "list_runtime_sessions", fake_all_browser_tabs)
+    monkeypatch.setattr(
+        ws_browser_module.AgentContext,
+        "get",
+        staticmethod(lambda context_id: SimpleNamespace(id=context_id)),
+    )
+
+    handler = ws_browser_module.WsBrowser(
+        SimpleNamespace(),
+        threading.RLock(),
+        manager=None,
+    )
+
+    result = await handler.process(
+        "browser_viewer_subscribe",
+        {"context_id": "ctx", "browser_id": 1, "viewport_width": 900, "viewport_height": 600},
+        "sid-snapshot",
+    )
+
+    assert result["active_browser_id"] == 1
+    assert result["snapshot"]["image"] == "jpeg-data"
+    assert ("screenshot", (1,), {"quality": ws_browser_module.SCREENCAST_QUALITY}) in calls
+
+    await handler.on_disconnect("sid-snapshot")
 
 
 @pytest.mark.anyio

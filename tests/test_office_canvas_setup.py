@@ -166,6 +166,9 @@ def test_desktop_plugin_owns_routes_runtime_surface_and_state_paths():
 
     assert "virtual_desktop_routes.install_route_hooks()" in desktop_startup
     assert 'action in {"open_document", "document"}' in desktop_api
+    assert "markdown_sessions" in desktop_api
+    assert 'if ext == "md":' in desktop_api
+    assert "return self._open_markdown(doc, input, request)" in desktop_api
     assert '"status": desktop.get("status") or {}' in desktop_api
     assert 'callJsonApi("/plugins/_desktop/desktop_session"' in desktop_store
     assert 'callDesktop("open_document"' in desktop_store
@@ -233,7 +236,9 @@ def test_document_artifacts_only_open_desktop_from_explicit_document_ui_requests
     assert "officeStore" in auto_open
     assert "openDocumentInDesktop" in document_actions
     assert "openDocumentArtifact" in document_actions
-    assert "ensureModalOpen" in document_actions
+    assert "await openDocumentInDesktop(kvps);" in document_actions
+    assert 'ensureModalOpen("/plugins/_office/webui/main.html")' not in document_actions
+    assert 'ensureModalOpen("/plugins/_office/webui/main.html")' not in auto_open
     assert "Open Document" in document_actions
     assert 'openSurface("desktop"' in document_actions
     assert "Edit in Writer" in document_actions

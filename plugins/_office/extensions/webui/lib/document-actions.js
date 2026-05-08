@@ -2,9 +2,7 @@ import {
   createActionButton,
   copyToClipboard,
 } from "/components/messages/action-buttons/simple-action-buttons.js";
-import { ensureModalOpen } from "/js/modals.js";
 import { open as openSurface } from "/js/surfaces.js";
-import { store as officeStore } from "/plugins/_office/webui/office-store.js";
 
 function basename(path = "") {
   const value = String(path || "").split("?")[0].split("#")[0];
@@ -46,17 +44,7 @@ export async function openDocumentInDesktop(kvps = {}) {
 }
 
 export async function openDocumentArtifact(kvps = {}) {
-  if (usesDesktop(kvps)) {
-    await openDocumentInDesktop(kvps);
-    return;
-  }
-  await ensureModalOpen("/plugins/_office/webui/main.html");
-  await officeStore.openSession?.({
-    path: kvps.path || "",
-    file_id: kvps.file_id || "",
-    refresh: true,
-    source: "message-action",
-  });
+  await openDocumentInDesktop(kvps);
 }
 
 function usesDesktop(doc = {}) {

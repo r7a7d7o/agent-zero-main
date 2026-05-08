@@ -973,6 +973,7 @@ const model = {
       data.active_browser_id || requestedBrowserId || this.activeBrowserId || null,
       data.active_browser_context_id || contextId,
     );
+    this.applySnapshot(data.snapshot);
 	    this.connected = true;
 	    this.browserInstallExpected = false;
 	  },
@@ -1016,11 +1017,9 @@ const model = {
               this._surfaceSwitching = false;
             },
           });
-        } else {
+        } else if (!data.state) {
           this.cancelFrameRender();
-          if (!data.state) {
-            this.frameSrc = "";
-          }
+          this.frameSrc = "";
         }
         if (!data.image && !data.state) {
           if (!this.activeBrowserId) {
@@ -1113,7 +1112,9 @@ const model = {
     const viewport = this.currentViewportSize() || this._lastViewport;
     if (!this.frameMatchesViewport(dimensions, viewport)) {
       this.requestViewportSyncAfterRejectedFrame();
-      return;
+      if (!this.shouldAcceptMismatchedFrame(dimensions)) {
+        return;
+      }
     }
     this.frameSrc = frameSrc;
     this._lastFrameDimensions = dimensions;
@@ -1121,6 +1122,14 @@ const model = {
     options?.onAccepted?.();
     this._canvasFirstFrameAcceptedSequence = surfaceSequence;
     this.scheduleCanvasWidthNudgeAfterFirstFrame();
+  },
+
+  shouldAcceptMismatchedFrame(dimensions = null) {
+    return Boolean(
+      dimensions?.width
+      && dimensions?.height
+      && (!this.frameSrc || this._surfaceSwitching || this.isSwitchingBrowser())
+    );
   },
 
   scheduleCanvasWidthNudgeAfterFirstFrame() {

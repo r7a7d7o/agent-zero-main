@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -163,3 +164,11 @@ def test_created_response_does_not_claim_canvas_was_opened():
     assert "Created **Project Brief.md**." in message
     assert "opened" not in message.lower()
     assert "Path: `/a0/usr/workdir/Project Brief.md`" in message
+
+
+def test_document_response_affordance_only_runs_for_primary_agent():
+    assert document_affordance.is_subordinate_agent(SimpleNamespace(number=0, agent_name="A0")) is False
+    assert document_affordance.is_subordinate_agent(SimpleNamespace(number=1, agent_name="A1")) is True
+    assert document_affordance.is_subordinate_agent(SimpleNamespace(agent_name="A2")) is True
+    assert document_affordance.is_subordinate_agent(SimpleNamespace(agent_name="0")) is False
+    assert document_affordance.is_subordinate_agent(SimpleNamespace(data={"_superior": object()})) is True

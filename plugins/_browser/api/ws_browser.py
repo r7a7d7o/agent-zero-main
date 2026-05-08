@@ -92,15 +92,18 @@ class WsBrowser(WsHandler):
         if existing:
             existing.cancel()
         viewer_id = str(data.get("viewer_id") or "")
+        snapshot = None
         if runtime:
             self._streams[stream_key] = asyncio.create_task(
                 self._stream_frames(sid, context_id, active_id, viewer_id)
             )
+            snapshot = await self._snapshot_for_browser(runtime, active_id)
 
         return {
             "context_id": context_id,
             "active_browser_context_id": context_id,
             "active_browser_id": active_id,
+            "snapshot": snapshot,
             "browsers": await self._all_browser_tabs(),
             "all_browsers": True,
             "viewer_id": viewer_id,
@@ -331,6 +334,17 @@ class WsBrowser(WsHandler):
             return None
         state = result.get("state") if isinstance(result.get("state"), dict) else result
         browser_id = state.get("id") if isinstance(state, dict) else result.get("id")
+        if not browser_id:
+            return None
+        with contextlib.suppress(Exception):
+            return await runtime.call("screenshot", browser_id, quality=SCREENCAST_QUALITY)
+        return None
+
+    async def _snapshot_for_browser(
+        self,
+        runtime: Any,
+        browser_id: int | str | None,
+    ) -> dict[str, Any] | None:
         if not browser_id:
             return None
         with contextlib.suppress(Exception):

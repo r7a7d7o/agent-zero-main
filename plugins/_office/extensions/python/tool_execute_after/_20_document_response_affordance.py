@@ -22,6 +22,8 @@ class DocumentResponseAffordance(Extension):
     ):
         if not self.agent or response is None:
             return
+        if document_affordance.is_subordinate_agent(self.agent):
+            return
 
         if tool_name == "document_artifact":
             if (response.additional or {}).get("file_id"):

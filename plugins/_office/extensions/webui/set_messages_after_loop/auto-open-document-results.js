@@ -1,9 +1,7 @@
 import { store as officeStore } from "/plugins/_office/webui/office-store.js";
-import { ensureModalOpen } from "/js/modals.js";
 import { open as openSurface } from "/js/surfaces.js";
 
 const SYNC_WINDOW_MS = 10 * 60 * 1000;
-const DESKTOP_DOCUMENT_EXTENSIONS = new Set(["odt", "ods", "odp", "docx", "xlsx", "pptx"]);
 const syncedDocumentResults = new Set();
 
 export default async function syncDocumentResultsIntoOpenOfficeModal(context) {
@@ -112,27 +110,12 @@ function isExplicitDocumentUiRequest(payload = {}) {
 }
 
 async function openDocumentUiFromResult(target = {}, payload = {}, document = {}) {
-  if (isDesktopDocument(payload, document)) {
-    await openSurface("desktop", {
-      path: target.path || "",
-      file_id: target.file_id || "",
-      refresh: true,
-      source: "tool-result-open",
-    });
-    return;
-  }
-
-  await ensureModalOpen("/plugins/_office/webui/main.html");
-  await officeStore.openSession?.({
+  await openSurface("desktop", {
     path: target.path || "",
     file_id: target.file_id || "",
     refresh: true,
     source: "tool-result-open",
   });
-}
-
-function isDesktopDocument(payload = {}, document = {}) {
-  return DESKTOP_DOCUMENT_EXTENSIONS.has(documentExtension(payload, document));
 }
 
 function documentExtension(payload = {}, document = {}) {
