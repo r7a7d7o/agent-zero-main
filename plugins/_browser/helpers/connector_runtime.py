@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import re
 import uuid
 from functools import lru_cache
 from pathlib import Path
@@ -37,6 +38,7 @@ from plugins._browser.helpers.config import (
     HOST_BROWSER_PRIVACY_POLICY_KEY,
     get_browser_config,
 )
+from plugins._browser.helpers.url import normalize_url
 
 
 BROWSER_OP_EVENT = "connector_browser_op"
@@ -48,6 +50,10 @@ BASE64_DECODE_CHARS_PER_CHUNK = 64 * 1024
 _LOCAL_PROVIDERS = {"ollama", "lm_studio"}
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
 _SENSITIVE_ACTIONS = {"content", "detail", "evaluate", "screenshot", "screenshot_file"}
+_REQUIRED_API_NAMES_RE = re.compile(
+    r"const\s+REQUIRED_API_NAMES\s*=\s*Object\.freeze\(\[(?P<body>.*?)\]\);",
+    re.S,
+)
 
 
 class ConnectorBrowserRuntime:
@@ -76,12 +82,12 @@ class ConnectorBrowserRuntime:
         }
 
         if action == "open":
-            payload["url"] = args[0] if args else ""
+            payload["url"] = self._normalize_open_url(args[0] if args else "")
         elif action in {"state", "set_active", "back", "forward", "reload"}:
             payload["browser_id"] = args[0] if args else None
         elif action == "navigate":
             payload["browser_id"] = args[0] if args else None
-            payload["url"] = args[1] if len(args) > 1 else ""
+            payload["url"] = normalize_url(args[1] if len(args) > 1 else "")
         elif action == "screenshot_file":
             payload["action"] = "screenshot"
             payload["browser_id"] = args[0] if args else None
@@ -145,7 +151,7 @@ class ConnectorBrowserRuntime:
             payload["ref"] = args[1] if len(args) > 1 else None
             payload.update(kwargs)
         elif action == "multi":
-            payload["calls"] = args[0] if args else []
+            payload["calls"] = self._normalize_multi_calls(args[0] if args else [])
         elif action == "close_browser":
             payload["action"] = "close"
             payload["browser_id"] = args[0] if args else None
@@ -155,6 +161,31 @@ class ConnectorBrowserRuntime:
             payload.update(kwargs)
 
         return payload
+
+    @staticmethod
+    def _normalize_open_url(value: Any) -> str:
+        raw = str(value or "").strip()
+        return normalize_url(raw) if raw else ""
+
+    @classmethod
+    def _normalize_multi_calls(cls, calls: Any) -> Any:
+        if not isinstance(calls, list):
+            return calls
+        normalized_calls: list[Any] = []
+        for call in calls:
+            if not isinstance(call, dict):
+                normalized_calls.append(call)
+                continue
+            normalized = dict(call)
+            action = str(normalized.get("action") or "").strip().lower().replace("-", "_")
+            if action == "open":
+                normalized["url"] = cls._normalize_open_url(normalized.get("url"))
+            elif action == "navigate":
+                normalized["url"] = normalize_url(normalized.get("url", ""))
+            elif action == "multi" or isinstance(normalized.get("calls"), list):
+                normalized["calls"] = cls._normalize_multi_calls(normalized.get("calls", []))
+            normalized_calls.append(normalized)
+        return normalized_calls
 
     async def _dispatch(self, payload: dict[str, Any]) -> Any:
         self._enforce_privacy(payload)
@@ -350,7 +381,7 @@ class ConnectorBrowserRuntime:
 
 
 @lru_cache(maxsize=1)
-def _content_helper_payload() -> dict[str, str]:
+def _content_helper_payload() -> dict[str, Any]:
     try:
         source = CONTENT_HELPER_PATH.read_text(encoding="utf-8")
     except OSError as exc:
@@ -358,13 +389,28 @@ def _content_helper_payload() -> dict[str, str]:
             f"Host-browser content helper could not be read from {CONTENT_HELPER_PATH}: {exc}"
         ) from exc
     return {
+        "required_apis": _content_helper_required_apis(source),
         "source": source,
         "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
     }
 
 
 def _content_helper_sha256() -> str:
-    return _content_helper_payload()["sha256"]
+    return str(_content_helper_payload()["sha256"])
+
+
+def _content_helper_required_apis(source: str) -> list[str]:
+    match = _REQUIRED_API_NAMES_RE.search(source)
+    if not match:
+        raise RuntimeError(
+            f"Host-browser content helper from {CONTENT_HELPER_PATH} does not declare REQUIRED_API_NAMES."
+        )
+    names = re.findall(r'"([^"]+)"', match.group("body"))
+    if not names:
+        raise RuntimeError(
+            f"Host-browser content helper from {CONTENT_HELPER_PATH} declares no required API names."
+        )
+    return names
 
 
 def _agent_uses_local_chat_model(agent: Any) -> bool:

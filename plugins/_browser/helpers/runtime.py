@@ -14,7 +14,6 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 from helpers import files
 from helpers.defer import DeferredTask
@@ -26,6 +25,7 @@ from plugins._browser.helpers.config import (
     get_browser_config,
 )
 from plugins._browser.helpers.playwright import configure_playwright_env, ensure_playwright_binary
+from plugins._browser.helpers.url import normalize_url
 
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
@@ -275,17 +275,6 @@ CLIPBOARD_BRIDGE_SCRIPT = r"""
 }
 """
 
-_SPECIAL_SCHEME_RE = re.compile(r"^(?:about|blob|data|file|mailto|tel):", re.I)
-_URL_SCHEME_RE = re.compile(r"^[a-z][a-z\d+\-.]*://", re.I)
-_LOCAL_HOST_RE = re.compile(
-    r"^(?:localhost|\[[0-9a-f:.]+\]|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?$",
-    re.I,
-)
-_TYPED_HOST_RE = re.compile(
-    r"^(?:localhost|\[[0-9a-f:.]+\]|(?:\d{1,3}\.){3}\d{1,3}|"
-    r"(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z\d-]{2,63})(?::\d+)?$",
-    re.I,
-)
 _SAFE_CONTEXT_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 
 
@@ -299,38 +288,6 @@ def _nudged_viewport(viewport: dict[str, int]) -> dict[str, int]:
     if height < 4096:
         return {"width": width, "height": height + 1}
     return {"width": width, "height": height - 1}
-
-
-def normalize_url(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        raise ValueError("Browser navigation requires a non-empty URL.")
-
-    def with_trailing_path(url: str) -> str:
-        parts = urlsplit(url)
-        if parts.scheme in {"http", "https"} and not parts.path:
-            return urlunsplit((parts.scheme, parts.netloc, "/", parts.query, parts.fragment))
-        return urlunsplit(parts)
-
-    try:
-        host = re.split(r"[/?#]", raw, maxsplit=1)[0] or ""
-        if (
-            not _URL_SCHEME_RE.match(raw)
-            and not _SPECIAL_SCHEME_RE.match(raw)
-            and not raw.startswith(("/", "?", "#", "."))
-            and not re.search(r"\s", raw)
-            and _TYPED_HOST_RE.match(host)
-        ):
-            protocol = "http://" if _LOCAL_HOST_RE.match(host) else "https://"
-            return with_trailing_path(protocol + raw)
-
-        parts = urlsplit(raw)
-        if parts.scheme:
-            return with_trailing_path(raw)
-    except Exception:
-        pass
-
-    return with_trailing_path("https://" + raw)
 
 
 def _safe_context_id(context_id: str) -> str:
@@ -816,7 +773,6 @@ class _BrowserRuntimeCore:
         self.context.set_default_navigation_timeout(30000)
         self.context.on("close", self._on_context_closed)
         self.context.on("page", self._on_new_page_sync)
-        await self.context.add_init_script(self._shadow_dom_script())
         await self.context.add_init_script(path=str(CONTENT_HELPER_PATH))
 
         for page in list(self.context.pages):
@@ -2258,29 +2214,13 @@ class _BrowserRuntimeCore:
 
     async def _ensure_content_helper(self, page: Any) -> None:
         has_helper = await page.evaluate(
-            "() => Boolean(globalThis.__spaceBrowserPageContent__?.capture && globalThis.__spaceBrowserPageContent__?.annotate && globalThis.__spaceBrowserPageContent__?.boundingBoxFor && globalThis.__spaceBrowserPageContent__?.pointFor && globalThis.__spaceBrowserPageContent__?.select && globalThis.__spaceBrowserPageContent__?.setChecked && globalThis.__spaceBrowserPageContent__?.fileInputFor)"
+            "() => Boolean(globalThis.__spaceBrowserPageContent__?.ready?.())"
         )
         if has_helper:
             return
         if self._content_helper_source is None:
             self._content_helper_source = CONTENT_HELPER_PATH.read_text(encoding="utf-8")
         await page.evaluate(self._content_helper_source)
-
-    @staticmethod
-    def _shadow_dom_script() -> str:
-        return """
-(() => {
-  const original = Element.prototype.attachShadow;
-  if (original && !original.__a0BrowserOpenShadowPatch) {
-    const patched = function attachShadow(options) {
-      return original.call(this, { ...(options || {}), mode: "open" });
-    };
-    patched.__a0BrowserOpenShadowPatch = true;
-    Element.prototype.attachShadow = patched;
-  }
-})();
-"""
-
 
 _runtimes: dict[str, BrowserRuntime] = {}
 _runtime_lock = threading.RLock()

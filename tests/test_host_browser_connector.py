@@ -196,6 +196,34 @@ def test_host_browser_privacy_blocks_cloud_content(monkeypatch):
         runtime._enforce_privacy({"action": "content"})
 
 
+def test_connector_runtime_normalizes_host_navigation_payloads():
+    runtime = ConnectorBrowserRuntime("ctx-host", _agent("ctx-host"))
+
+    open_payload = runtime._payload_for_call("open", "localhost:3000")
+    empty_open_payload = runtime._payload_for_call("open", "")
+    navigate_payload = runtime._payload_for_call("navigate", 7, "novinky.cz")
+    multi_payload = runtime._payload_for_call(
+        "multi",
+        [
+            {"action": "open", "url": "example.com"},
+            {"action": "navigate", "browser_id": 1, "url": "127.0.0.1:8000/path"},
+            {
+                "action": "multi",
+                "calls": [{"action": "open", "url": "nested.example"}],
+            },
+            {"action": "content", "browser_id": 1},
+        ],
+    )
+
+    assert open_payload["url"] == "http://localhost:3000/"
+    assert empty_open_payload["url"] == ""
+    assert navigate_payload["url"] == "https://novinky.cz/"
+    assert multi_payload["calls"][0]["url"] == "https://example.com/"
+    assert multi_payload["calls"][1]["url"] == "http://127.0.0.1:8000/path"
+    assert multi_payload["calls"][2]["calls"][0]["url"] == "https://nested.example/"
+    assert multi_payload["calls"][3] == {"action": "content", "browser_id": 1}
+
+
 def test_host_browser_artifacts_materialize_inside_multi_results(monkeypatch, tmp_path):
     import plugins._browser.helpers.connector_runtime as connector_runtime_module
 
@@ -326,6 +354,7 @@ def test_connector_runtime_ensures_preparable_host_browser_before_action(monkeyp
             assert result == {"id": 1, "state": {"runtime": "host"}}
             assert [payload["action"] for payload in emitted] == ["ensure", "open"]
             assert "__spaceBrowserPageContent__" in emitted[0]["content_helper"]["source"]
+            assert "capture" in emitted[0]["content_helper"]["required_apis"]
             assert emitted[0]["content_helper"]["sha256"]
         finally:
             ws_runtime.unregister_sid(sid)

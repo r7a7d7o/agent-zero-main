@@ -79,6 +79,7 @@ sys.modules.setdefault("plugins._model_config.helpers.model_config", _model_conf
 def anyio_backend():
     return "asyncio"
 
+from helpers.errors import RepairableException
 from plugins._browser.helpers.config import (
     build_browser_launch_config,
     get_browser_main_model_summary,
@@ -134,6 +135,8 @@ def test_browser_url_normalization_matches_address_bar_hosts():
     assert normalize_url("novinky.cz") == "https://novinky.cz/"
     assert normalize_url("https://example.com") == "https://example.com/"
     assert normalize_url("about:blank") == "about:blank"
+    with pytest.raises(RepairableException, match="relative"):
+        normalize_url("/docs")
 
 
 def test_browser_config_normalizes_extension_paths(tmp_path):
@@ -1201,6 +1204,13 @@ def test_browser_content_helper_keeps_label_wrapped_controls_referenceable():
     ).read_text(encoding="utf-8")
 
     assert 'const VERSION = "11"' in helper
+    assert "function patchOpenShadowDom" in helper
+    assert "Element.prototype.attachShadow = patched" in helper
+    assert "const REQUIRED_API_NAMES = Object.freeze([" in helper
+    assert "requiredApis: REQUIRED_API_NAMES.slice()" in helper
+    assert "ready()" in helper
+    for api_name in ("click", "scroll", "submit", "type", "typeSubmit"):
+        assert f'"{api_name}"' in helper
     assert "function renderControlLabelReferences" in helper
     assert "getLabelElementText(labelElement, element)" in helper
     assert "return renderControlLabelReferences(node, context);" in helper
@@ -1212,7 +1222,7 @@ def test_browser_runtime_requires_current_content_helper_for_modifier_clicks():
         PROJECT_ROOT / "plugins" / "_browser" / "helpers" / "runtime.py"
     ).read_text(encoding="utf-8")
 
-    assert "__spaceBrowserPageContent__?.boundingBoxFor" in runtime
+    assert "__spaceBrowserPageContent__?.ready?.()" in runtime
 
 
 @pytest.mark.anyio
