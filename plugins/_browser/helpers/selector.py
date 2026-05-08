@@ -59,7 +59,8 @@ def _host_browser_status_detail(context_id: str) -> str:
     for status in statuses:
         parts.append(
             f"sid={status.get('sid')} supported={status.get('supported')} "
-            f"enabled={status.get('enabled')} status={status.get('status') or 'unknown'} "
+            f"can_prepare={status.get('can_prepare')} enabled={status.get('enabled')} "
+            f"status={status.get('status') or 'unknown'} "
             f"reason={status.get('support_reason') or 'none'}"
         )
     return "; ".join(parts)

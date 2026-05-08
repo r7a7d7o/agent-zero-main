@@ -53,27 +53,27 @@
         <div class="browser-config-card">
           <div class="section-title">Host Browser</div>
           <div class="section-description">
-            Route the existing Browser tool through A0 CLI. When host mode is selected, the first browser action can prepare the local browser automatically.
+            Use Chrome, Edge, or Chromium on this computer. Keep A0 CLI connected; the browser opens when the agent first needs it.
           </div>
 
           <label class="browser-config-field">
-            <span class="browser-config-field-label">Backend mode</span>
+            <span class="browser-config-field-label">Browser location</span>
             <select x-model="$store.browserConfig.config.runtime_backend">
-              <option value="container">Container</option>
-              <option value="host_when_available">Host when available</option>
-              <option value="host_required">Host required</option>
+              <option value="container">Docker browser</option>
+              <option value="host_when_available">Use host when ready</option>
+              <option value="host_required">Require host browser</option>
             </select>
-            <span class="browser-config-field-help">The WebUI setting is the routing intent; CLI browser commands are available for diagnostics and manual override.</span>
+            <span class="browser-config-field-help">Require host browser when pages must stay on this computer.</span>
           </label>
 
           <label class="browser-config-field">
-            <span class="browser-config-field-label">Host content policy</span>
+            <span class="browser-config-field-label">Page content access</span>
             <select x-model="$store.browserConfig.config.host_browser_privacy_policy">
-              <option value="enforce_local">Enforce local</option>
-              <option value="warn">Warn</option>
+              <option value="enforce_local">Local models only</option>
+              <option value="warn">Warn when using cloud</option>
               <option value="allow">Allow</option>
             </select>
-            <span class="browser-config-field-help">Local-model enforcement applies before host page content or screenshots are returned to the agent.</span>
+            <span class="browser-config-field-help">Controls page text and screenshots from the host browser.</span>
           </label>
 
           <div class="browser-config-note">

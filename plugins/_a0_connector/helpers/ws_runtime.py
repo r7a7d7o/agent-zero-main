@@ -62,11 +62,13 @@ class ComputerUseMetadata:
 @dataclass(frozen=True)
 class HostBrowserMetadata:
     supported: bool
+    can_prepare: bool
     enabled: bool
     status: str
     browser_family: str
     profile_label: str
     profile_path: str
+    cdp_endpoint: str
     features: tuple[str, ...]
     support_reason: str
     updated_at: float
@@ -359,20 +361,42 @@ def store_sid_host_browser_metadata(sid: str, payload: dict[str, Any]) -> HostBr
         features = tuple(str(item).strip() for item in features_value if str(item).strip())
     else:
         features = ()
+    support_reason = str(payload.get("support_reason", "") or "").strip()
     metadata = HostBrowserMetadata(
         supported=bool(payload.get("supported")),
+        can_prepare=_host_browser_can_prepare(payload, features=features, support_reason=support_reason),
         enabled=bool(payload.get("supported")) and bool(payload.get("enabled")),
         status=str(payload.get("status", "") or "").strip(),
         browser_family=str(payload.get("browser_family", "") or "").strip(),
         profile_label=str(payload.get("profile_label", "") or "").strip(),
         profile_path=str(payload.get("profile_path", "") or "").strip(),
+        cdp_endpoint=str(payload.get("cdp_endpoint", "") or "").strip(),
         features=features,
-        support_reason=str(payload.get("support_reason", "") or "").strip(),
+        support_reason=support_reason,
         updated_at=time.time(),
     )
     with _state_lock:
         _sid_host_browser_metadata[sid] = metadata
     return metadata
+
+
+def _host_browser_can_prepare(
+    payload: dict[str, Any],
+    *,
+    features: tuple[str, ...],
+    support_reason: str,
+) -> bool:
+    if "can_prepare" in payload:
+        return bool(payload.get("can_prepare"))
+    if "ensure" not in features:
+        return False
+    reason = support_reason.lower()
+    return (
+        "python playwright" in reason
+        or "a0-controlled local profile" in reason
+        or "chrome-a0" in reason
+        or "remote debugging" in reason
+    )
 
 
 def clear_sid_host_browser_metadata(sid: str) -> None:
@@ -387,11 +411,13 @@ def host_browser_metadata_for_sid(sid: str) -> dict[str, Any] | None:
         return None
     return {
         "supported": metadata.supported,
+        "can_prepare": metadata.can_prepare,
         "enabled": metadata.enabled,
         "status": metadata.status,
         "browser_family": metadata.browser_family,
         "profile_label": metadata.profile_label,
         "profile_path": metadata.profile_path,
+        "cdp_endpoint": metadata.cdp_endpoint,
         "features": list(metadata.features),
         "support_reason": metadata.support_reason,
         "updated_at": metadata.updated_at,
@@ -421,7 +447,7 @@ def select_host_browser_candidate_sid(context_id: str) -> str | None:
         fallback: str | None = None
         for sid in subscribers:
             metadata = _sid_host_browser_metadata.get(sid)
-            if not metadata or not metadata.supported:
+            if not metadata or not (metadata.supported or metadata.can_prepare):
                 continue
             if metadata.enabled and metadata.status in {"ready", "active"}:
                 return sid

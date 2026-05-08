@@ -328,7 +328,8 @@ class ConnectorBrowserRuntime:
         for status in statuses:
             parts.append(
                 f"sid={status.get('sid')} status={status.get('status')} "
-                f"supported={status.get('supported')} enabled={status.get('enabled')} "
+                f"supported={status.get('supported')} can_prepare={status.get('can_prepare')} "
+                f"enabled={status.get('enabled')} "
                 f"reason={status.get('support_reason') or 'none'}"
             )
         return "; ".join(parts)

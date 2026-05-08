@@ -52,6 +52,32 @@ function normalizeBoolean(value, fallback = true) {
   return fallback;
 }
 
+function hostBrowserFamilyLabel(value) {
+  const family = String(value || "").trim().toLowerCase();
+  const a0Profile = family.endsWith("-a0");
+  const remoteDebugging = family.endsWith("-cdp");
+  const base = a0Profile ? family.slice(0, -3) : remoteDebugging ? family.slice(0, -4) : family;
+  const labels = {
+    chrome: "Chrome",
+    chromium: "Chromium",
+    edge: "Edge",
+    "edge-dev": "Edge Dev",
+  };
+  const label = labels[base] || "Host browser";
+  if (remoteDebugging) return `${label} (allowed)`;
+  return a0Profile ? `${label} (A0 profile)` : label;
+}
+
+function hostBrowserStatusLabel(value) {
+  const status = String(value || "").trim().toLowerCase();
+  if (status === "active") return "open";
+  if (status === "ready") return "ready";
+  if (status === "disabled") return "will open on first use";
+  if (status === "relaunch_required") return "close browser and retry";
+  if (status === "unsupported") return "unavailable";
+  return status || "ready";
+}
+
 export const store = createStore("browserConfig", {
   config: null,
   extensionsList: [],
@@ -96,16 +122,16 @@ export const store = createStore("browserConfig", {
 
   runtimeBackendLabel() {
     const value = this.config?.runtime_backend || "container";
-    if (value === "host_when_available") return "Host When Available";
-    if (value === "host_required") return "Host Required";
-    return "Container";
+    if (value === "host_when_available") return "Use Host When Ready";
+    if (value === "host_required") return "Require Host Browser";
+    return "Docker Browser";
   },
 
   privacyPolicyLabel() {
     const value = this.config?.host_browser_privacy_policy || "enforce_local";
-    if (value === "warn") return "Warn";
+    if (value === "warn") return "Warn When Using Cloud";
     if (value === "allow") return "Allow";
-    return "Enforce Local";
+    return "Local Models Only";
   },
 
   async loadHostBrowserStatus() {
@@ -127,12 +153,13 @@ export const store = createStore("browserConfig", {
       : [];
     const active = connectors.find((item) => item?.supported && item?.enabled);
     if (active) {
-      const family = active.browser_family || "browser";
-      const profile = active.profile_label ? ` / ${active.profile_label}` : "";
-      return `${family}${profile}: ${active.status || "ready"}`;
+      const profile = active.profile_label ? ` - ${active.profile_label}` : "";
+      return `${hostBrowserFamilyLabel(active.browser_family)}${profile}: ${hostBrowserStatusLabel(active.status)}`;
     }
-    if (connectors.length) return "A0 CLI connected, host browser disabled or unavailable";
-    return "Waiting for A0 CLI";
+    const preparable = connectors.find((item) => item?.can_prepare || item?.supported);
+    if (preparable) return "A0 CLI connected - browser will open on first use";
+    if (connectors.length) return "A0 CLI connected - host browser unavailable";
+    return "Connect A0 CLI to use a host browser";
   },
 
   hasPaths() {

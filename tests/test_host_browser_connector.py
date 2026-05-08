@@ -72,6 +72,60 @@ def test_host_browser_candidate_selection_allows_disabled_supported_cli():
         ws_runtime.unregister_sid(sid)
 
 
+def test_host_browser_candidate_selection_allows_preparable_cli():
+    sid = "sid-host-browser-preparable"
+    context_id = "ctx-host-browser-preparable"
+    ws_runtime.register_sid(sid)
+    ws_runtime.subscribe_sid_to_context(sid, context_id)
+    try:
+        ws_runtime.store_sid_host_browser_metadata(
+            sid,
+            {
+                "supported": False,
+                "can_prepare": True,
+                "enabled": False,
+                "status": "unsupported",
+                "browser_family": "chrome-a0",
+                "profile_label": "Default",
+                "features": ["ensure", "open"],
+                "support_reason": "Python Playwright is not installed.",
+            },
+        )
+
+        assert ws_runtime.select_host_browser_target_sid(context_id) is None
+        assert ws_runtime.select_host_browser_candidate_sid(context_id) == sid
+        rows = ws_runtime.host_browser_metadata_for_context(context_id)
+        assert rows[0]["can_prepare"] is True
+    finally:
+        ws_runtime.unregister_sid(sid)
+
+
+def test_host_browser_metadata_infers_preparable_legacy_cli():
+    sid = "sid-host-browser-legacy-preparable"
+    context_id = "ctx-host-browser-legacy-preparable"
+    ws_runtime.register_sid(sid)
+    ws_runtime.subscribe_sid_to_context(sid, context_id)
+    try:
+        ws_runtime.store_sid_host_browser_metadata(
+            sid,
+            {
+                "supported": False,
+                "enabled": False,
+                "status": "unsupported",
+                "browser_family": "chrome-a0",
+                "profile_label": "Default",
+                "features": ["ensure", "open"],
+                "support_reason": "Python Playwright is not installed.",
+            },
+        )
+
+        rows = ws_runtime.host_browser_metadata_for_context(context_id)
+        assert rows[0]["can_prepare"] is True
+        assert ws_runtime.select_host_browser_candidate_sid(context_id) == sid
+    finally:
+        ws_runtime.unregister_sid(sid)
+
+
 def test_pending_browser_op_resolves_and_disconnect_fails():
     async def run() -> None:
         sid = "sid-browser-pending"
@@ -205,7 +259,7 @@ def test_host_browser_artifact_materialization_rejects_oversized_payload(monkeyp
     assert not list(tmp_path.rglob("shot.jpg"))
 
 
-def test_connector_runtime_ensures_disabled_host_browser_before_action(monkeypatch):
+def test_connector_runtime_ensures_preparable_host_browser_before_action(monkeypatch):
     async def run() -> None:
         import plugins._browser.helpers.connector_runtime as connector_runtime_module
 
@@ -251,12 +305,14 @@ def test_connector_runtime_ensures_disabled_host_browser_before_action(monkeypat
             ws_runtime.store_sid_host_browser_metadata(
                 sid,
                 {
-                    "supported": True,
+                    "supported": False,
+                    "can_prepare": True,
                     "enabled": False,
-                    "status": "disabled",
+                    "status": "unsupported",
                     "browser_family": "chrome-a0",
                     "profile_label": "Default",
                     "features": ["ensure", "open"],
+                    "support_reason": "Python Playwright is not installed.",
                 },
             )
             runtime = ConnectorBrowserRuntime(context_id, _agent(context_id))

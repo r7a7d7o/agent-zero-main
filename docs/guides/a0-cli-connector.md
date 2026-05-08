@@ -51,7 +51,12 @@ to pair it with local-model enforcement for host-browser content.
 
 1. Keep A0 CLI connected to the Agent Zero chat.
 
-2. Optionally list or select a Chrome-family profile:
+2. If you want Agent Zero to use an already-open personal Chrome window, open
+   `chrome://inspect/#remote-debugging` and click **Allow** for that browser
+   instance. A0 CLI detects Chrome's local `DevToolsActivePort` file; status and
+   profile checks do not connect to Chrome.
+
+3. Optionally list or select a Chrome-family profile:
 
 ```bash
 /browser profile
@@ -60,12 +65,12 @@ to pair it with local-model enforcement for host-browser content.
 ```
 
 Chrome 136+ blocks Playwright remote debugging against the default personal
-Chrome data directory. In that case, choose the A0-controlled local profile
-(`chrome-a0 Default` for Google Chrome). Cookies and site data remain in that
-separate browser profile on the host, and the user may need to sign in there
-once.
+Chrome data directory. If Chrome's own Remote debugging consent path is not
+available, choose the A0-controlled local profile (`chrome-a0 Default` for
+Google Chrome). Cookies and site data remain in that separate browser profile on
+the host, and the user may need to sign in there once.
 
-3. In Agent Zero WebUI, open Browser plugin settings and choose one of:
+4. In Agent Zero WebUI, open Browser plugin settings and choose one of:
 
 - `container`: always use the Docker/server Playwright browser.
 - `host_when_available`: use the A0 CLI host browser when the subscribed CLI can provide it, otherwise fall back to container.
@@ -81,13 +86,15 @@ still useful for diagnostics and manual override:
 /browser relaunch
 ```
 
-4. If the selected Chrome profile is already open normally, A0 CLI reports
+5. If the selected Chrome profile is already open normally, A0 CLI reports
 `relaunch_required`. Close that browser and retry the agent request or run
 `/browser relaunch` manually.
 
-The MVP uses Python Playwright against installed system Chrome, Chromium, or
-Edge. It does not require a Chrome extension, and it does not copy browser
-credentials, cookies, or profile data out of the browser profile.
+The local-profile launch path uses Python Playwright against installed system
+Chrome, Chromium, or Edge. The user-authorized Chrome remote debugging path uses
+A0 CLI's built-in DevTools Protocol helper instead, so users do not need to
+install Chrome DevTools MCP. A0 does not copy browser credentials, cookies, or
+profile data out of the browser profile.
 
 Host-browser page content and screenshots are controlled by the Browser
 plugin's project-level policy:
