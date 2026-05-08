@@ -51,6 +51,38 @@
         </div>
 
         <div class="browser-config-card">
+          <div class="section-title">Host Browser</div>
+          <div class="section-description">
+            Route the existing Browser tool through A0 CLI. When host mode is selected, the first browser action can prepare the local browser automatically.
+          </div>
+
+          <label class="browser-config-field">
+            <span class="browser-config-field-label">Backend mode</span>
+            <select x-model="$store.browserConfig.config.runtime_backend">
+              <option value="container">Container</option>
+              <option value="host_when_available">Host when available</option>
+              <option value="host_required">Host required</option>
+            </select>
+            <span class="browser-config-field-help">The WebUI setting is the routing intent; CLI browser commands are available for diagnostics and manual override.</span>
+          </label>
+
+          <label class="browser-config-field">
+            <span class="browser-config-field-label">Host content policy</span>
+            <select x-model="$store.browserConfig.config.host_browser_privacy_policy">
+              <option value="enforce_local">Enforce local</option>
+              <option value="warn">Warn</option>
+              <option value="allow">Allow</option>
+            </select>
+            <span class="browser-config-field-help">Local-model enforcement applies before host page content or screenshots are returned to the agent.</span>
+          </label>
+
+          <div class="browser-config-note">
+            <span class="material-symbols-outlined" :class="{ spinning: $store.browserConfig.hostBrowserStatusLoading }" x-text="$store.browserConfig.hostBrowserStatusLoading ? 'progress_activity' : 'captive_portal'"></span>
+            <span x-text="$store.browserConfig.hostBrowserConnectorLabel()"></span>
+          </div>
+        </div>
+
+        <div class="browser-config-card">
           <div class="section-title">Extensions</div>
           <div class="section-description">
             Choose which installed Chrome extensions Browser loads.
@@ -160,7 +192,8 @@
       line-height: 1.35;
     }
 
-    .browser-config-field input[type="text"] {
+    .browser-config-field input[type="text"],
+    .browser-config-field select {
       width: 100%;
       min-height: 36px;
       padding: 7px 10px;

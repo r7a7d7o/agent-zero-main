@@ -31,6 +31,14 @@ class PendingComputerUseOperation:
     context_id: str | None = None
 
 
+@dataclass
+class PendingBrowserOperation:
+    sid: str
+    loop: asyncio.AbstractEventLoop
+    future: asyncio.Future[dict[str, Any]]
+    context_id: str | None = None
+
+
 @dataclass(frozen=True)
 class RemoteTreeSnapshot:
     sid: str
@@ -46,6 +54,19 @@ class ComputerUseMetadata:
     artifact_root: str
     backend_id: str
     backend_family: str
+    features: tuple[str, ...]
+    support_reason: str
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class HostBrowserMetadata:
+    supported: bool
+    enabled: bool
+    status: str
+    browser_family: str
+    profile_label: str
+    profile_path: str
     features: tuple[str, ...]
     support_reason: str
     updated_at: float
@@ -70,8 +91,10 @@ _sid_contexts: dict[str, set[str]] = {}
 _pending_file_ops: dict[str, PendingFileOperation] = {}
 _pending_exec_ops: dict[str, PendingExecOperation] = {}
 _pending_computer_use_ops: dict[str, PendingComputerUseOperation] = {}
+_pending_browser_ops: dict[str, PendingBrowserOperation] = {}
 _remote_tree_snapshots: dict[str, RemoteTreeSnapshot] = {}
 _sid_computer_use_metadata: dict[str, ComputerUseMetadata] = {}
+_sid_host_browser_metadata: dict[str, HostBrowserMetadata] = {}
 _sid_remote_file_metadata: dict[str, RemoteFileMetadata] = {}
 _sid_remote_exec_metadata: dict[str, RemoteExecMetadata] = {}
 _state_lock = threading.RLock()
@@ -87,6 +110,7 @@ def unregister_sid(sid: str) -> set[str]:
         contexts = _sid_contexts.pop(sid, set())
         _remote_tree_snapshots.pop(sid, None)
         _sid_computer_use_metadata.pop(sid, None)
+        _sid_host_browser_metadata.pop(sid, None)
         _sid_remote_file_metadata.pop(sid, None)
         _sid_remote_exec_metadata.pop(sid, None)
         for context_id in contexts:
@@ -329,6 +353,119 @@ def computer_use_metadata_for_sid(sid: str) -> dict[str, Any] | None:
     }
 
 
+def store_sid_host_browser_metadata(sid: str, payload: dict[str, Any]) -> HostBrowserMetadata:
+    features_value = payload.get("features")
+    if isinstance(features_value, (list, tuple)):
+        features = tuple(str(item).strip() for item in features_value if str(item).strip())
+    else:
+        features = ()
+    metadata = HostBrowserMetadata(
+        supported=bool(payload.get("supported")),
+        enabled=bool(payload.get("supported")) and bool(payload.get("enabled")),
+        status=str(payload.get("status", "") or "").strip(),
+        browser_family=str(payload.get("browser_family", "") or "").strip(),
+        profile_label=str(payload.get("profile_label", "") or "").strip(),
+        profile_path=str(payload.get("profile_path", "") or "").strip(),
+        features=features,
+        support_reason=str(payload.get("support_reason", "") or "").strip(),
+        updated_at=time.time(),
+    )
+    with _state_lock:
+        _sid_host_browser_metadata[sid] = metadata
+    return metadata
+
+
+def clear_sid_host_browser_metadata(sid: str) -> None:
+    with _state_lock:
+        _sid_host_browser_metadata.pop(sid, None)
+
+
+def host_browser_metadata_for_sid(sid: str) -> dict[str, Any] | None:
+    with _state_lock:
+        metadata = _sid_host_browser_metadata.get(sid)
+    if metadata is None:
+        return None
+    return {
+        "supported": metadata.supported,
+        "enabled": metadata.enabled,
+        "status": metadata.status,
+        "browser_family": metadata.browser_family,
+        "profile_label": metadata.profile_label,
+        "profile_path": metadata.profile_path,
+        "features": list(metadata.features),
+        "support_reason": metadata.support_reason,
+        "updated_at": metadata.updated_at,
+    }
+
+
+def select_host_browser_target_sid(context_id: str) -> str | None:
+    with _state_lock:
+        subscribers = sorted(_context_subscriptions.get(context_id, set()))
+        fallback: str | None = None
+        for sid in subscribers:
+            metadata = _sid_host_browser_metadata.get(sid)
+            if not metadata:
+                continue
+            if not metadata.supported:
+                continue
+            if metadata.enabled and metadata.status in {"ready", "active"}:
+                return sid
+            if metadata.enabled and fallback is None:
+                fallback = sid
+    return fallback
+
+
+def select_host_browser_candidate_sid(context_id: str) -> str | None:
+    with _state_lock:
+        subscribers = sorted(_context_subscriptions.get(context_id, set()))
+        fallback: str | None = None
+        for sid in subscribers:
+            metadata = _sid_host_browser_metadata.get(sid)
+            if not metadata or not metadata.supported:
+                continue
+            if metadata.enabled and metadata.status in {"ready", "active"}:
+                return sid
+            if metadata.enabled and fallback is None:
+                fallback = sid
+            elif fallback is None:
+                fallback = sid
+    return fallback
+
+
+def host_browser_metadata_for_context(context_id: str) -> list[dict[str, Any]]:
+    with _state_lock:
+        subscribers = sorted(_context_subscriptions.get(context_id, set()))
+    rows: list[dict[str, Any]] = []
+    for sid in subscribers:
+        metadata = host_browser_metadata_for_sid(sid)
+        if metadata is not None:
+            metadata["sid"] = sid
+            rows.append(metadata)
+    return rows
+
+
+def all_host_browser_metadata() -> list[dict[str, Any]]:
+    with _state_lock:
+        items = sorted(_sid_host_browser_metadata.items())
+    rows: list[dict[str, Any]] = []
+    for sid, metadata in items:
+        rows.append(
+            {
+                "sid": sid,
+                "supported": metadata.supported,
+                "enabled": metadata.enabled,
+                "status": metadata.status,
+                "browser_family": metadata.browser_family,
+                "profile_label": metadata.profile_label,
+                "profile_path": metadata.profile_path,
+                "features": list(metadata.features),
+                "support_reason": metadata.support_reason,
+                "updated_at": metadata.updated_at,
+            }
+        )
+    return rows
+
+
 def select_computer_use_target_sid(context_id: str) -> str | None:
     with _state_lock:
         subscribers = sorted(_context_subscriptions.get(context_id, set()))
@@ -471,8 +608,52 @@ def fail_pending_computer_use_ops_for_sid(sid: str, *, error: str) -> None:
     _fail_pending_for_sid(_pending_computer_use_ops, sid=sid, error=error)
 
 
+def store_pending_browser_op(
+    op_id: str,
+    *,
+    sid: str,
+    future: asyncio.Future[dict[str, Any]],
+    loop: asyncio.AbstractEventLoop,
+    context_id: str | None = None,
+) -> None:
+    with _state_lock:
+        _pending_browser_ops[op_id] = PendingBrowserOperation(
+            sid=sid,
+            loop=loop,
+            future=future,
+            context_id=context_id,
+        )
+
+
+def clear_pending_browser_op(op_id: str) -> None:
+    with _state_lock:
+        _pending_browser_ops.pop(op_id, None)
+
+
+def resolve_pending_browser_op(
+    op_id: str,
+    *,
+    sid: str,
+    payload: dict[str, Any],
+) -> bool:
+    return _resolve_pending(_pending_browser_ops, op_id, sid=sid, payload=payload)
+
+
+def fail_pending_browser_op(
+    op_id: str,
+    *,
+    sid: str | None = None,
+    error: str,
+) -> bool:
+    return _fail_pending(_pending_browser_ops, op_id, sid=sid, error=error)
+
+
+def fail_pending_browser_ops_for_sid(sid: str, *, error: str) -> None:
+    _fail_pending_for_sid(_pending_browser_ops, sid=sid, error=error)
+
+
 def _resolve_pending(
-    registry: dict[str, PendingFileOperation | PendingExecOperation | PendingComputerUseOperation],
+    registry: dict[str, PendingFileOperation | PendingExecOperation | PendingComputerUseOperation | PendingBrowserOperation],
     op_id: str,
     *,
     sid: str,
@@ -489,7 +670,7 @@ def _resolve_pending(
 
 
 def _fail_pending(
-    registry: dict[str, PendingFileOperation | PendingExecOperation | PendingComputerUseOperation],
+    registry: dict[str, PendingFileOperation | PendingExecOperation | PendingComputerUseOperation | PendingBrowserOperation],
     op_id: str,
     *,
     sid: str | None,
@@ -512,7 +693,7 @@ def _fail_pending(
 
 
 def _fail_pending_for_sid(
-    registry: dict[str, PendingFileOperation | PendingExecOperation | PendingComputerUseOperation],
+    registry: dict[str, PendingFileOperation | PendingExecOperation | PendingComputerUseOperation | PendingBrowserOperation],
     *,
     sid: str,
     error: str,

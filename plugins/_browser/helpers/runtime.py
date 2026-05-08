@@ -313,7 +313,7 @@ def normalize_url(value: str) -> str:
         return urlunsplit(parts)
 
     try:
-        host = re.split(r"[/?#]", raw, 1)[0] or ""
+        host = re.split(r"[/?#]", raw, maxsplit=1)[0] or ""
         if (
             not _URL_SCHEME_RE.match(raw)
             and not _SPECIAL_SCHEME_RE.match(raw)

@@ -14,6 +14,12 @@ class Status(ApiHandler):
         launch_config = build_browser_launch_config(browser_config)
         runtime_binary = get_playwright_binary()
         chromium_binary = runtime_binary
+        try:
+            from plugins._a0_connector.helpers.ws_runtime import all_host_browser_metadata
+        except ImportError:
+            host_browser = {"connectors": []}
+        else:
+            host_browser = {"connectors": all_host_browser_metadata()}
         return {
             "plugin": "_browser",
             "playwright": {
@@ -30,5 +36,6 @@ class Status(ApiHandler):
                 "launch_mode": launch_config["browser_mode"],
                 "requires_full_browser": launch_config["requires_full_browser"],
             },
+            "host_browser": host_browser,
             "contexts": known_context_ids(),
         }

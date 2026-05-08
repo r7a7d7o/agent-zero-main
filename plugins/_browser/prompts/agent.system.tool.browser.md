@@ -3,6 +3,7 @@ direct Playwright browser control with optional visible WebUI viewer
 use for web browsing, page inspection, forms, downloads, and browser-only tasks
 state stays open per chat context
 refs come from content as typed markers: [link 3], [button 6], [image 1], [input text 8]
+Depending on project settings, the same browser tool may run in container mode or host mode. Container mode runs inside the project's container browser; host mode runs through A0 CLI against a Chrome-family browser on the user's host machine. Check or change the mode in the Browser project settings or plugin config. In host mode, page content and screenshots may be blocked to protect local browser data when remote models are active; local models are allowed by the host-content policy.
 
 Browser tool actions must not open a Browser surface automatically. Use the tool headlessly unless the user opens the Browser surface or explicitly asks for a visible browser view; if the Browser surface is already open, it may reflect the active page.
 
@@ -44,7 +45,7 @@ pointer and raw input:
 forms:
 - use select_option for native select and safely detectable ARIA listbox/combobox controls
 - use set_checked for checkbox, radio, switch, and toggle-like refs
-- use upload_file for file input refs or associated labels; verify file paths exist before upload
+- use upload_file for file input refs or associated labels; in container mode paths resolve inside the running container, while in host mode paths resolve on the A0 CLI host machine; verify the file exists in that environment before upload
 - for complex forms, load browser-forms first with skills_tool:load
 
 modifier clicks:

@@ -8,6 +8,18 @@ default_homepage: "about:blank"
 # When the Browser surface is already open, keep it synced to agent Browser tool results.
 autofocus_active_page: true
 
+# Runtime used by the agent-facing browser tool:
+# - container: use Agent Zero's Docker/server Playwright browser.
+# - host_when_available: use A0 CLI host browser when a subscribed CLI can provide it, otherwise container.
+# - host_required: require A0 CLI host browser and prepare it on first browser use when possible.
+runtime_backend: "container"
+
+# Local-model enforcement for host-browser content:
+# - enforce_local: block host page content and screenshots unless the active chat model is local.
+# - warn: allow and return a warning in tool output.
+# - allow: allow without warning.
+host_browser_privacy_policy: "enforce_local"
+
 # Optional _model_config preset used by Browser-owned model helpers.
 # Empty uses the effective Main Model.
 model_preset: ""

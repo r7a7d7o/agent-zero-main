@@ -150,6 +150,8 @@ def test_browser_config_normalizes_extension_paths(tmp_path):
         "extension_paths": [str(extension_dir)],
         "default_homepage": "about:blank",
         "autofocus_active_page": True,
+        "runtime_backend": "container",
+        "host_browser_privacy_policy": "enforce_local",
         "model_preset": "",
     }
 
@@ -157,6 +159,18 @@ def test_browser_config_normalizes_extension_paths(tmp_path):
 def test_browser_config_normalizes_model_preset():
     assert normalize_browser_config({"model_preset": "  Research  "})["model_preset"] == "Research"
     assert "model" not in normalize_browser_config({"model": "main"})
+
+
+def test_browser_config_normalizes_host_backend_and_privacy_policy():
+    config = normalize_browser_config(
+        {
+            "runtime_backend": "host-required",
+            "host_browser_privacy_policy": "warn",
+        }
+    )
+
+    assert config["runtime_backend"] == "host_required"
+    assert config["host_browser_privacy_policy"] == "warn"
 
 
 def test_browser_model_selection_uses_presets(monkeypatch):
@@ -1515,7 +1529,8 @@ async def test_browser_tool_dispatches_direct_actions(monkeypatch):
                 return {"document": "[link 1] Example"}
             return {"ok": True, "method": method, "args": args}
 
-    async def fake_get_runtime(context_id, create=True):
+    async def fake_get_runtime(context_id, create=True, agent=None):
+        del create, agent
         assert context_id == "ctx"
         return FakeRuntime()
 
@@ -1545,7 +1560,8 @@ async def test_browser_tool_dispatches_v1_agent_actions(monkeypatch):
             calls.append((method, args, kwargs))
             return {"ok": True, "method": method, "args": args, "kwargs": kwargs}
 
-    async def fake_get_runtime(context_id, create=True):
+    async def fake_get_runtime(context_id, create=True, agent=None):
+        del create, agent
         assert context_id == "ctx"
         return FakeRuntime()
 

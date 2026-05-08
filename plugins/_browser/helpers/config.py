@@ -11,6 +11,10 @@ PLUGIN_NAME = "_browser"
 MODEL_PRESET_KEY = "model_preset"
 DEFAULT_HOMEPAGE_KEY = "default_homepage"
 AUTOFOCUS_ACTIVE_PAGE_KEY = "autofocus_active_page"
+RUNTIME_BACKEND_KEY = "runtime_backend"
+HOST_BROWSER_PRIVACY_POLICY_KEY = "host_browser_privacy_policy"
+RUNTIME_BACKENDS = {"container", "host_when_available", "host_required"}
+HOST_BROWSER_PRIVACY_POLICIES = {"enforce_local", "warn", "allow"}
 BASE_BROWSER_ARGS = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -64,6 +68,13 @@ def _normalize_bool(value: Any, default: bool = True) -> bool:
     return default
 
 
+def _normalize_choice(value: Any, *, allowed: set[str], default: str) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in allowed:
+        return normalized
+    return default
+
+
 def _model_config_summary(config: dict[str, Any] | None) -> str:
     if not isinstance(config, dict):
         return ""
@@ -83,6 +94,16 @@ def normalize_browser_config(settings: dict[str, Any] | None) -> dict[str, Any]:
         AUTOFOCUS_ACTIVE_PAGE_KEY: _normalize_bool(
             raw.get(AUTOFOCUS_ACTIVE_PAGE_KEY, True),
             default=True,
+        ),
+        RUNTIME_BACKEND_KEY: _normalize_choice(
+            raw.get(RUNTIME_BACKEND_KEY, "container"),
+            allowed=RUNTIME_BACKENDS,
+            default="container",
+        ),
+        HOST_BROWSER_PRIVACY_POLICY_KEY: _normalize_choice(
+            raw.get(HOST_BROWSER_PRIVACY_POLICY_KEY, "enforce_local"),
+            allowed=HOST_BROWSER_PRIVACY_POLICIES,
+            default="enforce_local",
         ),
         MODEL_PRESET_KEY: _normalize_model_preset(raw.get(MODEL_PRESET_KEY, "")),
     }

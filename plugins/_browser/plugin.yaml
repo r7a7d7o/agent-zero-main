@@ -5,5 +5,5 @@ version: 1.0.0
 always_enabled: false
 settings_sections:
   - external
-per_project_config: false
+per_project_config: true
 per_agent_config: false

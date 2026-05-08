@@ -22,6 +22,8 @@ _BASE_FEATURES = [
     "text_editor_remote",
     "code_execution_remote",
     "computer_use_remote",
+    "browser_host_remote",
+    "connector_browser_op",
     "remote_file_tree",
     "token_status",
 ]

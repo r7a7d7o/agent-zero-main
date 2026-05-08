@@ -12,20 +12,25 @@ from plugins._a0_connector.helpers.exec_config import build_exec_config
 from plugins._a0_connector.helpers.event_bridge import get_context_log_entries
 from plugins._a0_connector.helpers.ws_runtime import (
     clear_remote_tree_snapshot,
+    clear_sid_host_browser_metadata,
     clear_sid_computer_use_metadata,
     clear_sid_remote_exec_metadata,
     clear_sid_remote_file_metadata,
     computer_use_metadata_for_sid,
+    fail_pending_browser_ops_for_sid,
     fail_pending_computer_use_ops_for_sid,
     fail_pending_exec_ops_for_sid,
     fail_pending_file_ops_for_sid,
+    host_browser_metadata_for_sid,
     register_sid,
     remote_exec_metadata_for_sid,
     remote_file_metadata_for_sid,
+    resolve_pending_browser_op,
     resolve_pending_computer_use_op,
     resolve_pending_exec_op,
     resolve_pending_file_op,
     store_remote_tree_snapshot,
+    store_sid_host_browser_metadata,
     store_sid_computer_use_metadata,
     store_sid_remote_exec_metadata,
     store_sid_remote_file_metadata,
@@ -48,6 +53,8 @@ WS_FEATURES = [
     "remote_file_tree",
     "code_execution_remote",
     "computer_use_remote",
+    "browser_host_remote",
+    "connector_browser_op",
 ]
 
 
@@ -87,7 +94,12 @@ class WsConnector(WsHandler):
             sid,
             error="CLI disconnected before completing the requested computer-use operation",
         )
+        fail_pending_browser_ops_for_sid(
+            sid,
+            error="CLI disconnected before completing the requested browser operation",
+        )
         clear_sid_computer_use_metadata(sid)
+        clear_sid_host_browser_metadata(sid)
         clear_sid_remote_file_metadata(sid)
         clear_sid_remote_exec_metadata(sid)
         PrintStyle.debug(f"[a0-connector] /ws disconnected: {sid}")
@@ -129,6 +141,9 @@ class WsConnector(WsHandler):
         if event == "connector_computer_use_op_result":
             return self._handle_computer_use_op_result(data, sid)
 
+        if event == "connector_browser_op_result":
+            return self._handle_browser_op_result(data, sid)
+
         if event.startswith("connector_"):
             return WsResult.error(
                 code="UNKNOWN_EVENT",
@@ -140,12 +155,17 @@ class WsConnector(WsHandler):
 
     def _store_remote_tool_metadata(self, data: dict[str, Any], sid: str) -> None:
         computer_use = data.get("computer_use")
+        host_browser = data.get("host_browser")
         remote_files = data.get("remote_files")
         remote_exec = data.get("remote_exec")
         if isinstance(computer_use, dict):
             store_sid_computer_use_metadata(sid, computer_use)
         else:
             clear_sid_computer_use_metadata(sid)
+        if isinstance(host_browser, dict):
+            store_sid_host_browser_metadata(sid, host_browser)
+        else:
+            clear_sid_host_browser_metadata(sid)
         if isinstance(remote_files, dict):
             store_sid_remote_file_metadata(sid, remote_files)
         else:
@@ -173,6 +193,7 @@ class WsConnector(WsHandler):
 
     def _remote_tool_state(self, sid: str) -> dict[str, Any]:
         computer_use = computer_use_metadata_for_sid(sid) or {}
+        host_browser = host_browser_metadata_for_sid(sid) or {}
         remote_files = remote_file_metadata_for_sid(sid) or {}
         remote_exec = remote_exec_metadata_for_sid(sid) or {}
         return {
@@ -180,6 +201,10 @@ class WsConnector(WsHandler):
             "computer_use": bool(
                 computer_use.get("supported") and computer_use.get("enabled")
             ),
+            "host_browser": bool(
+                host_browser.get("supported") and host_browser.get("enabled")
+            ),
+            "host_browser_status": host_browser,
             "remote_files": bool(remote_files.get("enabled", False)),
             "remote_file_writes": bool(remote_files.get("write_enabled", False)),
             "remote_exec": bool(remote_exec.get("enabled", False)),
@@ -470,6 +495,28 @@ class WsConnector(WsHandler):
             return WsResult.error(
                 code="UNKNOWN_OP_ID",
                 message=f"No pending computer-use operation for op_id '{op_id}'",
+                correlation_id=data.get("correlationId"),
+            )
+
+        return {"op_id": op_id, "accepted": True}
+
+    def _handle_browser_op_result(
+        self,
+        data: dict[str, Any],
+        sid: str,
+    ) -> dict[str, Any] | WsResult:
+        op_id = str(data.get("op_id", "")).strip()
+        if not op_id:
+            return WsResult.error(
+                code="MISSING_OP_ID",
+                message="op_id is required",
+                correlation_id=data.get("correlationId"),
+            )
+
+        if not resolve_pending_browser_op(op_id, sid=sid, payload=data):
+            return WsResult.error(
+                code="UNKNOWN_OP_ID",
+                message=f"No pending browser operation for op_id '{op_id}'",
                 correlation_id=data.get("correlationId"),
             )
 

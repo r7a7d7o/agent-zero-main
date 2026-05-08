@@ -4,7 +4,15 @@ import json
 from typing import Any
 
 from helpers.tool import Response, Tool
-from plugins._browser.helpers.runtime import get_runtime
+from plugins._browser.helpers.selector import get_tool_runtime
+
+
+async def get_runtime(context_id: str, create: bool = True, agent: Any | None = None):
+    if agent is not None:
+        return await get_tool_runtime(agent)
+    from plugins._browser.helpers.runtime import get_runtime as get_container_runtime
+
+    return await get_container_runtime(context_id, create=create)
 
 
 class Browser(Tool):
@@ -56,7 +64,10 @@ class Browser(Tool):
             action = "clipboard"
         else:
             action = str(action or self.method or "state").strip().lower().replace("-", "_")
-        runtime = await get_runtime(self.agent.context.id)
+        try:
+            runtime = await get_runtime(self.agent.context.id, agent=self.agent)
+        except Exception as exc:
+            return Response(message=f"Browser runtime unavailable: {exc}", break_loop=False)
 
         if isinstance(modifiers, str):
             modifiers = [modifiers] if modifiers else None

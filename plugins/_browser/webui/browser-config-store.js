@@ -2,6 +2,9 @@ import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
 
 const BROWSER_EXTENSIONS_API = "/plugins/_browser/extensions";
+const BROWSER_STATUS_API = "/plugins/_browser/status";
+const RUNTIME_BACKENDS = new Set(["container", "host_when_available", "host_required"]);
+const HOST_PRIVACY_POLICIES = new Set(["enforce_local", "warn", "allow"]);
 
 function normalizePathList(value) {
   const source = Array.isArray(value)
@@ -23,9 +26,20 @@ function ensureConfig(config) {
   config.extension_paths = normalizePathList(config.extension_paths);
   config.default_homepage = String(config.default_homepage || "about:blank").trim() || "about:blank";
   config.autofocus_active_page = normalizeBoolean(config.autofocus_active_page, true);
+  config.runtime_backend = normalizeChoice(config.runtime_backend, RUNTIME_BACKENDS, "container");
+  config.host_browser_privacy_policy = normalizeChoice(
+    config.host_browser_privacy_policy,
+    HOST_PRIVACY_POLICIES,
+    "enforce_local",
+  );
   config.model_preset = String(config.model_preset || "").trim();
   delete config.model;
   return config;
+}
+
+function normalizeChoice(value, allowed, fallback) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/-/g, "_");
+  return allowed.has(normalized) ? normalized : fallback;
 }
 
 function normalizeBoolean(value, fallback = true) {
@@ -45,10 +59,12 @@ export const store = createStore("browserConfig", {
   extensionsError: "",
   extensionsMessage: "",
   extensionDeleteLoadingPath: "",
+  hostBrowserStatus: null,
+  hostBrowserStatusLoading: false,
 
   async init(config) {
     this.bindConfig(config);
-    await this.loadExtensionsList();
+    await Promise.all([this.loadExtensionsList(), this.loadHostBrowserStatus()]);
   },
 
   cleanup() {
@@ -57,6 +73,8 @@ export const store = createStore("browserConfig", {
     this.extensionsError = "";
     this.extensionsMessage = "";
     this.extensionDeleteLoadingPath = "";
+    this.hostBrowserStatus = null;
+    this.hostBrowserStatusLoading = false;
   },
 
   bindConfig(config) {
@@ -74,6 +92,47 @@ export const store = createStore("browserConfig", {
 
   autofocusLabel() {
     return this.config?.autofocus_active_page === false ? "Off" : "On";
+  },
+
+  runtimeBackendLabel() {
+    const value = this.config?.runtime_backend || "container";
+    if (value === "host_when_available") return "Host When Available";
+    if (value === "host_required") return "Host Required";
+    return "Container";
+  },
+
+  privacyPolicyLabel() {
+    const value = this.config?.host_browser_privacy_policy || "enforce_local";
+    if (value === "warn") return "Warn";
+    if (value === "allow") return "Allow";
+    return "Enforce Local";
+  },
+
+  async loadHostBrowserStatus() {
+    if (this.hostBrowserStatusLoading) return;
+    this.hostBrowserStatusLoading = true;
+    try {
+      const response = await callJsonApi(BROWSER_STATUS_API, {});
+      this.hostBrowserStatus = response?.host_browser || { connectors: [] };
+    } catch (_error) {
+      this.hostBrowserStatus = { connectors: [] };
+    } finally {
+      this.hostBrowserStatusLoading = false;
+    }
+  },
+
+  hostBrowserConnectorLabel() {
+    const connectors = Array.isArray(this.hostBrowserStatus?.connectors)
+      ? this.hostBrowserStatus.connectors
+      : [];
+    const active = connectors.find((item) => item?.supported && item?.enabled);
+    if (active) {
+      const family = active.browser_family || "browser";
+      const profile = active.profile_label ? ` / ${active.profile_label}` : "";
+      return `${family}${profile}: ${active.status || "ready"}`;
+    }
+    if (connectors.length) return "A0 CLI connected, host browser disabled or unavailable";
+    return "Waiting for A0 CLI";
   },
 
   hasPaths() {
