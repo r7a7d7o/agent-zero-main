@@ -94,7 +94,11 @@ Markdown, Writer, Spreadsheet, and Presentation files share a compact active-fil
 <img alt="Native Browser" width="1406" height="720" src="https://github.com/user-attachments/assets/8d425af6-fb27-4d46-ade9-8ffa34c7382c" />
 <br>
 
-Agent Zero includes a direct Playwright-powered Browser tool with a visible WebUI viewer. The agent can navigate pages, inspect readable page content, and act through typed page references such as `[link 3]`, `[button 6]`, and `[input text 8]` and use vision.
+Agent Zero includes a direct Playwright-powered `browser` tool with a visible WebUI viewer, replacing the older browser-agent command flow. The main agent can call actions such as `open`, `navigate`, `content`, `detail`, `screenshot`, `click`, and `type`, then act through typed page references like `[link 3]`, `[button 6]`, and `[input text 8]`.
+
+The Browser can run in the Docker/container browser or, when configured through the A0 CLI, attach to a host Chrome-family browser. Browser tool calls do not force-open the canvas by themselves: open the Browser surface when you want to watch the live page, or ask the agent to open/show the Browser in canvas.
+
+Browser history keeps per-step screenshots, so older chats show the page state the agent actually saw at that moment instead of linking every step to the latest live frame.
 
 For web and mobile development, Annotate mode lets you click page elements or regions and leave actionable comments for the agent targeted at the page itself. You can review a UI visually, mark what needs to change, and send those notes straight back into the conversation.
 
@@ -180,7 +184,7 @@ Agent Zero supports plugins, MCP, A2A, custom tools, custom prompts, project-sco
 
 ## Try These First
 
-- **Research with a browser:** "Open the browser, compare three project management tools for a small AI team, and summarize the tradeoffs with source links."
+- **Research with the Browser tool:** "Use the Browser tool to compare three project management tools for a small AI team, and summarize the tradeoffs with source links."
 - **Cowork on a spreadsheet:** "Create an editable ODS budget model with assumptions and monthly projections."
 - **Review a web UI:** "Open my local app in the Browser. I will annotate the page with comments; then implement the requested UI fixes."
 - **Work inside a Git project:** "Clone this repository into a new project, inspect the architecture, and propose the safest first improvement."
