@@ -18,7 +18,7 @@ Agent Zero includes a Docker-oriented self-update flow for switching to a specif
 
 ## How it works
 
-1. The WebUI writes a YAML request file outside `/a0` so the request survives upgrades and downgrades.
+1. The Web UI writes a YAML request file outside `/a0` so the request survives upgrades and downgrades.
 2. Agent Zero restarts.
 3. The durable updater in `/exe` reads the YAML request before starting the UI.
 4. It cleans the root `uv` cache when `uv` is available.
@@ -45,7 +45,7 @@ The updater automatically creates a backup of `a0/usr`.
 
 ## Version selection
 
-The WebUI preloads repository version choices for the selected branch into a standard selector.
+The Web UI preloads repository version choices for the selected branch into a standard selector.
 
 Only versions from the current major release line are listed in the selector. If newer major lines are available on the selected branch, the UI shows an attention banner that links to the Docker update guide.
 

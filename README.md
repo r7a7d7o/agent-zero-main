@@ -3,7 +3,7 @@
 <img src="docs/res/a0-vector-graphics/horizontal_banner.svg" alt="Agent Zero Banner" width="100%"/>
 
 # Agent Zero
-### AI agents with a full Linux system at their fingertips, and yours.
+### AI agents with a full Linux system at their fingertips.
 
 Agent Zero is a dynamic, organic agentic framework for running AI agents that can create tools, write code, browse the web, cooperate with other agents, and keep learning from your goals and projects.
 
@@ -12,11 +12,13 @@ Agent Zero is a dynamic, organic agentic framework for running AI agents that ca
 [![Discord](https://img.shields.io/badge/Discord-Join%20us-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/B8KZKNsPpj)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsors-Thank%20you-FF69B4?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/agent0ai)
 
-[Introduction](#what-agent-zero-is) |
+[Introduction](#what-is-agent-zero) |
 [Space Agent](#agent-zero-and-space-agent) |
 [Quick Start](#how-to-install) |
 [LLM Plans](#use-your-openai-codex-plan) |
 [CLI Connector](#a0-cli-connector-use-agent-zero-on-your-host-machine) |
+[Browser](#native-browser-with-annotations-and-extensions) |
+[Desktop](#linux-desktop-and-libreoffice-cowork) |
 [Features](#what-makes-agent-zero-different) |
 [Examples](#try-these-first) |
 [Docs](#documentation)
@@ -72,37 +74,46 @@ Agent Zero can use a Kali Linux system to accomplish your task. It can inspect f
 
 The important idea is not a fixed list of buttons. The important idea is that the agent can build and use the right tool when the work demands it.
 
-## Universal Canvas
+## Canvas
 
-Agent Zero is becoming more visual and shared. The right-side Universal Canvas gives agents and humans working surfaces for browser sessions, documents, workspace history, and other plugin panels.
+Agent Zero is becoming more visual and shared. The right-side Canvas gives agents and humans working surfaces for browser sessions, documents, workspace history, and other plugin panels.
 
-The canvas makes agent work visible. You can watch it browse, inspect what changed, open files, cowork on deliverables, and intervene before a small mistake becomes a large one.
+The Canvas makes agent work visible. You can watch it browse, inspect what changed, open files, cowork on deliverables, and intervene before a small mistake becomes a large one.
 
-## LibreOffice Integration
+## Linux Desktop and LibreOffice Cowork
+
+<img alt="Agent Zero Desktop Canvas" src="docs/res/usage/webui/desktop-canvas.png" />
+<br>
+
+The Desktop surface opens Agent Zero's own Linux desktop in the Canvas. It is useful when the work needs a real GUI: Linux desktop apps, a terminal window, visual file management, or LibreOffice running where you and the agent can both see it.
 
 <img alt="Cowork on Documents" width="1406" height="720" src="https://github.com/user-attachments/assets/4ad71888-4f0d-484a-b68b-631ad99187d7" />
 <br>
 
 Create, open, and cowork with the AI on documents, spreadsheets, and presentation decks with the LibreOffice stack.
 
-The document canvas supports Markdown by default, with LibreOffice-native ODT, ODS, and ODP workflows when binary office artifacts are needed. Agents can create substantial deliverables, read their contents, apply precise saved edits, preserve version history, and generate native ODS charts directly inside spreadsheets. Microsoft Office compatibility imports and exports remain available when explicitly requested.
+The Desktop toolbar can create Markdown, Writer, Spreadsheet, and Presentation files. LibreOffice Writer, Calc, and Impress run inside the Desktop, so you can type by hand while Agent Zero creates, updates, saves, and verifies the same files.
 
-Markdown, Writer, Spreadsheet, and Presentation files share a compact active-file header with save, rename, close, and creation controls in both canvas and modal views.
+The document Canvas supports Markdown by default, with LibreOffice-native ODT, ODS, and ODP workflows when binary office artifacts are needed. Microsoft Office compatibility imports and exports remain available when explicitly requested.
+
+Markdown, Writer, Spreadsheet, and Presentation files share a compact active-file header with save, rename, close, and creation controls in both Canvas and modal views.
+
+See the [Desktop guide](./docs/guides/desktop.md) for the screenshot walkthrough, prompt examples, and how Desktop differs from Browser.
 
 ## Native Browser With Annotations and Extensions
 
-<img alt="Native Browser" width="1406" height="720" src="https://github.com/user-attachments/assets/8d425af6-fb27-4d46-ade9-8ffa34c7382c" />
+<img alt="Agent Zero Browser Canvas and tool history" src="docs/res/usage/browser/browser-canvas-wide.png" />
 <br>
 
-Agent Zero includes a direct Playwright-powered `browser` tool with a visible WebUI viewer, replacing the older browser-agent command flow. The main agent can call actions such as `open`, `navigate`, `content`, `detail`, `screenshot`, `click`, and `type`, then act through typed page references like `[link 3]`, `[button 6]`, and `[input text 8]`.
+Agent Zero includes a built-in Browser with an optional live surface in the Canvas. The agent can open pages, read them, click, type, upload files, and take screenshots.
 
-The Browser can run in the Docker/container browser or, when configured through the A0 CLI, attach to a host Chrome-family browser. Browser tool calls do not force-open the canvas by themselves: open the Browser surface when you want to watch the live page, or ask the agent to open/show the Browser in canvas.
+The Docker browser is the default live Browser surface. With A0 CLI, Agent Zero can also use **Bring Your Own Browser** to work with Chrome, Edge, or Chromium on your own computer. Open the Browser surface when you want to watch the Docker browser, or ask Agent Zero to show it in the Canvas.
 
-Browser history keeps per-step screenshots, so older chats show the page state the agent actually saw at that moment instead of linking every step to the latest live frame.
+Browser history keeps screenshots of important steps, so older chats can still show what the agent saw.
 
 For web and mobile development, Annotate mode lets you click page elements or regions and leave actionable comments for the agent targeted at the page itself. You can review a UI visually, mark what needs to change, and send those notes straight back into the conversation.
 
-The Browser also supports Chrome extensions installed from the Chrome Web Store directly inside the Agent Zero browser environment, so workflows can use the same kind of browser capabilities real users depend on.
+The Browser also supports Chrome extensions inside the Docker browser. See the [Browser guide](./docs/guides/browser.md) for screenshots, settings, host-browser setup, and troubleshooting.
 
 ## Use Your OpenAI Codex Plan
 
@@ -117,9 +128,16 @@ This is the first step toward account-backed LLM plans in Agent Zero. More integ
 
 # A0 CLI Connector: Use Agent Zero on Your Host Machine
 
-Agent Zero is safe when it lives in Docker. The **A0 CLI Connector** is how you intentionally let it work beyond the container: on your host machine, in a terminal-first workflow, or against a server where you do not want a GUI at all.
+The **A0 CLI Connector** is not a separate CLI agent. It connects to a running
+Agent Zero instance and gives that instance a terminal-native bridge to your
+host machine.
 
-<img width="1084" height="656" alt="A0 CLI Connector" src="https://github.com/user-attachments/assets/72d405df-d9a0-4d4b-8f96-edfa482bdb13" />
+Agent Zero stays responsible for the reasoning loop, memory, projects, profiles,
+model choices, and tools. The CLI is how you intentionally let that Agent
+Zero instance work beyond the Docker container: on your host machine, in a
+terminal-first workflow, or against a server where you do not want a GUI at all.
+
+<img alt="A0 CLI Connector connected shell" src="docs/res/usage/a0-cli/a0-cli-start.png" />
 <br>
 
 Install the connector on the machine you want Agent Zero to work on, not inside the Agent Zero container.
@@ -142,7 +160,9 @@ Then run:
 a0
 ```
 
-`a0` connects your terminal to an Agent Zero instance. It can usually discover a local instance automatically, or you can point it at a remote Agent Zero URL hosted somewhere else, such as a VPS or tunnel.
+`a0` connects your terminal to an existing Agent Zero instance. It can usually discover a local instance automatically, or you can point it at a remote Agent Zero URL hosted somewhere else, such as a VPS or tunnel.
+
+Inside the shell, use `Ctrl+P` for the command palette, `/chats` to switch work, `/models` or `/presets` to adjust models, and `/browser status` to check Browser mode.
 
 When you activate **Read+Write** access and the **Remote Code Execution Tool** in the CLI, Agent Zero can operate on the filesystem and shell of the machine where `a0` is running. That means it can work on your real local project files, not only files inside the Docker sandbox.
 
@@ -157,11 +177,15 @@ This is especially useful if you:
 For full setup details, manual fallback installation, and remote-host tips, see the [A0 CLI Connector guide](./docs/guides/a0-cli-connector.md).
 
 
-### Projects, Skills, and Agent Profiles
+### Projects, Skills, Agent Profiles, and Model Presets
 
 Projects isolate workspaces, instructions, memory, secrets, knowledge, repositories, and model presets. Clone a public or private Git repo into an isolated project and give the agent context that belongs to that work alone.
 
-Skills use the open `SKILL.md` standard: portable, structured capabilities that can be activated globally, per project, or for the current chat. Agent Profiles let you switch the behavior, prompt overrides, tools, extensions, and model configuration of the active agent without rewriting the whole system.
+Skills can be loaded on demand by Agent Zero, or pinned from the chat input when
+you want a specific procedure to stay active. Agent Profiles change the broader
+working style of the current chat. Model Presets are named shortcuts for model
+setups, so users can quickly switch between fast, balanced, cheap, local, or
+high-power model choices.
 
 ### Multi-Agent Cooperation
 
@@ -187,7 +211,7 @@ Agent Zero supports plugins, MCP, A2A, custom tools, custom prompts, project-sco
 - **Research with the Browser tool:** "Use the Browser tool to compare three project management tools for a small AI team, and summarize the tradeoffs with source links."
 - **Cowork on a spreadsheet:** "Create an editable ODS budget model with assumptions and monthly projections."
 - **Review a web UI:** "Open my local app in the Browser. I will annotate the page with comments; then implement the requested UI fixes."
-- **Work inside a Git project:** "Clone this repository into a new project, inspect the architecture, and propose the safest first improvement."
+- **Work inside a Git project:** "Clone this repository into a new project, understand the layout, and propose the safest first improvement."
 - **Create a specialist:** "Create an Agent Profile for financial analysis with cautious reasoning, clear assumptions, and spreadsheet-first deliverables."
 - **Recover a workspace:** "Show me recent Time Travel snapshots and explain what changed before I revert anything."
 
@@ -241,13 +265,19 @@ Agent Zero is powerful because it can use a real environment. Treat it with the 
 | --- | --- |
 | Install or update Agent Zero | [Installation](./docs/setup/installation.md) |
 | Learn the UI and basic workflow | [Quickstart](./docs/quickstart.md) |
+| Browse, annotate, and use Browser screenshots | [Browser guide](./docs/guides/browser.md) |
+| Use the Linux desktop and LibreOffice | [Desktop guide](./docs/guides/desktop.md) |
 | Connect Agent Zero to host-machine files and shell | [A0 CLI Connector](./docs/guides/a0-cli-connector.md) |
 | Use projects and Git workspaces | [Projects guide](./docs/guides/projects.md) |
+| Create a small plugin | [Create a Small Plugin](./docs/guides/create-plugin.md) |
+| Add or remove active skills | [Skills guide](./docs/guides/skills.md) |
 | Create or switch Agent Profiles | [Agent Profiles](./docs/guides/agent-profiles.md) |
-| Use skills and agent capabilities | [Usage guide](./docs/guides/usage.md) |
+| Create or switch Model Presets | [Model Presets](./docs/guides/model-presets.md) |
+| Manage and curate memories | [Memory guide](./docs/guides/memory.md) |
+| Learn the everyday chat controls | [Usage guide](./docs/guides/usage.md) |
 | Configure MCP or external tools | [MCP setup](./docs/guides/mcp-setup.md) |
-| Understand the architecture | [Architecture](./docs/developer/architecture.md) |
-| Build extensions or plugins | [Extensions](./docs/developer/extensions.md) |
+| Understand the architecture and internals | [DeepWiki for Agent Zero](https://deepwiki.com/agent0ai/agent-zero) |
+| Build an advanced extension | [Extensions](./docs/developer/extensions.md) |
 | Contribute to the project | [Contributing](./docs/guides/contribution.md) |
 | Troubleshoot problems | [Troubleshooting](./docs/guides/troubleshooting.md) |
 

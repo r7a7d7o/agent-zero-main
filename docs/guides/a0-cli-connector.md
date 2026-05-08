@@ -1,16 +1,19 @@
 # A0 CLI Connector
 
-Agent Zero lives in Docker for a reason. That keeps it safer. The problem is that people see Docker and assume the agent can never really touch the code on their computer.
+A0 CLI connects your terminal to Agent Zero.
 
-A0 CLI is the answer to that.
+It is not a second agent. Agent Zero is still the one thinking, remembering, and
+using tools. A0 CLI is the doorway that lets Agent Zero work on the computer
+where the CLI is running.
 
-Agent Zero stays in Docker. A0 CLI installs on the host machine. That is what lets Agent Zero finally work on the real files on your real computer.
+Agent Zero lives in Docker because that is safer and easier to manage. A0 CLI is
+the intentional bridge for moments when you want Agent Zero to work with your
+real files, terminal, or browser on the host machine.
 
-The same connector can also expose a host browser. Agent Zero still runs
-server-side, but A0 CLI controls a real Chrome-family browser on the host and
-routes it through Agent Zero's existing `browser` tool.
+Agent Zero stays in Docker. A0 CLI installs on the host machine.
 
-For now, use the install commands below.
+The same connector can also let Agent Zero use a Chrome-family browser on your
+computer.
 
 ## Quick Install
 
@@ -26,7 +29,7 @@ irm https://cli.agent-zero.ai/install.ps1 | iex
 
 Run these on the host machine, not inside the Agent Zero container.
 
-The installer uses `uv`, and `uv` will select or download a compatible Python if needed.
+The installer handles the small Python helper it needs.
 
 ## Open it and start working
 
@@ -37,26 +40,121 @@ The installer uses `uv`, and `uv` will select or download a compatible Python if
 a0
 ```
 
-3. If Agent Zero is running on the same machine, A0 CLI will usually find it for you.
-4. If Agent Zero is somewhere else, enter the exact web address or set `AGENT_ZERO_HOST` as env variable before launching `a0`.
+3. If Agent Zero is running on the same machine, A0 CLI will usually find it.
+4. If Agent Zero is somewhere else, enter its web address.
 5. Open or create a chat and confirm you can talk to Agent Zero from the host machine.
 
 > [!NOTE]
-> Current Agent Zero builds starting from v1.9 include the builtin connector support that A0 CLI expects. If you see a connector-specific `404`, update Agent Zero first.
+> If A0 CLI says connector support is missing, update Agent Zero first.
+
+### Connection picker
+
+On launch, A0 CLI opens a host picker. If it finds Agent Zero on this machine,
+click **Connect**. If Agent Zero is somewhere else, click **Enter URL manually**
+and paste the address.
+
+![A0 CLI host picker](../res/usage/a0-cli/a0-cli-host-picker.png)
+
+Useful launch options:
+
+```bash
+a0 --host http://localhost:32080
+a0 --no-auto-connect
+a0 --no-docker-discovery
+```
+
+You can also set the address before launching:
+
+```bash
+export AGENT_ZERO_HOST=http://localhost:32080
+a0
+```
+
+If **Remember this host** is enabled, the CLI saves that address for next time.
+
+### The connected shell
+
+After connecting, the shell shows the Agent Zero address, current project, model,
+local folder, Agent Zero workspace, and the message box.
+
+![A0 CLI connected shell](../res/usage/a0-cli/a0-cli-start.png)
+
+Use the footer when your terminal supports function keys:
+
+| Key | Action |
+|---|---|
+| `F3` | Toggle host file read/write access for the active CLI session. |
+| `F4` | Toggle remote code execution through the active CLI session. |
+| `F5` | Clear the visible chat log. |
+| `F6` | Open the chat list. |
+| `F7` | Nudge the active agent run. |
+| `F8` | Pause the active agent run. |
+| `Ctrl+C` | Exit. |
+| `Ctrl+P` | Open the command palette. |
+
+`Ctrl+P` is the best fallback when an IDE terminal or SSH client captures
+function keys.
+
+![A0 CLI command palette](../res/usage/a0-cli/a0-cli-command-palette.png)
+
+### Slash commands
+
+Type a slash command in the message box and press Enter. Most commands are also
+available from `Ctrl+P`.
+
+| Command | Use it for |
+|---|---|
+| `/new` | Create a new empty chat. |
+| `/chats` | List previous chats. Add `--project`, `--all-projects`, or `--sort=updated|created|name` when needed. |
+| `/project` | Open the project menu, or switch directly with `/project <name>`. |
+| `/profile` | Pick or set the active Agent Zero Core profile. |
+| `/compact` | Compact the current chat after confirmation. |
+| `/pause` | Pause the active run. |
+| `/resume` | Resume a paused run. |
+| `/nudge` | Nudge the active run. |
+| `/presets` | Choose a model preset. |
+| `/models` | Edit the active models. |
+| `/browser` | Check or change Browser mode. |
+| `/attach` | Attach local image files to the next message. Aliases: `/image`, `/img`. |
+| `/keys` | Show or hide key and widget help. |
+| `/disconnect` | Disconnect and return to the host connection flow. |
+| `/help` | Print the available command list in the shell. |
+| `/quit` | Disconnect and exit the CLI. |
 
 ## Host Browser
 
-Use this when browser content should remain on the user's machine and you want
-to pair it with local-model enforcement for host-browser content.
+Use this when you want Agent Zero to browse with a browser on your computer.
+This is useful when the page, login, or browser profile should stay on your
+machine.
 
-1. Keep A0 CLI connected to the Agent Zero chat.
+### Setup Checklist
 
-2. If you want Agent Zero to use an already-open personal Chrome window, open
-   `chrome://inspect/#remote-debugging` and click **Allow** for that browser
-   instance. A0 CLI detects Chrome's local `DevToolsActivePort` file; status and
-   profile checks do not connect to Chrome.
+- [ ] Keep A0 CLI connected to the Agent Zero chat.
+- [ ] In Agent Zero Web UI, open Browser plugin settings and choose **Bring Your
+      Own Browser**.
+- [ ] If you want Agent Zero to use an already-open personal Chrome window, open
+      that browser first.
+- [ ] In that browser, go to `chrome://inspect/#remote-debugging`.
+- [ ] Enable **Allow remote debugging for this browser instance**.
 
-3. Optionally list or select a Chrome-family profile:
+![Chrome remote debugging setting](../res/usage/browser/host-browser-remote-debugging-setting.png)
+
+When Agent Zero performs its first Browser action against that host browser,
+Chrome asks for confirmation. Click **Allow** if you trust this Agent Zero
+instance and A0 CLI connection.
+
+![Chrome remote debugging allow prompt](../res/usage/browser/host-browser-remote-debugging-allow.png)
+
+A0 CLI does not take over the browser while it is only checking status. Browser
+control starts when Agent Zero actually needs to use the browser.
+
+> [!IMPORTANT]
+> Remote debugging gives the connected app full control of that Chrome session,
+> including access to saved data, cookies, site data, and navigation. Use it only
+> with trusted Agent Zero instances and browser windows you intend the agent to
+> control.
+
+### Browser Profiles
 
 ```bash
 /browser profile
@@ -64,21 +162,26 @@ to pair it with local-model enforcement for host-browser content.
 /browser profile chrome-a0 Default
 ```
 
-Chrome 136+ blocks Playwright remote debugging against the default personal
-Chrome data directory. If Chrome's own Remote debugging consent path is not
-available, choose the A0-controlled local profile (`chrome-a0 Default` for
-Google Chrome). Cookies and site data remain in that separate browser profile on
-the host, and the user may need to sign in there once.
+If your everyday Chrome window cannot be used, choose the separate A0 browser
+profile instead. It keeps its own cookies and sign-ins, so you may need to log in
+there once.
 
-4. In Agent Zero WebUI, open Browser plugin settings and choose one of:
+### Choose Browser Mode
 
-- `container`: always use the Docker/server Playwright browser.
-- `host_when_available`: use the A0 CLI host browser when the subscribed CLI can provide it, otherwise fall back to container.
-- `host_required`: fail clearly unless a subscribed CLI can provide host browser control.
+In Agent Zero Web UI, open Browser plugin settings and choose one of:
 
-When host mode is selected in WebUI, the first Browser tool action asks the CLI
-to enable and launch host browser control automatically. The slash commands are
-still useful for diagnostics and manual override:
+- **Docker browser:** use Agent Zero's built-in Docker browser.
+- **Bring Your Own Browser:** use the browser on your computer through A0 CLI.
+  If A0 CLI is not connected, Agent Zero will tell you instead of quietly using
+  a different browser.
+
+You can also find the Browser commands from the CLI command palette:
+
+![A0 CLI Browser commands](../res/usage/a0-cli/a0-cli-command-browser.png)
+
+When **Bring Your Own Browser** is selected, the first browsing request asks A0
+CLI to prepare the browser automatically. These commands are useful when you
+want to check or change the state yourself:
 
 ```bash
 /browser status
@@ -86,22 +189,40 @@ still useful for diagnostics and manual override:
 /browser relaunch
 ```
 
-5. If the selected Chrome profile is already open normally, A0 CLI reports
-`relaunch_required`. Close that browser and retry the agent request or run
-`/browser relaunch` manually.
+`/browser status` shows which Browser mode is selected and whether your browser
+is ready:
 
-The local-profile launch path uses Python Playwright against installed system
-Chrome, Chromium, or Edge. The user-authorized Chrome remote debugging path uses
-A0 CLI's built-in DevTools Protocol helper instead, so users do not need to
-install Chrome DevTools MCP. A0 does not copy browser credentials, cookies, or
-profile data out of the browser profile.
+![A0 CLI Browser status](../res/usage/a0-cli/a0-cli-browser-status.png)
 
-Host-browser page content and screenshots are controlled by the Browser
-plugin's project-level policy:
+`/browser host` switches the active chat to Bring Your Own Browser mode:
 
-- `enforce_local`: block content/screenshots unless the active chat model is local.
-- `warn`: allow and include a warning in the tool result.
-- `allow`: allow without warning.
+![A0 CLI Bring Your Own Browser mode](../res/usage/a0-cli/a0-cli-browser-host-mode.png)
+
+Run `/browser container` to switch that chat back to Docker browser mode.
+
+`/browser privacy` reminds users where the Browser content policy lives:
+
+![A0 CLI Browser privacy notice](../res/usage/a0-cli/a0-cli-browser-privacy.png)
+
+If the selected browser profile is already open in another window, close that
+window and try again. You can also run `/browser relaunch`.
+
+You do not need to install Chrome DevTools MCP for this. A0 CLI already includes
+what it needs to connect to the browser you approve.
+
+### Page Privacy
+
+Browser settings decide what Agent Zero may do with page text and screenshots
+from your own browser:
+
+- **Local models only:** use host-browser page content only with local models.
+- **Warn when using cloud:** allow cloud models, but show a warning.
+- **Allow:** allow without warning.
+
+> [!NOTE]
+> The live Browser surface shows the Docker browser. When Agent Zero uses your
+> host browser, results and screenshots appear in the chat, but the live Canvas
+> is not a stream of your personal browser window.
 
 ## Give this to another agent
 
@@ -116,11 +237,13 @@ Set up the A0 CLI connector for Agent Zero on this machine using the a0-setup-cl
 - **Nothing appears locally:** Enter the Agent Zero web address manually or export `AGENT_ZERO_HOST`.
 - **You tried to install from inside Docker:** A0 CLI belongs on the host machine. Agent Zero stays in Docker.
 - **Function keys do nothing:** Some terminals and IDEs capture function keys. Use `Ctrl+P`.
-- **Connector route returns `404`:** Update Agent Zero to a build with builtin connector support.
-- **Host browser says Playwright is missing:** Install it in the A0 CLI environment with `python -m pip install playwright`.
-- **Host browser waits for relaunch:** The selected Chrome-family profile is already locked by normal Chrome. Close that profile and run `/browser relaunch`.
+- **A0 CLI says connector support is missing:** Update Agent Zero.
+- **Host browser says repair is needed:** Run `/browser repair`.
+- **Host browser waits for relaunch:** Close the selected Chrome, Edge, or Chromium profile and run `/browser relaunch`.
 
 ## Related links
 
 - [Quick Start](../quickstart.md)
 - [Installation Guide](../setup/installation.md)
+- [Browser Guide](browser.md)
+- [MCP Setup](mcp-setup.md)

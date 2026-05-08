@@ -10,7 +10,15 @@ Agent Zero uses three configurable LLM roles:
 | `utility_llm` | Secondary model for internal framework tasks: memory summarization, query generation, history compression, memory recall filtering |
 | `embedding_llm` | Produces vector embeddings for memory and knowledge indexing |
 
-The utility model handles high-volume, lower-stakes operations and can be a cheaper/faster model than the chat model. Browser automation is exposed as the direct `browser` tool; the main agent decides when to call it. Changing the embedding model invalidates the existing vector index - the entire knowledge base is re-indexed automatically.
+The utility model handles high-volume, lower-stakes operations and can be cheaper or faster than the chat model.
+
+Browser automation is exposed through the direct `browser` tool. The main agent decides when to call it.
+
+The Browser defaults to Docker Playwright Chromium. It can optionally use A0 CLI Bring Your Own Browser mode for a host Chrome-family browser.
+
+Browser-owned helper operations can use a Browser LLM preset when configured.
+
+Changing the embedding model invalidates the existing vector index. The knowledge base is re-indexed automatically.
 
 ## Model Providers
 

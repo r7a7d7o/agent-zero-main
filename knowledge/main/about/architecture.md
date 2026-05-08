@@ -58,7 +58,7 @@ Plugin tools can be added in `plugins/<plugin>/tools/` or `usr/plugins/<plugin>/
 
 ## Extension and Plugin System
 
-The plugin system (`python/helpers/plugins.py`) discovers plugins from `plugins/` and `usr/plugins/`. Each plugin has a `plugin.yaml` manifest declaring name, version, and settings. Plugins can contribute: API handlers, tools, WebUI components, extensions, and hooks. User plugins in `usr/plugins/` are never overwritten by framework updates. The agent has skills to create, manage, debug, review and contribute plugins to the Plugin Index repository (https://github.com/agent0ai/a0-plugins)
+The plugin system (`python/helpers/plugins.py`) discovers plugins from `plugins/` and `usr/plugins/`. Each plugin has a `plugin.yaml` manifest declaring name, version, and settings. Plugins can contribute: API handlers, tools, Web UI components, extensions, and hooks. User plugins in `usr/plugins/` are never overwritten by framework updates. The agent has skills to create, manage, debug, review and contribute plugins to the Plugin Index repository (https://github.com/agent0ai/a0-plugins)
 
 ## Frontend Architecture
 
