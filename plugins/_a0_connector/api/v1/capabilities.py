@@ -37,6 +37,7 @@ _OPTIONAL_FEATURES: dict[str, tuple[str, ...]] = {
     "skills_delete": ("helpers.skills", "helpers.files", "helpers.projects", "helpers.runtime"),
     "model_presets": ("plugins._model_config.helpers.model_config",),
     "model_switcher": ("plugins._model_config.helpers.model_config",),
+    "browser_runtime_config": ("plugins._browser.helpers.config", "helpers.plugins"),
     "compact_chat": (
         "plugins._chat_compaction.helpers.compactor",
         "plugins._model_config.helpers.model_config",

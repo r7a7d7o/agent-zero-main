@@ -174,6 +174,10 @@ def test_browser_config_normalizes_host_backend_and_privacy_policy():
 
     assert config["runtime_backend"] == "host_required"
     assert config["host_browser_privacy_policy"] == "warn"
+    assert (
+        normalize_browser_config({"runtime_backend": "host_when_available"})["runtime_backend"]
+        == "host_required"
+    )
 
 
 def test_browser_model_selection_uses_presets(monkeypatch):

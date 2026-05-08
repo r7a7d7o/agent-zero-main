@@ -13,7 +13,7 @@ DEFAULT_HOMEPAGE_KEY = "default_homepage"
 AUTOFOCUS_ACTIVE_PAGE_KEY = "autofocus_active_page"
 RUNTIME_BACKEND_KEY = "runtime_backend"
 HOST_BROWSER_PRIVACY_POLICY_KEY = "host_browser_privacy_policy"
-RUNTIME_BACKENDS = {"container", "host_when_available", "host_required"}
+RUNTIME_BACKENDS = {"container", "host_required"}
 HOST_BROWSER_PRIVACY_POLICIES = {"enforce_local", "warn", "allow"}
 BASE_BROWSER_ARGS = [
     "--no-sandbox",
@@ -75,6 +75,13 @@ def _normalize_choice(value: Any, *, allowed: set[str], default: str) -> str:
     return default
 
 
+def _normalize_runtime_backend(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized == "host_when_available":
+        return "host_required"
+    return _normalize_choice(normalized, allowed=RUNTIME_BACKENDS, default="container")
+
+
 def _model_config_summary(config: dict[str, Any] | None) -> str:
     if not isinstance(config, dict):
         return ""
@@ -95,10 +102,8 @@ def normalize_browser_config(settings: dict[str, Any] | None) -> dict[str, Any]:
             raw.get(AUTOFOCUS_ACTIVE_PAGE_KEY, True),
             default=True,
         ),
-        RUNTIME_BACKEND_KEY: _normalize_choice(
-            raw.get(RUNTIME_BACKEND_KEY, "container"),
-            allowed=RUNTIME_BACKENDS,
-            default="container",
+        RUNTIME_BACKEND_KEY: _normalize_runtime_backend(
+            raw.get(RUNTIME_BACKEND_KEY, "container")
         ),
         HOST_BROWSER_PRIVACY_POLICY_KEY: _normalize_choice(
             raw.get(HOST_BROWSER_PRIVACY_POLICY_KEY, "enforce_local"),

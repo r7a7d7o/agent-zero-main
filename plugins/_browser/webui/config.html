@@ -16,41 +16,6 @@
         x-destroy="$store.browserConfig.cleanup()"
       >
         <div class="browser-config-card">
-          <div class="section-title">Browsing</div>
-          <div class="section-description">
-            Set how new Browser sessions start and how an already-open Browser surface follows agent activity.
-          </div>
-
-          <label class="browser-config-field">
-            <span class="browser-config-field-label">Starting page</span>
-            <input
-              type="text"
-              x-model="$store.browserConfig.config.default_homepage"
-              placeholder="about:blank or https://example.com"
-              autocomplete="off"
-            />
-          </label>
-
-          <label class="browser-config-switch-row">
-            <span class="browser-config-switch-copy">
-              <span class="browser-config-field-label">Autofocus active page</span>
-              <span class="browser-config-field-help">Update the visible Browser surface for pages opened or changed by Browser tool results.</span>
-            </span>
-            <span class="browser-config-toggle-with-label">
-              <span class="browser-config-toggle-label" x-text="$store.browserConfig.autofocusLabel()"></span>
-              <span class="browser-config-toggle">
-                <input
-                  type="checkbox"
-                  :checked="$store.browserConfig.config.autofocus_active_page !== false"
-                  @change="$store.browserConfig.setAutofocusActivePage($event.target.checked)"
-                />
-                <span class="browser-config-switch"></span>
-              </span>
-            </span>
-          </label>
-        </div>
-
-        <div class="browser-config-card">
           <div class="section-title">Host Browser</div>
           <div class="section-description">
             Use Chrome, Edge, or Chromium on this computer. Keep A0 CLI connected; the browser opens when the agent first needs it.
@@ -84,6 +49,41 @@
             <span class="material-symbols-outlined" :class="{ spinning: $store.browserConfig.hostBrowserStatusLoading }" x-text="$store.browserConfig.hostBrowserStatusLoading ? 'progress_activity' : 'captive_portal'"></span>
             <span x-text="$store.browserConfig.hostBrowserConnectorLabel()"></span>
           </div>
+        </div>
+
+        <div class="browser-config-card">
+          <div class="section-title">Browsing</div>
+          <div class="section-description">
+            Set how new Browser sessions start and how an already-open Browser surface follows agent activity.
+          </div>
+
+          <label class="browser-config-field">
+            <span class="browser-config-field-label">Starting page</span>
+            <input
+              type="text"
+              x-model="$store.browserConfig.config.default_homepage"
+              placeholder="about:blank or https://example.com"
+              autocomplete="off"
+            />
+          </label>
+
+          <label class="browser-config-switch-row">
+            <span class="browser-config-switch-copy">
+              <span class="browser-config-field-label">Autofocus active page</span>
+              <span class="browser-config-field-help">Update the visible Browser surface for pages opened or changed by Browser tool results.</span>
+            </span>
+            <span class="browser-config-toggle-with-label">
+              <span class="browser-config-toggle-label" x-text="$store.browserConfig.autofocusLabel()"></span>
+              <span class="browser-config-toggle">
+                <input
+                  type="checkbox"
+                  :checked="$store.browserConfig.config.autofocus_active_page !== false"
+                  @change="$store.browserConfig.setAutofocusActivePage($event.target.checked)"
+                />
+                <span class="browser-config-switch"></span>
+              </span>
+            </span>
+          </label>
         </div>
 
         <div class="browser-config-card">
