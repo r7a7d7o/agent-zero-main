@@ -1201,6 +1201,8 @@ export HOME="${HOME:-%s}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export XDG_CONFIG_DIRS="/etc/xdg${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}"
+export XDG_DATA_DIRS="/usr/local/share:/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-XFCE}"
 mkdir -p "$HOME/Desktop" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
 if command -v xfconf-query >/dev/null 2>&1; then
@@ -1261,6 +1263,8 @@ fi
                     'export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"',
                     'export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"',
                     'export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"',
+                    'export XDG_CONFIG_DIRS="/etc/xdg${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}"',
+                    'export XDG_DATA_DIRS="/usr/local/share:/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"',
                     'export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-XFCE}"',
                     (
                         "exec dbus-launch --exit-with-session sh -c "

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -99,22 +100,12 @@ def cleanup_stale_runtime_state(force: bool = False) -> dict[str, Any]:
     cleanup_needed = force or not CLEANUP_MARKER.exists() or bool(retired_web_paths or retired_web_packages)
 
     if cleanup_needed:
-        _kill_old_processes(errors)
-
-        for path in [
-            RETIRED_WEB_APT_SOURCE_FILE,
-            RETIRED_WEB_APT_KEYRING_FILE,
-            RETIRED_WEB_SUPERVISOR_FILE,
-            *RETIRED_WEB_RUNTIME_DIRS,
-        ]:
-            try:
-                if _remove_path(path):
-                    removed.append(str(path))
-            except Exception as exc:
-                errors.append(f"{path}: {exc}")
-
-        _retire_supervisor_program(errors)
-        _purge_packages(removed, errors, installed_packages=retired_web_packages)
+        _cleanup_retired_web_runtime(
+            removed,
+            errors,
+            retired_web_packages=retired_web_packages,
+            purge_packages=True,
+        )
 
         try:
             CLEANUP_MARKER.parent.mkdir(parents=True, exist_ok=True)
@@ -140,6 +131,45 @@ def cleanup_stale_runtime_state(force: bool = False) -> dict[str, Any]:
         "installed": installed,
         "migrated": migrated,
         "warnings": warnings,
+        "errors": errors,
+    }
+
+
+def retire_collabora_web_runtime(force: bool = False) -> dict[str, Any]:
+    """Retire the legacy Collabora web runtime without preparing LibreOffice.
+
+    This is intentionally narrower than cleanup_stale_runtime_state(). Older
+    Docker self-update managers run the checked-out repo's prepare.py before the
+    updated UI starts, so prepare.py can call this fast hook to remove the stale
+    supervisor program left by v1.10 without blocking health checks on desktop
+    package installation.
+    """
+
+    removed: list[str] = []
+    errors: list[str] = []
+    retired_web_paths = [
+        path
+        for path in [
+            RETIRED_WEB_APT_SOURCE_FILE,
+            RETIRED_WEB_APT_KEYRING_FILE,
+            RETIRED_WEB_SUPERVISOR_FILE,
+            *RETIRED_WEB_RUNTIME_DIRS,
+        ]
+        if path.exists() or path.is_symlink()
+    ]
+
+    if force or retired_web_paths:
+        _cleanup_retired_web_runtime(
+            removed,
+            errors,
+            retired_web_packages=[],
+            purge_packages=False,
+        )
+
+    return {
+        "ok": not errors,
+        "skipped": not force and not retired_web_paths,
+        "removed": removed,
         "errors": errors,
     }
 
@@ -218,9 +248,39 @@ def _remove_path(path: Path) -> bool:
         path.unlink(missing_ok=True)
         return True
     if path.exists():
-        shutil.rmtree(path)
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
         return True
     return False
+
+
+def _cleanup_retired_web_runtime(
+    removed: list[str],
+    errors: list[str],
+    *,
+    retired_web_packages: list[str],
+    purge_packages: bool,
+) -> None:
+    _stop_supervisor_program(errors)
+    _kill_old_processes(errors)
+
+    for path in [
+        RETIRED_WEB_APT_SOURCE_FILE,
+        RETIRED_WEB_APT_KEYRING_FILE,
+        RETIRED_WEB_SUPERVISOR_FILE,
+        *RETIRED_WEB_RUNTIME_DIRS,
+    ]:
+        try:
+            if _remove_path(path):
+                removed.append(str(path))
+        except Exception as exc:
+            errors.append(f"{path}: {exc}")
+
+    _retire_supervisor_program(errors)
+    if purge_packages:
+        _purge_packages(removed, errors, installed_packages=retired_web_packages)
 
 
 def _kill_old_processes(errors: list[str]) -> None:
@@ -237,6 +297,28 @@ def _kill_old_processes(errors: list[str]) -> None:
         errors.append((result.stderr or result.stdout or "pkill coolwsd failed").strip())
 
 
+def _stop_supervisor_program(errors: list[str]) -> None:
+    if not shutil.which("supervisorctl"):
+        return
+    status = _supervisorctl("status", RETIRED_WEB_SUPERVISOR_PROGRAM)
+    status_output = _supervisor_output(status)
+    if status.returncode != 0:
+        if _supervisor_absent(status_output) or _supervisor_stopped(status_output):
+            return
+        errors.append(status_output or f"supervisorctl status {RETIRED_WEB_SUPERVISOR_PROGRAM} failed")
+        return
+
+    if _supervisor_stopped(status_output):
+        return
+
+    stopped = _supervisorctl("stop", RETIRED_WEB_SUPERVISOR_PROGRAM)
+    stopped_output = _supervisor_output(stopped)
+    if stopped.returncode != 0 and not (
+        _supervisor_absent(stopped_output) or _supervisor_stopped(stopped_output)
+    ):
+        errors.append(stopped_output or f"supervisorctl stop {RETIRED_WEB_SUPERVISOR_PROGRAM} failed")
+
+
 def _retire_supervisor_program(errors: list[str]) -> None:
     if not shutil.which("supervisorctl"):
         return
@@ -245,14 +327,18 @@ def _retire_supervisor_program(errors: list[str]) -> None:
     if status.returncode != 0:
         if _supervisor_absent(status_output):
             return
-        errors.append(status_output or f"supervisorctl status {RETIRED_WEB_SUPERVISOR_PROGRAM} failed")
-        return
+        if not _supervisor_stopped(status_output):
+            errors.append(status_output or f"supervisorctl status {RETIRED_WEB_SUPERVISOR_PROGRAM} failed")
+            return
 
-    stopped = _supervisorctl("stop", RETIRED_WEB_SUPERVISOR_PROGRAM)
-    stopped_output = _supervisor_output(stopped)
-    if stopped.returncode != 0 and not _supervisor_absent(stopped_output):
-        errors.append(stopped_output or f"supervisorctl stop {RETIRED_WEB_SUPERVISOR_PROGRAM} failed")
-        return
+    if not _supervisor_stopped(status_output):
+        stopped = _supervisorctl("stop", RETIRED_WEB_SUPERVISOR_PROGRAM)
+        stopped_output = _supervisor_output(stopped)
+        if stopped.returncode != 0 and not (
+            _supervisor_absent(stopped_output) or _supervisor_stopped(stopped_output)
+        ):
+            errors.append(stopped_output or f"supervisorctl stop {RETIRED_WEB_SUPERVISOR_PROGRAM} failed")
+            return
 
     removed = _supervisorctl("remove", RETIRED_WEB_SUPERVISOR_PROGRAM)
     removed_output = _supervisor_output(removed)
@@ -291,6 +377,10 @@ def _supervisor_absent(output: str) -> bool:
         or "connection refused" in normalized
         or "no such file" in normalized
     )
+
+
+def _supervisor_stopped(output: str) -> bool:
+    return bool(re.search(rf"(^|\s){re.escape(RETIRED_WEB_SUPERVISOR_PROGRAM)}\s+STOPPED\b", output))
 
 
 def _installed_packages(packages: tuple[str, ...]) -> list[str]:
