@@ -6,13 +6,14 @@ from pathlib import Path
 import uuid
 from typing import Any
 
-from helpers import history
+from helpers import files, history
 from helpers.tool import Response, Tool
 from helpers.ws import NAMESPACE
 from helpers.ws_manager import ConnectionNotFoundError, get_shared_ws_manager
 
 from plugins._a0_connector.helpers.ws_runtime import (
     clear_pending_computer_use_op,
+    computer_use_metadata_for_sid,
     select_computer_use_target_sid,
     store_pending_computer_use_op,
 )
@@ -20,7 +21,12 @@ from plugins._a0_connector.helpers.ws_runtime import (
 
 COMPUTER_USE_OP_TIMEOUT = 180.0
 COMPUTER_USE_OP_EVENT = "connector_computer_use_op"
+COMPUTER_USE_CAPTURE_DIR = ("tmp", "_a0_connector", "computer_use", "captures")
 CAPTURE_TOKENS_ESTIMATE = 1500
+MAX_CAPTURE_ARTIFACT_SIZE_BYTES = 25 * 1024 * 1024
+REARM_REQUIRED_DEFAULT_MESSAGE = (
+    "Computer use is configured, but the installed desktop-control backend is not armed."
+)
 _AUTO_CAPTURE_ACTIONS = {
     "start_session",
     "move",
@@ -75,6 +81,19 @@ class ComputerUseRemote(Tool):
                 break_loop=False,
             )
 
+        metadata = computer_use_metadata_for_sid(sid) or {}
+        if str(metadata.get("status", "") or "").strip().lower() == "rearm required":
+            return Response(
+                message=self._format_error(
+                    {
+                        "code": "COMPUTER_USE_REARM_REQUIRED",
+                        "error": str(metadata.get("last_error", "") or "").strip()
+                        or REARM_REQUIRED_DEFAULT_MESSAGE,
+                    }
+                ),
+                break_loop=False,
+            )
+
         try:
             payload = self._build_payload(op_id=str(uuid.uuid4()), context_id=context_id, action=action)
             result = await self._dispatch_payload(sid=sid, payload=payload)
@@ -84,6 +103,7 @@ class ComputerUseRemote(Tool):
                 context_id=context_id,
                 result=result,
             )
+            message = self._extract_result(action, result)
         except ValueError as exc:
             return Response(
                 message=f"computer_use_remote: {exc}",
@@ -108,7 +128,6 @@ class ComputerUseRemote(Tool):
                 break_loop=False,
             )
 
-        message = self._extract_result(action, result)
         if capture_note:
             message = f"{message} {capture_note}".strip()
 
@@ -182,7 +201,10 @@ class ComputerUseRemote(Tool):
         if not isinstance(capture_data, dict):
             return "Automatic screen refresh failed: missing capture payload."
 
-        summary = self._record_capture(capture_data)
+        try:
+            summary = self._record_capture(capture_data)
+        except Exception as exc:
+            return f"Automatic screen refresh failed: {exc}"
         return f"Latest screen attached: {summary}"
 
     def _auto_capture_settle_seconds(self, action: str) -> float:
@@ -296,6 +318,15 @@ class ComputerUseRemote(Tool):
     def _format_error(self, result: dict[str, Any]) -> str:
         error = str(result.get("error") or "Unknown error")
         code = str(result.get("code") or "")
+        if code == "COMPUTER_USE_REARM_REQUIRED" or error == "COMPUTER_USE_REARM_REQUIRED":
+            detail = error if error and error != code else REARM_REQUIRED_DEFAULT_MESSAGE
+            return (
+                "COMPUTER_USE_REARM_REQUIRED: "
+                f"{detail} Stop using computer_use_remote for now; ask the user to re-arm "
+                "Computer Use in the A0 CLI with Confirm with User, approve the platform "
+                "permission prompt if shown, then switch back to Free Run if desired. "
+                "Do not retry or use screenshot fallbacks."
+            )
         if code:
             return f"{code}: {error}"
         return error
@@ -308,6 +339,19 @@ class ComputerUseRemote(Tool):
         active_contexts = data.get("active_contexts") or []
         active_text = ", ".join(str(item) for item in active_contexts) if active_contexts else "none"
         backend_text = ""
+        rearm_guidance = ""
+        if status == "rearm required":
+            detail = str(data.get("last_error") or "").strip()
+            if detail and detail != "COMPUTER_USE_REARM_REQUIRED":
+                rearm_guidance = (
+                    f" {detail} Stop using computer_use_remote until the user re-arms it."
+                )
+            else:
+                rearm_guidance = (
+                    " Computer Use is configured but the installed desktop-control backend "
+                    "is not armed. "
+                    "Stop using computer_use_remote until the user re-arms it."
+                )
         if backend_id:
             backend_text = backend_id
             if backend_family:
@@ -315,11 +359,15 @@ class ComputerUseRemote(Tool):
         if backend_text:
             return (
                 f"Computer use status={status}, trust_mode={trust_mode or 'unknown'}, "
-                f"backend={backend_text}, active_contexts={active_text}."
+                f"backend={backend_text}, active_contexts={active_text}.{rearm_guidance}"
             )
-        return f"Computer use status={status}, trust_mode={trust_mode or 'unknown'}, active_contexts={active_text}."
+        return (
+            f"Computer use status={status}, trust_mode={trust_mode or 'unknown'}, "
+            f"active_contexts={active_text}.{rearm_guidance}"
+        )
 
     def _record_capture(self, data: dict[str, Any]) -> str:
+        data = self._materialize_capture_artifact(data)
         _image_path, display_path = self._resolve_capture_path(data)
         width = data.get("width", "?")
         height = data.get("height", "?")
@@ -419,6 +467,7 @@ class ComputerUseRemote(Tool):
 
     def _resolve_capture_path(self, data: dict[str, Any]) -> tuple[Path, str]:
         candidates = [
+            str(data.get("path", "") or "").strip(),
             str(data.get("capture_path", "") or "").strip(),
             str(data.get("container_path", "") or "").strip(),
             str(data.get("host_path", "") or "").strip(),
@@ -429,6 +478,43 @@ class ComputerUseRemote(Tool):
         raise FileNotFoundError(
             f"Capture artifact was not found in any advertised path: {candidates!r}"
         )
+
+    def _materialize_capture_artifact(self, data: dict[str, Any]) -> dict[str, Any]:
+        artifact = data.get("artifact")
+        if not isinstance(artifact, dict):
+            return data
+        if str(artifact.get("encoding", "")).strip().lower() != "base64":
+            return data
+
+        encoded = str(artifact.get("data") or "")
+        if not encoded:
+            return data
+
+        estimated_size = _estimated_base64_decoded_size(encoded)
+        if estimated_size > MAX_CAPTURE_ARTIFACT_SIZE_BYTES:
+            raise RuntimeError(
+                "Computer-use capture artifact is too large to materialize safely "
+                f"({estimated_size} bytes, limit {MAX_CAPTURE_ARTIFACT_SIZE_BYTES} bytes)."
+            )
+
+        filename = _safe_filename(str(artifact.get("filename") or "computer-use-capture.png"))
+        context_id = str(getattr(getattr(self.agent, "context", None), "id", "") or "default")
+        target_relative = str(Path(*COMPUTER_USE_CAPTURE_DIR, context_id, filename))
+        target_path = Path(files.get_abs_path(target_relative))
+        try:
+            files.write_file_base64(target_relative, encoded)
+        except Exception as exc:
+            target_path.unlink(missing_ok=True)
+            raise RuntimeError("Computer-use capture artifact could not be decoded.") from exc
+
+        materialized = dict(data)
+        materialized.pop("artifact", None)
+        local_path = str(target_path)
+        materialized["path"] = local_path
+        materialized["a0_path"] = files.normalize_a0_path(local_path)
+        materialized.setdefault("capture_path", local_path)
+        materialized.setdefault("capture_id", target_path.stem)
+        return materialized
 
     def _coerce_int(self, value: object, *, name: str) -> int:
         try:
@@ -442,3 +528,16 @@ class ComputerUseRemote(Tool):
         if isinstance(value, (int, float)):
             return bool(value)
         return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_filename(value: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in value)
+    cleaned = cleaned.strip("._") or f"computer-use-{uuid.uuid4().hex}.png"
+    if "." not in cleaned:
+        cleaned += ".png"
+    return cleaned
+
+
+def _estimated_base64_decoded_size(data: str) -> int:
+    compact_length = sum(1 for char in data if not char.isspace())
+    return (compact_length * 3) // 4

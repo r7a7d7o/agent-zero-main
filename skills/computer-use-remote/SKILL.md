@@ -53,6 +53,8 @@ Arguments:
 
 Availability, backend support, and trust mode are checked when the tool runs. If no CLI is connected or local computer use is disabled, tell the user what to enable instead of using the server environment.
 
+If any tool result contains `COMPUTER_USE_REARM_REQUIRED` or `status=rearm required`, stop the computer-use sequence immediately. Do not retry `start_session`, do not call `capture`, and do not use shell, vision, or screenshot fallbacks to bypass it. Tell the user that the A0 CLI has Computer Use configured but the installed desktop-control backend is not armed; they must re-arm it in the CLI with Confirm with User, approve the platform permission prompt if shown, and then switch back to Free Run if desired.
+
 ## Core Loop
 
 1. Call `start_session` first.

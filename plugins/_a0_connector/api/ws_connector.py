@@ -196,10 +196,12 @@ class WsConnector(WsHandler):
         host_browser = host_browser_metadata_for_sid(sid) or {}
         remote_files = remote_file_metadata_for_sid(sid) or {}
         remote_exec = remote_exec_metadata_for_sid(sid) or {}
+        computer_use_status = str(computer_use.get("status", "") or "").strip().lower()
         return {
             "contexts": sorted(subscribed_contexts_for_sid(sid)),
             "computer_use": bool(
                 computer_use.get("supported") and computer_use.get("enabled")
+                and computer_use_status != "rearm required"
             ),
             "host_browser": bool(
                 host_browser.get("supported") and host_browser.get("enabled")

@@ -51,6 +51,9 @@ class ComputerUseMetadata:
     supported: bool
     enabled: bool
     trust_mode: str
+    status: str
+    last_error: str
+    restore_token_present: bool
     artifact_root: str
     backend_id: str
     backend_family: str
@@ -338,6 +341,9 @@ def store_sid_computer_use_metadata(sid: str, payload: dict[str, Any]) -> Comput
         supported=bool(payload.get("supported")),
         enabled=bool(payload.get("supported")) and bool(payload.get("enabled")),
         trust_mode=str(payload.get("trust_mode", "") or "").strip(),
+        status=str(payload.get("status", "") or "").strip(),
+        last_error=str(payload.get("last_error", "") or "").strip(),
+        restore_token_present=bool(payload.get("restore_token_present")),
         artifact_root=str(payload.get("artifact_root", "") or "").strip(),
         backend_id=str(payload.get("backend_id", "") or "").strip(),
         backend_family=str(payload.get("backend_family", "") or "").strip(),
@@ -364,6 +370,9 @@ def computer_use_metadata_for_sid(sid: str) -> dict[str, Any] | None:
         "supported": metadata.supported,
         "enabled": metadata.enabled,
         "trust_mode": metadata.trust_mode,
+        "status": metadata.status,
+        "last_error": metadata.last_error,
+        "restore_token_present": metadata.restore_token_present,
         "artifact_root": metadata.artifact_root,
         "backend_id": metadata.backend_id,
         "backend_family": metadata.backend_family,
