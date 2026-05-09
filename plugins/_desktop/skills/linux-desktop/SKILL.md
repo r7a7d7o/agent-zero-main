@@ -60,6 +60,8 @@ $DESKTOP key ctrl+s
 
 The script targets the persistent `agent-zero-desktop` X display, sets `DISPLAY`, `XAUTHORITY`, and `HOME` to the XFCE profile, then uses `xdotool` for input. Startup normally prepares this session. If `check` fails during explicit Desktop work, report that the Desktop runtime is not ready instead of installing packages ad hoc.
 
+If `observe --json --screenshot` shows a reachable display, visible Desktop/window entries, and a fresh screenshot, the Desktop is usable even when `active_window` is `null`; a bare XFCE desktop can have no active application window. Treat missing screenshots, missing display, or unavailable `xdotool`/`xwd` as blockers and stop with the specific readiness message instead of repeating clicks or inventing a fallback.
+
 For direct app launches without coordinates:
 
 ```bash

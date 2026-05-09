@@ -372,7 +372,6 @@ def collect_active_window(env: dict[str, str], capabilities: dict[str, str], err
         return None
     result = run([capabilities["xdotool"], "getactivewindow"], env=env, timeout=3)
     if result.returncode != 0:
-        errors.append(command_output(result) or "xdotool could not read the active window.")
         return None
     window_id = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
     if not window_id:
