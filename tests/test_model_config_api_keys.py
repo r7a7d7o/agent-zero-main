@@ -129,3 +129,36 @@ def test_ollama_cloud_provider_config_requires_key_and_base_url():
     assert ollama_cloud["kwargs"]["api_base"] == "https://ollama.com/v1"
     assert ollama_cloud["models_list"]["endpoint_url"] == "/models"
     assert "api_key_mode" not in ollama_cloud
+
+
+def test_missing_api_key_banner_includes_auto_modal_metadata(monkeypatch):
+    from plugins._model_config.helpers import model_config
+
+    fake = [{"model_type": "Chat Model", "provider": "openai"}]
+    monkeypatch.setattr(model_config, "get_missing_api_key_providers", lambda: fake)
+
+    async def run():
+        banners = []
+        await missing_key_banner.MissingApiKeyCheck(agent=None).execute(
+            banners=banners, frontend_context={}
+        )
+        return next(b for b in banners if b.get("id") == "missing-api-key")
+
+    import asyncio
+    row = asyncio.run(run())
+
+    assert row["auto_modal_path"] == "/plugins/_onboarding/webui/onboarding.html"
+    assert row["auto_modal_reason"] == "missing-api-key"
+    assert row["auto_modal_priority"] == 100
+    assert row["type"] == "warning"
+    assert row["dismissible"] is False
+    assert row["missing_providers"] == fake
+
+
+def test_provider_key_modes_for_local_and_ollama_cloud():
+    from plugins._model_config.helpers import model_config
+
+    assert model_config.provider_requires_api_key("ollama") is False
+    assert model_config.provider_requires_api_key("lm_studio") is False
+    assert model_config.provider_requires_api_key("other") is False
+    assert model_config.provider_requires_api_key("ollama_cloud") is True

@@ -4,14 +4,53 @@ from copy import deepcopy
 import models
 from helpers import plugins, files
 from helpers import yaml as yaml_helper
-from helpers.providers import get_providers
+from helpers.providers import get_provider_config, get_providers
 
 PRESETS_FILE = "presets.yaml"
 DEFAULT_PRESETS_FILE = "default_presets.yaml"
+PROVIDER_METADATA_FILE = "provider_metadata.yaml"
 PRESET_SCOPE_GLOBAL = "global"
 PRESET_SCOPE_PROJECT = "project"
 LOCAL_PROVIDERS = {"ollama", "lm_studio"}
 LOCAL_EMBEDDING = {"huggingface"}
+_PROVIDER_METADATA_CACHE: dict | None = None
+
+
+def _get_provider_metadata_path() -> str:
+    plugin_dir = plugins.find_plugin_dir("_model_config")
+    return files.get_abs_path(plugin_dir, PROVIDER_METADATA_FILE) if plugin_dir else ""
+
+
+def get_provider_metadata(model_type: str = "chat", provider: str = "") -> dict:
+    """Get plugin-owned provider metadata that does not belong in conf/model_providers.yaml."""
+    global _PROVIDER_METADATA_CACHE
+    if _PROVIDER_METADATA_CACHE is None:
+        path = _get_provider_metadata_path()
+        if path and files.exists(path):
+            data = yaml_helper.loads(files.read_file(path))
+            _PROVIDER_METADATA_CACHE = data if isinstance(data, dict) else {}
+        else:
+            _PROVIDER_METADATA_CACHE = {}
+
+    section = _PROVIDER_METADATA_CACHE.get(model_type, {})
+    if not isinstance(section, dict):
+        return {}
+    meta = section.get(str(provider or "").strip().lower(), {})
+    return meta if isinstance(meta, dict) else {}
+
+
+def _model_type_for_label(label: str) -> str:
+    return "embedding" if label == "Embedding Model" else "chat"
+
+
+def provider_requires_api_key(provider: str, model_type: str = "chat") -> bool:
+    provider_id = str(provider or "").strip().lower()
+    if not provider_id:
+        return False
+    cfg = get_provider_config(model_type, provider_id) or get_provider_config("chat", provider_id) or {}
+    meta = get_provider_metadata(model_type, provider_id) or get_provider_metadata("chat", provider_id)
+    mode = str(meta.get("api_key_mode") or cfg.get("api_key_mode") or "required").strip().lower()
+    return mode not in {"none", "optional", "oauth"}
 
 
 def _get_presets_path(project_name: str | None = None) -> str:
@@ -351,7 +390,9 @@ def get_embedding_providers():
     return get_providers("embedding")
 
 
-def has_provider_api_key(provider: str, configured_api_key: str = "") -> bool:
+def has_provider_api_key(provider: str, configured_api_key: str = "", model_type: str = "chat") -> bool:
+    if not provider_requires_api_key(provider, model_type):
+        return True
     configured_value = (configured_api_key or "").strip()
     if configured_value and configured_value != "None":
         return True
@@ -381,7 +422,7 @@ def get_missing_api_key_providers(agent=None) -> list[dict]:
         if label == "Embedding Model" and provider_lower in LOCAL_EMBEDDING:
             continue
 
-        if not has_provider_api_key(provider_lower, model_cfg.get("api_key", "")):
+        if not has_provider_api_key(provider_lower, model_cfg.get("api_key", ""), _model_type_for_label(label)):
             missing.append({"model_type": label, "provider": provider})
 
     return missing

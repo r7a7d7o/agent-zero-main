@@ -21,7 +21,7 @@ class MissingApiKeyCheck(Extension):
         if missing_providers:
             banners.append({
                 "id": "missing-api-key",
-                "type": "error",
+                "type": "warning",
                 "priority": 100,
                 "title": "Welcome to Agent Zero!",
                 "html": f"""You're almost ready to chat. Please configure your models to continue.<br>
@@ -29,6 +29,10 @@ class MissingApiKeyCheck(Extension):
                          {self.CONFIGURE_MODEL_SETTINGS_LINK}""",
                 "dismissible": False,
                 "source": "backend",
+                "auto_modal_path": "/plugins/_onboarding/webui/onboarding.html",
+                "auto_modal_reason": "missing-api-key",
+                "auto_modal_priority": 100,
+                "auto_modal_surfaces": ["welcome", "chat-created"],
                 # For programmatic clients (e.g. chat composer) reusing this banner pipeline
                 "missing_providers": missing_providers,
             })

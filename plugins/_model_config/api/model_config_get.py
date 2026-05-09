@@ -1,5 +1,6 @@
 from helpers.api import ApiHandler, Request, Response
 from helpers import plugins
+from helpers.providers import get_raw_providers
 from plugins._model_config.helpers import model_config
 import models
 
@@ -21,6 +22,8 @@ class ModelConfigGet(ApiHandler):
         # Add provider lists for UI dropdowns
         chat_providers = model_config.get_chat_providers()
         embedding_providers = model_config.get_embedding_providers()
+        chat_provider_details = get_raw_providers("chat")
+        embedding_provider_details = get_raw_providers("embedding")
 
         # Mask API keys - show status only
         api_key_status = {}
@@ -37,5 +40,7 @@ class ModelConfigGet(ApiHandler):
             "config": config,
             "chat_providers": chat_providers,
             "embedding_providers": embedding_providers,
+            "chat_provider_details": chat_provider_details,
+            "embedding_provider_details": embedding_provider_details,
             "api_key_status": api_key_status,
         }

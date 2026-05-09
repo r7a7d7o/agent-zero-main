@@ -140,6 +140,8 @@ chat:
   venice:
     name: Venice.ai
     litellm_provider: openai
+    models_list:
+      endpoint_url: "https://api.venice.ai/api/v1/models"
     kwargs:
       api_base: https://api.venice.ai/api/v1
       venice_parameters:

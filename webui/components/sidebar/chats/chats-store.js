@@ -168,7 +168,8 @@ const model = {
       });
 
       if (response.ok) {
-        this.selectChat(response.ctxid);
+        await this.selectChat(response.ctxid);
+        document.dispatchEvent(new CustomEvent("chat-created", { detail: { ctxid: response.ctxid } }));
         return;
       }
 

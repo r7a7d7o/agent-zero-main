@@ -54,6 +54,8 @@ export const store = createStore("modelConfig", {
   // Core state
   chatProviders: [],
   embeddingProviders: [],
+  chatProviderDetails: [],
+  embeddingProviderDetails: [],
   _loaded: false,
 
   // API Keys state (from mixin)
@@ -95,6 +97,8 @@ export const store = createStore("modelConfig", {
     const data = await this._fetchConfigData();
     this.chatProviders = data.chat_providers || [];
     this.embeddingProviders = data.embedding_providers || [];
+    this.chatProviderDetails = data.chat_provider_details || [];
+    this.embeddingProviderDetails = data.embedding_provider_details || [];
     this.apiKeyStatus = data.api_key_status || {};
     const keys = {};
     const dirty = {};
@@ -238,8 +242,8 @@ export const store = createStore("modelConfig", {
     return key === 'embedding_model' ? 'embedding' : 'chat';
   },
 
-  async searchModels(provider, query, modelType, apiBase) {
-    if (!provider) return [];
+  async searchModelsDetailed(provider, query, modelType, apiBase) {
+    if (!provider) return { models: [], provider: '', source: 'none', error: '' };
     try {
       const res = await fetchApi(`${API_BASE}/model_search`, {
         method: 'POST',
@@ -247,11 +251,21 @@ export const store = createStore("modelConfig", {
         body: JSON.stringify({ provider, query: query || '', model_type: modelType || 'chat', api_base: apiBase || '' })
       });
       const data = await res.json();
-      return data.models || [];
+      return {
+        models: data.models || [],
+        provider: data.provider || provider,
+        source: data.source || '',
+        error: data.error || '',
+      };
     } catch (e) {
       console.error('Model search failed:', e);
-      return [];
+      return { models: [], provider, source: 'error', error: e?.message || String(e) };
     }
+  },
+
+  async searchModels(provider, query, modelType, apiBase) {
+    const data = await this.searchModelsDetailed(provider, query, modelType, apiBase);
+    return data.models || [];
   },
 
   groupResults(models, query) {
