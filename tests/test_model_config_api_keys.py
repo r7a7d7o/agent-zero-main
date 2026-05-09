@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 sys.modules["giturlparse"] = types.SimpleNamespace(parse=lambda *args, **kwargs: None)
+sys.modules["whisper"] = types.SimpleNamespace(load_model=lambda *args, **kwargs: None)
 
 
 class _DummyObserver:
@@ -115,3 +116,16 @@ def test_model_config_frontend_tracks_inline_api_key_edits():
     assert '@input="$store.modelConfig.setApiKeyValue(_prov, $el.value)"' in config_content
     assert "persistAllDirtyApiKeys()" in modal_content
     assert "$store.modelConfig.resetApiKeyDrafts();" in modal_content
+
+
+def test_ollama_cloud_provider_config_requires_key_and_base_url():
+    import yaml
+
+    provider_path = PROJECT_ROOT / "conf/model_providers.yaml"
+    provider_config = yaml.safe_load(provider_path.read_text(encoding="utf-8"))
+    ollama_cloud = provider_config["chat"]["ollama_cloud"]
+
+    assert ollama_cloud["name"] == "Ollama Cloud"
+    assert ollama_cloud["kwargs"]["api_base"] == "https://ollama.com/v1"
+    assert ollama_cloud["models_list"]["endpoint_url"] == "/models"
+    assert "api_key_mode" not in ollama_cloud
