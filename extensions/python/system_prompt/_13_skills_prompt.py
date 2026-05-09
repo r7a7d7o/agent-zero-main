@@ -26,8 +26,10 @@ async def build_prompt(agent: Agent) -> str:
     result: list[str] = []
     for skill in available:
         name = skill.name.strip().replace("\n", " ")[:100]
-        descr = skill.description.replace("\n", " ")[:500]
-        result.append(f"**{name}** {descr}")
+        descr = skill.description.replace("\n", " ").strip()
+        if len(descr) > 100:
+            descr = descr[:100].rstrip() + "..."
+        result.append(f"- {name}: {descr}" if descr else f"- {name}")
 
     if not result:
         return ""

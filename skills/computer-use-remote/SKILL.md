@@ -1,6 +1,6 @@
 ---
 name: computer-use-remote
-description: Detailed operating guide for using computer_use_remote on the connected local machine. Load this skill before using computer_use_remote for desktop control, screenshots, menus, browser chrome, or other native UI tasks.
+description: Beta local desktop control through a connected A0 CLI host; use for screenshots, menus, browser chrome, and native UI tasks.
 version: 1.1.0
 author: Agent Zero Team
 tags: ["computer-use", "desktop", "local-ui", "screenshots", "native-ui"]
@@ -18,6 +18,8 @@ allowed_tools:
 
 # Computer Use Remote
 
+This skill unlocks the beta `computer_use_remote` tool for connected local desktop control through A0 CLI.
+
 ## When to Use
 
 Load this skill before using `computer_use_remote` for local desktop and native UI tasks on the connected machine.
@@ -25,6 +27,31 @@ Load this skill before using `computer_use_remote` for local desktop and native 
 If the task is browser-only and the user is flexible, prefer direct browser tooling because it is usually more reliable and token-efficient than screenshot-driven desktop control.
 
 If the task needs shell execution on the CLI host, load `code-execution-remote` separately rather than treating desktop control and shell execution as one affordance.
+
+## Tool Contract
+
+Use:
+
+```json
+{
+  "tool_name": "computer_use_remote",
+  "tool_args": {
+    "action": "start_session"
+  }
+}
+```
+
+Arguments:
+
+- `action`: `start_session`, `status`, `capture`, `move`, `click`, `scroll`, `key`, `type`, `stop_session`
+- `session_id`: optional after `start_session`
+- `move`: `x`, `y` normalized to `[0,1]`
+- `click`: optional `x`, `y`, optional `button` (`left`, `right`, `middle`), optional `count`
+- `scroll`: `dx`, `dy`
+- `key`: `key` or `keys`
+- `type`: `text`, optional `submit` boolean
+
+Availability, backend support, and trust mode are checked when the tool runs. If no CLI is connected or local computer use is disabled, tell the user what to enable instead of using the server environment.
 
 ## Core Loop
 

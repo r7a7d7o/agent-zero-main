@@ -25,16 +25,17 @@ The document editor is user-owned UI. Create or update the saved Markdown artifa
 ## Workflow
 
 1. Decide whether a saved editable artifact is useful. Create one for substantial, reusable, or collaborative writing; do not create one for tiny one-shot edits or answers that can be completed cleanly in chat.
-2. Create Markdown with `document_artifact:create` using `kind: "document"` and `format: "md"`.
-3. For edits to an existing Markdown artifact, read first when content matters, then use `document_artifact:edit`.
+2. Create Markdown with `document_artifact` using `action: "create"`, `kind: "document"`, and `format: "md"`.
+3. For edits to an existing Markdown artifact, read first when content matters, then use the `edit` action.
 4. Report the saved file path briefly. Do not say it was opened unless the user explicitly opened it.
 
 Minimal create:
 
 ```json
 {
-  "tool_name": "document_artifact:create",
+  "tool_name": "document_artifact",
   "tool_args": {
+    "action": "create",
     "kind": "document",
     "title": "Project Brief",
     "format": "md",

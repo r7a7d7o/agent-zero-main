@@ -28,14 +28,18 @@ _MTIME_KEY = LOCAL_FRESHNESS_KEY
 class TextEditor(Tool):
 
     async def execute(self, **kwargs):
-        if self.method == "read":
+        action = _current_action(self, kwargs)
+        if action == "read":
             return await self._read(**kwargs)
-        elif self.method == "write":
+        elif action == "write":
             return await self._write(**kwargs)
-        elif self.method == "patch":
+        elif action == "patch":
             return await self._patch(**kwargs)
         return Response(
-            message=f"unknown method '{self.name}:{self.method}'",
+            message=(
+                f"unknown action '{action or self.method or ''}'. "
+                "Supported actions: read, write, patch."
+            ),
             break_loop=False,
         )
 
@@ -379,3 +383,16 @@ def _get_config(agent) -> dict:
         "default_line_count": int(config.get("default_line_count", 100)),
         "max_total_read_tokens": int(config.get("max_total_read_tokens", 4000)),
     }
+
+
+def _current_action(tool: TextEditor, kwargs: dict) -> str:
+    return (
+        str(
+            kwargs.get("action")
+            or tool.args.get("action")
+            or ""
+        )
+        .strip()
+        .lower()
+        .replace("-", "_")
+    )

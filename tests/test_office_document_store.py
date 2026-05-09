@@ -312,7 +312,7 @@ def test_odf_is_advertised_and_docx_remains_explicit_compatibility(office_state)
     assert "formats: md odt ods odp docx xlsx pptx" in prompt
     assert "ODF is first-class for LibreOffice" in prompt
     assert "DOCX/XLSX/PPTX are compatibility formats" in prompt
-    assert "`method` is accepted as an alias for action" in prompt
+    assert "`method` is accepted as an alias for action" not in prompt
     assert "they do not open a surface automatically" in prompt
     assert "explicit Download, Open Document, or Desktop edit message actions" in prompt
     doc = document_store.create_document("document", "Use ODT", "odt", "")

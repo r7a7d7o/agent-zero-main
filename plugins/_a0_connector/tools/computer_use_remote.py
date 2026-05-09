@@ -69,8 +69,8 @@ class ComputerUseRemote(Tool):
         if not sid:
             return Response(
                 message=(
-                    "computer_use_remote: no subscribed CLI in this context currently advertises "
-                    "enabled local computer use. Enable it in the CLI with F2 and choose a trust mode first."
+                    "computer_use_remote: no connected CLI currently advertises enabled local "
+                    "computer use. Enable it in the CLI and choose a trust mode first."
                 ),
                 break_loop=False,
             )

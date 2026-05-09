@@ -434,7 +434,7 @@ def load_skill_for_agent(
     files_tree = _get_skill_files(skill.path)
     lines.append("")
     if files_tree:
-        lines.append("Files (use skills_tool method=read_file to open):")
+        lines.append("Files (use skills_tool action=read_file to open):")
         lines.append(files_tree)
     else:
         lines.append("No additional files found.")

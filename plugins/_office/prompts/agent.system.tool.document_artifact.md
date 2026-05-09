@@ -2,10 +2,9 @@
 create/open/read/edit reusable document artifacts in Agent Zero
 formats: md odt ods odp docx xlsx pptx
 default format: md
-methods: create open read edit inspect export version_history restore_version status
-common args: method action kind title format content path file_id
+actions: create open read edit inspect export version_history restore_version status
+common args: action kind title format content path file_id
 optional UI intent args: open_in_canvas open_in_desktop
-`method` is accepted as an alias for action when the tool_name has no suffix
 create/read/edit results save or update artifacts only; they do not open a surface automatically unless the user explicitly asks to open the document UI
 use action `open`, `open_in_canvas: true`, or `open_in_desktop: true` only when the user explicitly asks to open the document/editor/Desktop
 created/updated artifacts are shown with explicit Download, Open Document, or Desktop edit message actions

@@ -31,8 +31,9 @@ Create:
 
 ```json
 {
-  "tool_name": "document_artifact:create",
+  "tool_name": "document_artifact",
   "tool_args": {
+    "action": "create",
     "kind": "document",
     "title": "Board Memo",
     "format": "odt",
@@ -43,8 +44,8 @@ Create:
 
 Edit:
 
-1. Use `document_artifact:read` with `file_id` or `path` before content-sensitive edits.
-2. Use `document_artifact:edit` for deterministic saved changes: `set_text`, `append_text`, `prepend_text`, `replace_text`, or `delete_text`.
+1. Use the `read` action with `file_id` or `path` before content-sensitive edits.
+2. Use the `edit` action for deterministic saved changes: `set_text`, `append_text`, `prepend_text`, `replace_text`, or `delete_text`.
 3. Use the Desktop only when the user asks to see Writer or when layout cannot be handled reliably through structured edits.
 
 Practical rules:

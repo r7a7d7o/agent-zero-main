@@ -10,6 +10,11 @@ trigger_patterns:
   - "edit my local files through a0 cli"
   - "read files on the cli host"
   - "patch files on the cli host"
+  - "connected local files"
+  - "connected local machine files"
+  - "local files not docker"
+  - "a0 cli files"
+  - "cli host files"
 allowed_tools:
   - text_editor_remote
 ---
@@ -46,6 +51,6 @@ If the task belongs inside Agent Zero's own runtime, use the normal server-side 
 
 ## Failure Handling
 
-- If no CLI is connected or subscribed, ask the user to connect A0 CLI to this chat.
+- If no CLI is connected, ask the user to connect A0 CLI to this Agent Zero instance.
 - If writes are blocked, tell the user to switch local file access to Read&Write with F3.
 - If a request times out or the CLI disconnects, summarize the failure and wait for reconnection.

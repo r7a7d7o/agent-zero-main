@@ -1,7 +1,7 @@
 from helpers.tool import Tool, Response
 from plugins._memory.helpers.memory import Memory
 
-from tools.memory_load import DEFAULT_THRESHOLD
+from plugins._memory.tools.memory_load import DEFAULT_THRESHOLD
 
 
 class MemoryForget(Tool):

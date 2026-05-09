@@ -1,5 +1,6 @@
 import importlib.util
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -113,7 +114,7 @@ def _subscribe(
     return sid
 
 
-def test_remote_tool_stubs_absent_without_subscribed_cli():
+def test_legacy_dynamic_remote_tool_gate_is_noop():
     prompt = _apply_gate(_context_id())
 
     assert "text_editor_remote tool" not in prompt
@@ -121,81 +122,156 @@ def test_remote_tool_stubs_absent_without_subscribed_cli():
     assert "computer_use_remote tool" not in prompt
 
 
-def test_file_only_cli_adds_text_editor_stub():
+def test_remote_file_and_exec_tools_are_standard_tool_prompts_independent_from_context():
+    text_stub = (PROMPT_ROOT / "agent.system.tool.text_editor_remote.md").read_text(encoding="utf-8")
+    exec_stub = (PROMPT_ROOT / "agent.system.tool.code_execution_remote.md").read_text(encoding="utf-8")
+
+    assert '"tool_name": "text_editor_remote"' in text_stub
+    assert '"tool_name": "code_execution_remote"' in exec_stub
+    assert "Availability and permissions are checked when the tool runs" in text_stub
+    assert "Availability and permissions are checked when the tool runs" in exec_stub
+
+
+def test_beta_computer_use_remote_is_skill_only_not_standard_tool_prompt():
+    skill = PROJECT_ROOT / "skills" / "computer-use-remote" / "SKILL.md"
+
+    assert not (PROMPT_ROOT / "agent.system.tool.computer_use_remote.md").exists()
+    assert '"tool_name": "computer_use_remote"' in skill.read_text(encoding="utf-8")
+
+
+def test_old_connector_prompt_files_removed():
+    assert not (PROMPT_ROOT / "agent.connector_tool.text_editor_remote.md").exists()
+    assert not (PROMPT_ROOT / "agent.connector_tool.code_execution_remote.md").exists()
+    assert not (PROMPT_ROOT / "agent.connector_tool.computer_use_remote.md").exists()
+
+
+def test_remote_tool_selection_prefers_context_cli_then_global_cli():
     context_id = _context_id()
-    sid = _subscribe(
-        context_id,
-        remote_files={"enabled": True, "write_enabled": True},
+    sid_context = _sid()
+    sid_global = _sid()
+    for sid in (sid_context, sid_global):
+        ws_runtime.register_sid(sid)
+        ws_runtime.store_sid_remote_exec_metadata(sid, {"enabled": True})
+        ws_runtime.store_sid_remote_file_metadata(
+            sid,
+            {"enabled": True, "write_enabled": True, "mode": "read_write"},
+        )
+    ws_runtime.subscribe_sid_to_context(sid_context, context_id)
+    try:
+        assert ws_runtime.remote_tool_sids_for_context(context_id) == [
+            sid_context,
+            sid_global,
+        ]
+        assert ws_runtime.select_remote_exec_target_sid(context_id) == sid_context
+        assert (
+            ws_runtime.select_remote_exec_target_sid(context_id, require_writes=True)
+            == sid_context
+        )
+        assert ws_runtime.select_remote_file_target_sid(context_id) == sid_context
+    finally:
+        ws_runtime.unregister_sid(sid_context)
+        ws_runtime.unregister_sid(sid_global)
+
+
+def test_remote_tool_selection_falls_back_to_global_cli():
+    context_id = _context_id()
+    sid = _sid()
+    ws_runtime.register_sid(sid)
+    ws_runtime.store_sid_remote_exec_metadata(sid, {"enabled": True})
+    ws_runtime.store_sid_remote_file_metadata(
+        sid,
+        {"enabled": True, "write_enabled": True, "mode": "read_write"},
     )
     try:
-        prompt = _apply_gate(context_id)
+        assert ws_runtime.select_remote_exec_target_sid(context_id) == sid
+        assert (
+            ws_runtime.select_remote_exec_target_sid(context_id, require_writes=True)
+            == sid
+        )
+        assert ws_runtime.select_remote_file_target_sid(context_id) == sid
     finally:
         ws_runtime.unregister_sid(sid)
 
-    assert "text_editor_remote tool" in prompt
-    assert "Current access mode: `Read&Write`" in prompt
-    assert "code_execution_remote tool" not in prompt
-    assert "computer_use_remote tool" not in prompt
 
-
-def test_exec_enabled_cli_adds_execution_stub():
+def test_latest_remote_tree_falls_back_to_global_cli_snapshot():
     context_id = _context_id()
-    sid = _subscribe(
-        context_id,
-        remote_exec={"enabled": True},
-    )
-    try:
-        prompt = _apply_gate(context_id)
-    finally:
-        ws_runtime.unregister_sid(sid)
-
-    assert "code_execution_remote tool" in prompt
-    assert "text_editor_remote tool" not in prompt
-    assert "computer_use_remote tool" not in prompt
-
-
-def test_read_only_mode_marks_mutating_operations_disabled():
-    context_id = _context_id()
-    sid = _subscribe(
-        context_id,
-        remote_files={"enabled": True, "write_enabled": False, "mode": "read_only"},
-        remote_exec={"enabled": True},
-    )
-    try:
-        prompt = _apply_gate(context_id)
-    finally:
-        ws_runtime.unregister_sid(sid)
-
-    assert "text_editor_remote tool" in prompt
-    assert "code_execution_remote tool" in prompt
-    assert "Current access mode: `Read only`" in prompt
-    assert "Writes and patches are disabled" in prompt
-    assert "Mutating runtimes are disabled" in prompt
-
-
-def test_computer_use_enabled_cli_adds_computer_stub():
-    context_id = _context_id()
-    sid = _subscribe(
-        context_id,
-        computer_use={
-            "supported": True,
-            "enabled": True,
-            "trust_mode": "ask",
-            "backend_id": "local",
-            "backend_family": "desktop",
-            "features": ["screenshots", "keyboard"],
+    sid = _sid()
+    ws_runtime.register_sid(sid)
+    ws_runtime.store_remote_tree_snapshot(
+        sid,
+        {
+            "root_path": "/home/example",
+            "tree": "README.md",
+            "generated_at": "2026-05-09T12:00:00Z",
         },
     )
     try:
-        prompt = _apply_gate(context_id)
+        snapshot = ws_runtime.latest_remote_tree_for_context(
+            context_id,
+            max_age_seconds=90,
+        )
     finally:
         ws_runtime.unregister_sid(sid)
 
-    assert "computer_use_remote tool" in prompt
-    assert "Backend: `local/desktop`" in prompt
-    assert "Features: `screenshots, keyboard`" in prompt
-    assert "text_editor_remote tool" not in prompt
-    assert "code_execution_remote tool" not in prompt
+    assert snapshot is not None
+    assert snapshot["sid"] == sid
+    assert snapshot["tree"] == "README.md"
+
+
+def test_latest_remote_tree_prefers_context_cli_snapshot():
+    context_id = _context_id()
+    sid_context = _sid()
+    sid_global = _sid()
+    now = time.time()
+    for sid in (sid_context, sid_global):
+        ws_runtime.register_sid(sid)
+    ws_runtime.subscribe_sid_to_context(sid_context, context_id)
+    ws_runtime.store_remote_tree_snapshot(
+        sid_context,
+        {
+            "root_path": "/context",
+            "tree": "context.txt",
+            "generated_at": "2026-05-09T12:00:00Z",
+        },
+    )
+    ws_runtime.store_remote_tree_snapshot(
+        sid_global,
+        {
+            "root_path": "/global",
+            "tree": "global.txt",
+            "generated_at": "2026-05-09T12:00:01Z",
+        },
+    )
+    try:
+        # Make the global snapshot newer; context affinity should still win.
+        ws_runtime._remote_tree_snapshots[sid_global] = ws_runtime.RemoteTreeSnapshot(
+            sid=sid_global,
+            payload=ws_runtime._remote_tree_snapshots[sid_global].payload,
+            updated_at=now + 5,
+        )
+        snapshot = ws_runtime.latest_remote_tree_for_context(
+            context_id,
+            max_age_seconds=90,
+        )
+    finally:
+        ws_runtime.unregister_sid(sid_context)
+        ws_runtime.unregister_sid(sid_global)
+
+    assert snapshot is not None
+    assert snapshot["sid"] == sid_context
+    assert snapshot["tree"] == "context.txt"
+
+
+def test_remote_exec_mutating_runtime_requires_explicit_write_access():
+    context_id = _context_id()
+    sid = _sid()
+    ws_runtime.register_sid(sid)
+    ws_runtime.store_sid_remote_exec_metadata(sid, {"enabled": True})
+    try:
+        assert ws_runtime.select_remote_exec_target_sid(context_id) == sid
+        assert ws_runtime.select_remote_exec_target_sid(context_id, require_writes=True) is None
+    finally:
+        ws_runtime.unregister_sid(sid)
 
 
 def test_remote_affordance_skills_parse():
@@ -230,17 +306,29 @@ def test_remote_affordance_skills_parse():
     assert not legacy_connector_skill.exists()
     assert text_editor_skill["name"] == "text-editor-remote"
     assert text_editor_skill["allowed_tools"] == ["text_editor_remote"]
+    assert "connected local files" in text_editor_skill["trigger_patterns"]
+    assert "not docker" in code_execution_skill["trigger_patterns"]
+    assert "connected local terminal" in code_execution_skill["trigger_patterns"]
     assert code_execution_skill["name"] == "code-execution-remote"
     assert code_execution_skill["allowed_tools"] == ["code_execution_remote"]
     assert computer_skill["name"] == "computer-use-remote"
     assert computer_skill["allowed_tools"] == ["computer_use_remote"]
 
 
-def test_remote_tool_stubs_point_to_per_tool_skills():
-    text_stub = (PROMPT_ROOT / "agent.connector_tool.text_editor_remote.md").read_text(encoding="utf-8")
-    exec_stub = (PROMPT_ROOT / "agent.connector_tool.code_execution_remote.md").read_text(encoding="utf-8")
+def test_remote_tool_stubs_are_self_contained_and_reference_per_tool_skills():
+    text_stub = (PROMPT_ROOT / "agent.system.tool.text_editor_remote.md").read_text(encoding="utf-8")
+    exec_stub = (PROMPT_ROOT / "agent.system.tool.code_execution_remote.md").read_text(encoding="utf-8")
+    computer_skill = (PROJECT_ROOT / "skills" / "computer-use-remote" / "SKILL.md").read_text(encoding="utf-8")
 
-    assert "Load `text-editor-remote`" in text_stub
-    assert "Load `code-execution-remote`" in exec_stub
+    assert "optionally load skill `text-editor-remote`" in text_stub
+    assert "optionally load skill `code-execution-remote`" in exec_stub
+    assert '"tool_name": "text_editor_remote"' in text_stub
+    assert '"tool_name": "code_execution_remote"' in exec_stub
+    assert '"tool_name": "computer_use_remote"' in computer_skill
+    assert "Availability, backend support, and trust mode are checked when the tool runs" in computer_skill
+    assert "not `code_execution_tool`" in exec_stub
+    assert "not to" in exec_stub
+    assert "Docker/server/container execution" in exec_stub
     assert "a0-cli-remote-workflows" not in text_stub
     assert "a0-cli-remote-workflows" not in exec_stub
+    assert "a0-cli-remote-workflows" not in computer_skill

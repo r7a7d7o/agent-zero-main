@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List
 
 from helpers.tool import Tool, Response
@@ -14,7 +15,7 @@ class SkillsTool(Tool):
     """
     Manage and use SKILL.md-based Skills (Anthropic open standard).
 
-    Methods (tool_args.method):
+    Actions (tool_args.action):
       - list
       - search (query)
       - load (skill_name)
@@ -23,11 +24,15 @@ class SkillsTool(Tool):
     Script execution is handled by code_execution_tool directly.
     """
 
-    def _current_method(self) -> str:
+    def _current_action(self) -> str:
         return (
-            (self.args.get("method") or self.method or "")
+            str(
+                self.args.get("action")
+                or ""
+            )
             .strip()
             .lower()
+            .replace("-", "_")
         )
 
     @staticmethod
@@ -40,7 +45,7 @@ class SkillsTool(Tool):
     def get_log_object(self):
         import uuid
 
-        if self._current_method() == "load":
+        if self._current_action() == "load":
             skill_name = self._normalize_skill_name(
                 str(self.args.get("skill_name") or "")
             )
@@ -60,14 +65,14 @@ class SkillsTool(Tool):
         return super().get_log_object()
 
     async def before_execution(self, **kwargs):
-        if self._current_method() != "load":
+        if self._current_action() != "load":
             await super().before_execution(**kwargs)
             return
 
         skill_name = self._normalize_skill_name(
             str(kwargs.get("skill_name") or self.args.get("skill_name") or "")
         )
-        label = f"{self.name}:{self._current_method()}"
+        label = f"{self.name} action {self._current_action()}"
         if skill_name:
             PrintStyle(
                 font_color="#1B4F72",
@@ -85,32 +90,45 @@ class SkillsTool(Tool):
         self.log = self.get_log_object()
 
     async def execute(self, **kwargs) -> Response:
-        method = (
-            (kwargs.get("method") or self.args.get("method") or self.method or "")
+        action = (
+            str(
+                kwargs.get("action")
+                or self.args.get("action")
+                or ""
+            )
             .strip()
             .lower()
+            .replace("-", "_")
         )
 
         try:
-            if method == "list":
+            if action == "list":
                 return Response(message=self._list(), break_loop=False)
-            if method == "search":
-                query = str(kwargs.get("query") or "").strip()
+            if action == "search":
+                query = str(kwargs.get("query") or self.args.get("query") or "").strip()
                 return Response(message=self._search(query), break_loop=False)
-            if method == "load":
+            if action == "load":
                 skill_name = self._normalize_skill_name(
-                    str(kwargs.get("skill_name") or "")
+                    str(kwargs.get("skill_name") or self.args.get("skill_name") or "")
                 )
                 return Response(message=self._load(skill_name), break_loop=False)
-            # if method == "read_file":
-            #     skill_name = str(kwargs.get("skill_name") or "").strip()
-            #     file_path = str(kwargs.get("file_path") or "").strip()
-            #     return Response(
-            #         message=self._read_file(skill_name, file_path), break_loop=False
-            #     )
+            if action == "read_file":
+                skill_name = self._normalize_skill_name(
+                    str(kwargs.get("skill_name") or self.args.get("skill_name") or "")
+                )
+                file_path = str(
+                    kwargs.get("file_path") or self.args.get("file_path") or ""
+                ).strip()
+                return Response(
+                    message=self._read_file(skill_name, file_path),
+                    break_loop=False,
+                )
 
             return Response(
-                message="Error: missing/invalid 'method'. Supported: list, search, load.",
+                message=(
+                    "Error: missing/invalid 'action'. Supported actions: "
+                    "list, search, load, read_file."
+                ),
                 break_loop=False,
             )
         except (
@@ -139,12 +157,12 @@ class SkillsTool(Tool):
                 desc = desc[:200].rstrip() + "…"
             lines.append(f"- {s.name}{ver}{tags}: {desc}")
         lines.append("")
-        lines.append("Tip: use skills_tool method=search or method=load for details.")
+        lines.append("Tip: use skills_tool action=search or action=load for details.")
         return "\n".join(lines)
 
     def _search(self, query: str) -> str:
         if not query:
-            return "Error: 'query' is required for method=search."
+            return "Error: 'query' is required for action=search."
 
         results = skills_helper.search_skills(
             query,
@@ -163,7 +181,7 @@ class SkillsTool(Tool):
             lines.append(f"- {s.name}: {desc}")
         lines.append("")
         lines.append(
-            "Tip: use skills_tool method=load skill_name=<name> to load full instructions."
+            "Tip: use skills_tool action=load skill_name=<name> to load full instructions."
         )
         return "\n".join(lines)
 
@@ -171,7 +189,7 @@ class SkillsTool(Tool):
         skill_name = self._normalize_skill_name(skill_name)
 
         if not skill_name:
-            return "Error: 'skill_name' is required for method=load."
+            return "Error: 'skill_name' is required for action=load."
 
         # Verify skill exists
         skill = skills_helper.find_skill(
@@ -180,7 +198,7 @@ class SkillsTool(Tool):
             agent=self.agent,
         )
         if not skill:
-            return f"Error: skill not found: {skill_name!r}. Try skills_tool method=list or method=search."
+            return f"Error: skill not found: {skill_name!r}. Try skills_tool action=list or action=search."
 
         # Store skill name for fresh loading each turn
         if not self.agent.data.get(DATA_NAME_LOADED_SKILLS):
@@ -192,6 +210,43 @@ class SkillsTool(Tool):
         self.agent.data[DATA_NAME_LOADED_SKILLS] = loaded[-max_loaded_skills():]
 
         return f"Loaded skill '{skill.name}' into EXTRAS."
+
+    def _read_file(self, skill_name: str, file_path: str) -> str:
+        if not skill_name:
+            return "Error: 'skill_name' is required for action=read_file."
+        if not file_path:
+            return "Error: 'file_path' is required for action=read_file."
+
+        skill = skills_helper.find_skill(
+            skill_name,
+            include_content=False,
+            agent=self.agent,
+        )
+        if not skill:
+            return f"Error: skill not found: {skill_name!r}."
+
+        skill_root = skill.path.resolve()
+        target = Path(file_path)
+        if not target.is_absolute():
+            target = skill_root / target
+
+        try:
+            resolved = target.resolve()
+            resolved.relative_to(skill_root)
+        except Exception:
+            return "Error: file_path must stay inside the skill directory."
+
+        if not resolved.is_file():
+            return f"Error: skill file not found: {file_path!r}."
+
+        content = resolved.read_text(encoding="utf-8", errors="replace")
+        if len(content) > 24000:
+            content = content[:24000].rstrip() + "\n\n[truncated]"
+
+        return (
+            f"Skill file: {skill.name}/{resolved.relative_to(skill_root)}\n\n"
+            f"{content}"
+        )
 
 
 def max_loaded_skills() -> int:

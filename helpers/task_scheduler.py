@@ -27,6 +27,19 @@ import pytz
 from typing import Annotated
 
 SCHEDULER_FOLDER = "usr/scheduler"
+LOCAL_TIMEZONE_ALIASES = {"local", "user", "default", "current", "current_timezone"}
+
+
+def normalize_schedule_timezone(timezone_name: str | None) -> str:
+    name = str(timezone_name or "").strip()
+    if not name or name.lower() in LOCAL_TIMEZONE_ALIASES:
+        return Localization.get().get_timezone()
+    try:
+        pytz.timezone(name)
+    except pytz.exceptions.UnknownTimeZoneError:
+        PrintStyle.error(f"Unknown task schedule timezone: {name}, using current user timezone")
+        return Localization.get().get_timezone()
+    return name
 
 # ----------------------
 # Task Models
@@ -304,9 +317,9 @@ class ScheduledTask(BaseTask):
     ):
         # Set timezone in schedule if provided
         if timezone is not None:
-            schedule.timezone = timezone
+            schedule.timezone = normalize_schedule_timezone(timezone)
         else:
-            schedule.timezone = Localization.get().get_timezone()
+            schedule.timezone = normalize_schedule_timezone(schedule.timezone)
 
         return cls(name=name,
                    system_prompt=system_prompt,
@@ -344,7 +357,8 @@ class ScheduledTask(BaseTask):
             crontab = CronTab(crontab=self.schedule.to_crontab())  # type: ignore
 
             # Get the timezone from the schedule or use UTC as fallback
-            task_timezone = pytz.timezone(self.schedule.timezone or Localization.get().get_timezone())
+            self.schedule.timezone = normalize_schedule_timezone(self.schedule.timezone)
+            task_timezone = pytz.timezone(self.schedule.timezone)
 
             # Get reference time in task's timezone (by default now - frequency_seconds)
             reference_time = datetime.now(timezone.utc) - timedelta(seconds=frequency_seconds)
@@ -364,7 +378,15 @@ class ScheduledTask(BaseTask):
     def get_next_run(self) -> datetime | None:
         with self._lock:
             crontab = CronTab(crontab=self.schedule.to_crontab())  # type: ignore
-            return crontab.next(now=datetime.now(timezone.utc), return_datetime=True)  # type: ignore
+            self.schedule.timezone = normalize_schedule_timezone(self.schedule.timezone)
+            task_timezone = pytz.timezone(self.schedule.timezone)
+            now_in_task_timezone = datetime.now(timezone.utc).astimezone(task_timezone)
+            next_run = crontab.next(now=now_in_task_timezone, return_datetime=True)  # type: ignore
+            if next_run is None:
+                return None
+            if next_run.tzinfo is None:
+                next_run = task_timezone.localize(next_run)
+            return next_run.astimezone(timezone.utc)
 
 
 class PlannedTask(BaseTask):
@@ -1021,6 +1043,7 @@ def parse_datetime(dt_str: Optional[str]) -> Optional[datetime]:
 
 def serialize_task_schedule(schedule: TaskSchedule) -> Dict[str, str]:
     """Convert TaskSchedule to a standardized dictionary format."""
+    schedule.timezone = normalize_schedule_timezone(schedule.timezone)
     return {
         'minute': schedule.minute,
         'hour': schedule.hour,
@@ -1040,7 +1063,7 @@ def parse_task_schedule(schedule_data: Dict[str, str]) -> TaskSchedule:
             day=schedule_data.get('day', '*'),
             month=schedule_data.get('month', '*'),
             weekday=schedule_data.get('weekday', '*'),
-            timezone=schedule_data.get('timezone', Localization.get().get_timezone())
+            timezone=normalize_schedule_timezone(schedule_data.get('timezone'))
         )
     except Exception as e:
         raise ValueError(f"Invalid schedule format: {e}") from e

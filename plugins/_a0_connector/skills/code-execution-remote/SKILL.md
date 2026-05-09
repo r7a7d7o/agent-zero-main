@@ -10,6 +10,14 @@ trigger_patterns:
   - "run commands on the cli host"
   - "run python on the cli host"
   - "run node on the cli host"
+  - "connected local terminal"
+  - "connected terminal"
+  - "local terminal"
+  - "my terminal"
+  - "a0 cli"
+  - "cli host"
+  - "not docker"
+  - "not the docker terminal"
 allowed_tools:
   - code_execution_remote
 ---
@@ -34,12 +42,11 @@ If the task belongs inside Agent Zero's own runtime, use the normal server-side 
 - Reuse the same integer `session` while continuing a workflow; session state is local to the CLI frontend.
 - Use `runtime=output` when a previous command is still running or returned before the shell reached a prompt.
 - Use `runtime=reset` when a session is stuck or a clean shell is safer.
-- Treat `runtime=input` as deprecated compatibility for sending one line to a running shell.
 - Match the remote host shell syntax. A Windows CLI may need PowerShell syntax even when Agent Zero runs on Linux.
 
 ## Failure Handling
 
-- If no CLI is connected or subscribed, ask the user to connect A0 CLI to this chat.
+- If no CLI is connected, ask the user to connect A0 CLI to this Agent Zero instance.
 - If execution is disabled, tell the user to enable remote execution in the CLI.
 - If mutating runtimes are blocked, tell the user to switch local file access to Read&Write with F3.
 - If a request times out or the CLI disconnects, poll once if a session may still be running; otherwise summarize the failure and wait for reconnection.

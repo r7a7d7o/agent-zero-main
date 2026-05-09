@@ -33,8 +33,9 @@ Create a workbook:
 
 ```json
 {
-  "tool_name": "document_artifact:create",
+  "tool_name": "document_artifact",
   "tool_args": {
+    "action": "create",
     "kind": "spreadsheet",
     "title": "Budget",
     "format": "ods",
@@ -49,8 +50,9 @@ Edit cells:
 
 ```json
 {
-  "tool_name": "document_artifact:edit",
+  "tool_name": "document_artifact",
   "tool_args": {
+    "action": "edit",
     "file_id": "abc123",
     "operation": "set_cells",
     "cells": {

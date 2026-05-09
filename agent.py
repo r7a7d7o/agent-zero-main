@@ -885,10 +885,6 @@ class Agent:
             tool_name = raw_tool_name  # Initialize tool_name with raw_tool_name
             tool_method = None  # Initialize tool_method
 
-            # Split raw_tool_name into tool_name and tool_method if applicable
-            if ":" in raw_tool_name:
-                tool_name, tool_method = raw_tool_name.split(":", 1)
-
             tool = None  # Initialize tool to None
 
             # Try getting tool from MCP first

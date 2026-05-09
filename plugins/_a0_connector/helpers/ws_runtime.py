@@ -157,6 +157,24 @@ def subscribed_sids_for_context(context_id: str) -> set[str]:
         return set(_context_subscriptions.get(context_id, set()))
 
 
+def connected_sids() -> set[str]:
+    with _state_lock:
+        return set(_sid_contexts.keys())
+
+
+def _candidate_sids_for_context_locked(context_id: str) -> list[str]:
+    context_sids = sorted(_context_subscriptions.get(context_id, set()))
+    context_set = set(context_sids)
+    global_sids = sorted(sid for sid in _sid_contexts if sid not in context_set)
+    return context_sids + global_sids
+
+
+def remote_tool_sids_for_context(context_id: str) -> list[str]:
+    """Return connected CLI candidates, preferring clients subscribed to context_id."""
+    with _state_lock:
+        return _candidate_sids_for_context_locked(context_id)
+
+
 def store_remote_tree_snapshot(
     sid: str,
     payload: dict[str, Any],
@@ -183,24 +201,31 @@ def latest_remote_tree_for_context(
 ) -> dict[str, Any] | None:
     now = time.time()
     with _state_lock:
-        subscribers = _context_subscriptions.get(context_id, set())
-        snapshots = [
-            _remote_tree_snapshots[sid]
-            for sid in subscribers
-            if sid in _remote_tree_snapshots
+        context_sids = sorted(_context_subscriptions.get(context_id, set()))
+        context_set = set(context_sids)
+        global_sids = sorted(sid for sid in _sid_contexts if sid not in context_set)
+        snapshot_groups = [
+            [
+                _remote_tree_snapshots[sid]
+                for sid in context_sids
+                if sid in _remote_tree_snapshots
+            ],
+            [
+                _remote_tree_snapshots[sid]
+                for sid in global_sids
+                if sid in _remote_tree_snapshots
+            ],
         ]
 
-    if not snapshots:
-        return None
-
-    snapshots.sort(key=lambda item: item.updated_at, reverse=True)
-    for snapshot in snapshots:
-        if max_age_seconds > 0 and now - snapshot.updated_at > max_age_seconds:
-            continue
-        payload = dict(snapshot.payload)
-        payload["sid"] = snapshot.sid
-        payload["updated_at"] = snapshot.updated_at
-        return payload
+    for snapshots in snapshot_groups:
+        snapshots.sort(key=lambda item: item.updated_at, reverse=True)
+        for snapshot in snapshots:
+            if max_age_seconds > 0 and now - snapshot.updated_at > max_age_seconds:
+                continue
+            payload = dict(snapshot.payload)
+            payload["sid"] = snapshot.sid
+            payload["updated_at"] = snapshot.updated_at
+            return payload
     return None
 
 
@@ -248,20 +273,16 @@ def remote_file_metadata_for_sid(sid: str) -> dict[str, Any] | None:
 
 def select_remote_file_target_sid(context_id: str, *, require_writes: bool = False) -> str | None:
     with _state_lock:
-        subscribers = sorted(_context_subscriptions.get(context_id, set()))
-        fallback_sid: str | None = None
-        for sid in subscribers:
+        for sid in _candidate_sids_for_context_locked(context_id):
             metadata = _sid_remote_file_metadata.get(sid)
             if metadata is None:
-                if fallback_sid is None:
-                    fallback_sid = sid
                 continue
             if not metadata.enabled:
                 continue
             if require_writes and not metadata.write_enabled:
                 continue
             return sid
-    return fallback_sid
+    return None
 
 
 def store_sid_remote_exec_metadata(sid: str, payload: dict[str, Any]) -> RemoteExecMetadata:
@@ -292,23 +313,19 @@ def remote_exec_metadata_for_sid(sid: str) -> dict[str, Any] | None:
 
 def select_remote_exec_target_sid(context_id: str, *, require_writes: bool = False) -> str | None:
     with _state_lock:
-        subscribers = sorted(_context_subscriptions.get(context_id, set()))
-        fallback_sid: str | None = None
-        for sid in subscribers:
+        for sid in _candidate_sids_for_context_locked(context_id):
             metadata = _sid_remote_exec_metadata.get(sid)
             if metadata is None:
-                if fallback_sid is None:
-                    fallback_sid = sid
                 continue
             if metadata.enabled:
                 if require_writes:
                     file_metadata = _sid_remote_file_metadata.get(sid)
-                    if file_metadata is not None and (
+                    if file_metadata is None or (
                         not file_metadata.enabled or not file_metadata.write_enabled
                     ):
                         continue
                 return sid
-    return fallback_sid
+    return None
 
 
 def store_sid_computer_use_metadata(sid: str, payload: dict[str, Any]) -> ComputerUseMetadata:
@@ -429,9 +446,8 @@ def host_browser_metadata_for_sid(sid: str) -> dict[str, Any] | None:
 
 def select_host_browser_target_sid(context_id: str) -> str | None:
     with _state_lock:
-        subscribers = sorted(_context_subscriptions.get(context_id, set()))
         fallback: str | None = None
-        for sid in subscribers:
+        for sid in _candidate_sids_for_context_locked(context_id):
             metadata = _sid_host_browser_metadata.get(sid)
             if not metadata:
                 continue
@@ -446,9 +462,8 @@ def select_host_browser_target_sid(context_id: str) -> str | None:
 
 def select_host_browser_candidate_sid(context_id: str) -> str | None:
     with _state_lock:
-        subscribers = sorted(_context_subscriptions.get(context_id, set()))
         fallback: str | None = None
-        for sid in subscribers:
+        for sid in _candidate_sids_for_context_locked(context_id):
             metadata = _sid_host_browser_metadata.get(sid)
             if not metadata or not (metadata.supported or metadata.can_prepare):
                 continue
@@ -463,9 +478,9 @@ def select_host_browser_candidate_sid(context_id: str) -> str | None:
 
 def host_browser_metadata_for_context(context_id: str) -> list[dict[str, Any]]:
     with _state_lock:
-        subscribers = sorted(_context_subscriptions.get(context_id, set()))
+        candidates = _candidate_sids_for_context_locked(context_id)
     rows: list[dict[str, Any]] = []
-    for sid in subscribers:
+    for sid in candidates:
         metadata = host_browser_metadata_for_sid(sid)
         if metadata is not None:
             metadata["sid"] = sid
@@ -498,8 +513,7 @@ def all_host_browser_metadata() -> list[dict[str, Any]]:
 
 def select_computer_use_target_sid(context_id: str) -> str | None:
     with _state_lock:
-        subscribers = sorted(_context_subscriptions.get(context_id, set()))
-        for sid in subscribers:
+        for sid in _candidate_sids_for_context_locked(context_id):
             metadata = _sid_computer_use_metadata.get(sid)
             if metadata and metadata.supported and metadata.enabled:
                 return sid

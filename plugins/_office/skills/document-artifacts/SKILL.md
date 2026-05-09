@@ -26,7 +26,7 @@ allowed_tools:
 
 Use `document_artifact` for substantial deliverables that should remain editable in the custom document editor or LibreOffice Desktop. Markdown remains the default for ordinary writing, notes, reports, briefs, and drafts when no binary office file is needed. For LibreOffice office files, ODF is first-class: use ODT for Writer, ODS for Spreadsheet/Calc, and ODP for Presentation/Impress. Use DOCX, XLSX, or PPTX only when the user explicitly asks for OOXML compatibility, provides an existing file in that format, or needs that compatibility format.
 
-The document UI and Desktop are user-owned. Creating, reading, or editing an artifact must save the file and update its state, but it must not open a document modal or Desktop surface automatically if the user has not asked for that UI. Tool results provide explicit Download, Open Document, or Desktop edit actions for the user. Use `document_artifact:open`, `open_in_canvas: true`, or `open_in_desktop: true` only when the user explicitly asks to open the document/editor/Desktop.
+The document UI and Desktop are user-owned. Creating, reading, or editing an artifact must save the file and update its state, but it must not open a document modal or Desktop surface automatically if the user has not asked for that UI. Tool results provide explicit Download, Open Document, or Desktop edit actions for the user. Use the `open` action, `open_in_canvas: true`, or `open_in_desktop: true` only when the user explicitly asks to open the document/editor/Desktop.
 
 For format-specific work, prefer the matching skill when available:
 
@@ -37,9 +37,9 @@ For format-specific work, prefer the matching skill when available:
 
 ## Workflow
 
-1. Create or open the artifact with `document_artifact:create` / `document_artifact:open`, or with `tool_name: "document_artifact"` plus `method: "create"` / `method: "open"`.
-2. Before content-sensitive edits, call `document_artifact:read` with `file_id` or `path`.
-3. Apply saved changes with `document_artifact:edit`.
+1. Create or open the artifact with `tool_name: "document_artifact"` and `tool_args.action: "create"` or `"open"`.
+2. Before content-sensitive edits, call the `read` action with `file_id` or `path`.
+3. Apply saved changes with the `edit` action.
 4. Use `version_history` or `restore_version` when the user asks to audit or roll back.
 
 Document context may list opened files with `file_id`, path, version, size, and timestamp. It intentionally omits full file contents; use `read` when the content matters.
@@ -49,8 +49,9 @@ Document context may list opened files with `file_id`, path, version, size, and 
 Create:
 ```json
 {
-  "tool_name": "document_artifact:create",
+  "tool_name": "document_artifact",
   "tool_args": {
+    "action": "create",
     "kind": "document",
     "title": "Project Brief",
     "format": "md",
@@ -64,8 +65,9 @@ For spreadsheets, `content` can be CSV, TSV, or a Markdown table; the tool write
 Read:
 ```json
 {
-  "tool_name": "document_artifact:read",
+  "tool_name": "document_artifact",
   "tool_args": {
+    "action": "read",
     "file_id": "abc123"
   }
 }
@@ -74,8 +76,9 @@ Read:
 Edit text in a Markdown, ODT, DOCX, ODP, or PPTX file:
 ```json
 {
-  "tool_name": "document_artifact:edit",
+  "tool_name": "document_artifact",
   "tool_args": {
+    "action": "edit",
     "file_id": "abc123",
     "operation": "replace_text",
     "find": "old phrase",
@@ -87,8 +90,9 @@ Edit text in a Markdown, ODT, DOCX, ODP, or PPTX file:
 Set spreadsheet cells:
 ```json
 {
-  "tool_name": "document_artifact:edit",
+  "tool_name": "document_artifact",
   "tool_args": {
+    "action": "edit",
     "path": "/a0/usr/workdir/documents/Budget.ods",
     "operation": "set_cells",
     "cells": {
@@ -102,8 +106,9 @@ Set spreadsheet cells:
 Create an embedded spreadsheet chart:
 ```json
 {
-  "tool_name": "document_artifact:edit",
+  "tool_name": "document_artifact",
   "tool_args": {
+    "action": "edit",
     "file_id": "abc123",
     "operation": "create_chart",
     "sheet": "Sheet1",

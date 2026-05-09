@@ -327,6 +327,11 @@ class _FakeAgent:
         self.data = {}
 
     def read_prompt(self, name: str, **kwargs) -> str:
+        if name.endswith("read_ok.md"):
+            return (
+                f"{kwargs['path']} read {kwargs['total_lines']} lines\n"
+                f">>>\n{kwargs['content']}\n<<<"
+            )
         if name.endswith("patch_ok.md"):
             return (
                 f"{kwargs['path']} patched {kwargs['edit_count']} edits applied "
@@ -341,6 +346,7 @@ class _FakeAgent:
 
 def _load_text_editor_tool(monkeypatch: pytest.MonkeyPatch):
     calls: list[tuple[str, dict | None]] = []
+    import helpers
 
     tool_stub = types.ModuleType("helpers.tool")
     tool_stub.Tool = _FakeTool
@@ -370,6 +376,9 @@ def _load_text_editor_tool(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "helpers.extension", extension_stub)
     monkeypatch.setitem(sys.modules, "helpers.plugins", plugins_stub)
     monkeypatch.setitem(sys.modules, "helpers.runtime", runtime_stub)
+    monkeypatch.setattr(helpers, "extension", extension_stub, raising=False)
+    monkeypatch.setattr(helpers, "plugins", plugins_stub, raising=False)
+    monkeypatch.setattr(helpers, "runtime", runtime_stub, raising=False)
     sys.modules.pop("plugins._text_editor.tools.text_editor", None)
     module = importlib.import_module("plugins._text_editor.tools.text_editor")
     return module, calls
@@ -424,6 +433,27 @@ def test_text_editor_patch_text_does_not_require_prior_read(
     )
     assert calls[1][0] == "text_editor_patch_after"
     assert calls[1][1]["mode"] == "patch_text"
+
+
+def test_text_editor_execute_accepts_action_alias_for_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module, _calls = _load_text_editor_tool(monkeypatch)
+    target = tmp_path / "sample.txt"
+    target.write_text("line-1\nline-2\n", encoding="utf-8")
+    tool = module.TextEditor(
+        _FakeAgent(),
+        "text_editor",
+        None,
+        {"action": "read", "path": str(target), "line_from": 1, "line_to": 1},
+        "",
+        None,
+    )
+
+    response = asyncio.run(tool.execute(**tool.args))
+
+    assert "read 2 lines" in response.message
+    assert "line-1" in response.message
 
 
 def test_text_editor_patch_text_rejects_simultaneous_edits(
