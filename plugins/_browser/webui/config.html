@@ -35,6 +35,34 @@
             </span>
           </label>
 
+          <label
+            class="browser-config-field"
+            x-show="$store.browserConfig.config.runtime_backend === 'host_required'"
+          >
+            <span class="browser-config-field-label">Host browser profile</span>
+            <select x-model="$store.browserConfig.config.host_browser_profile_mode">
+              <option value="existing">Existing browser profile</option>
+              <option value="agent">Clean Agent profile</option>
+            </select>
+            <span
+              class="browser-config-field-help"
+              x-show="$store.browserConfig.config.host_browser_profile_mode === 'agent'"
+            >
+              Uses a separate A0-controlled local profile on this computer.
+            </span>
+          </label>
+
+          <div
+            class="browser-config-warning"
+            x-show="$store.browserConfig.config.runtime_backend === 'host_required' && $store.browserConfig.config.host_browser_profile_mode !== 'agent'"
+          >
+            <span class="material-symbols-outlined">warning</span>
+            <span>
+              Existing profile lets the agent interact with the browser instance you authorize,
+              including signed-in sites, cookies, tabs, downloads, and page content.
+            </span>
+          </div>
+
           <label class="browser-config-field">
             <span class="browser-config-field-label">Page content access</span>
             <select x-model="$store.browserConfig.config.host_browser_privacy_policy">

@@ -34,10 +34,7 @@ from plugins._a0_connector.helpers.ws_runtime import (
     select_host_browser_target_sid,
     store_pending_browser_op,
 )
-from plugins._browser.helpers.config import (
-    HOST_BROWSER_PRIVACY_POLICY_KEY,
-    get_browser_config,
-)
+from plugins._browser.helpers import config as browser_config
 from plugins._browser.helpers.url import normalize_url
 
 
@@ -47,6 +44,17 @@ HOST_BROWSER_SCREENSHOT_DIR = ("tmp", "browser", "host-screenshots")
 CONTENT_HELPER_PATH = Path(__file__).resolve().parents[1] / "assets" / "browser-page-content.js"
 MAX_ARTIFACT_SIZE_BYTES = 25 * 1024 * 1024
 BASE64_DECODE_CHARS_PER_CHUNK = 64 * 1024
+HOST_BROWSER_PRIVACY_POLICY_KEY = getattr(
+    browser_config,
+    "HOST_BROWSER_PRIVACY_POLICY_KEY",
+    "host_browser_privacy_policy",
+)
+HOST_BROWSER_PROFILE_MODE_KEY = getattr(
+    browser_config,
+    "HOST_BROWSER_PROFILE_MODE_KEY",
+    "host_browser_profile_mode",
+)
+get_browser_config = browser_config.get_browser_config
 _LOCAL_PROVIDERS = {"ollama", "lm_studio"}
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
 _SENSITIVE_ACTIONS = {"content", "detail", "evaluate", "screenshot", "screenshot_file"}
@@ -79,6 +87,7 @@ class ConnectorBrowserRuntime:
             "op_id": str(uuid.uuid4()),
             "context_id": self.context_id,
             "action": action,
+            "profile_mode": self._host_browser_profile_mode(),
         }
 
         if action == "open":
@@ -188,6 +197,7 @@ class ConnectorBrowserRuntime:
         return normalized_calls
 
     async def _dispatch(self, payload: dict[str, Any]) -> Any:
+        payload.setdefault("profile_mode", self._host_browser_profile_mode())
         self._enforce_privacy(payload)
         sid = self._select_sid()
         if not sid:
@@ -207,12 +217,18 @@ class ConnectorBrowserRuntime:
                         "op_id": str(uuid.uuid4()),
                         "context_id": self.context_id,
                         "action": "ensure",
+                        "profile_mode": self._host_browser_profile_mode(),
                     },
                 ),
             )
             sid = self._select_sid() or sid
 
         return await self._send_browser_op(sid, self._with_content_helper(sid, payload))
+
+    def _host_browser_profile_mode(self) -> str:
+        config = get_browser_config(self.agent)
+        mode = str(config.get(HOST_BROWSER_PROFILE_MODE_KEY) or "existing").strip().lower()
+        return "agent" if mode == "agent" else "existing"
 
     def _with_content_helper(self, sid: str, payload: dict[str, Any]) -> dict[str, Any]:
         metadata = host_browser_metadata_for_sid(sid) or {}

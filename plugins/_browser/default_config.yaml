@@ -19,6 +19,11 @@ runtime_backend: "container"
 # - allow: allow without warning.
 host_browser_privacy_policy: "enforce_local"
 
+# Host-browser profile preference:
+# - existing: use the user's authorized existing browser profile when available.
+# - agent: use a clean A0-controlled browser profile on the host.
+host_browser_profile_mode: "existing"
+
 # Optional _model_config preset used by Browser-owned model helpers.
 # Empty uses the effective Main Model.
 model_preset: ""

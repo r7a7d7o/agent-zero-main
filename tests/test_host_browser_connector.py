@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -188,6 +189,22 @@ def test_host_browser_privacy_detects_local_model(monkeypatch):
     assert _agent_uses_local_chat_model(_agent()) is True
 
 
+def test_connector_runtime_tolerates_legacy_config_module(monkeypatch):
+    import plugins._browser.helpers.config as browser_config
+    import plugins._browser.helpers.connector_runtime as connector_runtime_module
+
+    original = getattr(browser_config, "HOST_BROWSER_PROFILE_MODE_KEY", None)
+    monkeypatch.delattr(browser_config, "HOST_BROWSER_PROFILE_MODE_KEY", raising=False)
+
+    reloaded = importlib.reload(connector_runtime_module)
+
+    assert reloaded.HOST_BROWSER_PROFILE_MODE_KEY == "host_browser_profile_mode"
+
+    if original is not None:
+        monkeypatch.setattr(browser_config, "HOST_BROWSER_PROFILE_MODE_KEY", original, raising=False)
+    importlib.reload(connector_runtime_module)
+
+
 def test_host_browser_privacy_blocks_cloud_content(monkeypatch):
     import plugins._browser.helpers.connector_runtime as connector_runtime_module
     from plugins._model_config.helpers import model_config
@@ -210,7 +227,14 @@ def test_host_browser_privacy_blocks_cloud_content(monkeypatch):
         runtime._enforce_privacy({"action": "content"})
 
 
-def test_connector_runtime_normalizes_host_navigation_payloads():
+def test_connector_runtime_normalizes_host_navigation_payloads(monkeypatch):
+    import plugins._browser.helpers.connector_runtime as connector_runtime_module
+
+    monkeypatch.setattr(
+        connector_runtime_module,
+        "get_browser_config",
+        lambda agent=None: {"host_browser_profile_mode": "existing"},
+    )
     runtime = ConnectorBrowserRuntime("ctx-host", _agent("ctx-host"))
 
     open_payload = runtime._payload_for_call("open", "localhost:3000")
@@ -236,6 +260,20 @@ def test_connector_runtime_normalizes_host_navigation_payloads():
     assert multi_payload["calls"][1]["url"] == "http://127.0.0.1:8000/path"
     assert multi_payload["calls"][2]["calls"][0]["url"] == "https://nested.example/"
     assert multi_payload["calls"][3] == {"action": "content", "browser_id": 1}
+    assert open_payload["profile_mode"] == "existing"
+
+
+def test_connector_runtime_forwards_host_profile_mode(monkeypatch):
+    import plugins._browser.helpers.connector_runtime as connector_runtime_module
+
+    monkeypatch.setattr(
+        connector_runtime_module,
+        "get_browser_config",
+        lambda agent=None: {"host_browser_profile_mode": "agent"},
+    )
+    runtime = ConnectorBrowserRuntime("ctx-host", _agent("ctx-host"))
+
+    assert runtime._payload_for_call("open", "example.com")["profile_mode"] == "agent"
 
 
 def test_host_browser_artifacts_materialize_inside_multi_results(monkeypatch, tmp_path):
@@ -367,6 +405,7 @@ def test_connector_runtime_ensures_preparable_host_browser_before_action(monkeyp
 
             assert result == {"id": 1, "state": {"runtime": "host"}}
             assert [payload["action"] for payload in emitted] == ["ensure", "open"]
+            assert [payload["profile_mode"] for payload in emitted] == ["existing", "existing"]
             assert "__spaceBrowserPageContent__" in emitted[0]["content_helper"]["source"]
             assert "capture" in emitted[0]["content_helper"]["required_apis"]
             assert emitted[0]["content_helper"]["sha256"]

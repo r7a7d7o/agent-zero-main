@@ -13,8 +13,10 @@ DEFAULT_HOMEPAGE_KEY = "default_homepage"
 AUTOFOCUS_ACTIVE_PAGE_KEY = "autofocus_active_page"
 RUNTIME_BACKEND_KEY = "runtime_backend"
 HOST_BROWSER_PRIVACY_POLICY_KEY = "host_browser_privacy_policy"
+HOST_BROWSER_PROFILE_MODE_KEY = "host_browser_profile_mode"
 RUNTIME_BACKENDS = {"container", "host_required"}
 HOST_BROWSER_PRIVACY_POLICIES = {"enforce_local", "warn", "allow"}
+HOST_BROWSER_PROFILE_MODES = {"existing", "agent"}
 BASE_BROWSER_ARGS = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -109,6 +111,11 @@ def normalize_browser_config(settings: dict[str, Any] | None) -> dict[str, Any]:
             raw.get(HOST_BROWSER_PRIVACY_POLICY_KEY, "enforce_local"),
             allowed=HOST_BROWSER_PRIVACY_POLICIES,
             default="enforce_local",
+        ),
+        HOST_BROWSER_PROFILE_MODE_KEY: _normalize_choice(
+            raw.get(HOST_BROWSER_PROFILE_MODE_KEY, "existing"),
+            allowed=HOST_BROWSER_PROFILE_MODES,
+            default="existing",
         ),
         MODEL_PRESET_KEY: _normalize_model_preset(raw.get(MODEL_PRESET_KEY, "")),
     }

@@ -5,6 +5,7 @@ const BROWSER_EXTENSIONS_API = "/plugins/_browser/extensions";
 const BROWSER_STATUS_API = "/plugins/_browser/status";
 const RUNTIME_BACKENDS = new Set(["container", "host_required"]);
 const HOST_PRIVACY_POLICIES = new Set(["enforce_local", "warn", "allow"]);
+const HOST_PROFILE_MODES = new Set(["existing", "agent"]);
 
 function normalizePathList(value) {
   const source = Array.isArray(value)
@@ -31,6 +32,11 @@ function ensureConfig(config) {
     config.host_browser_privacy_policy,
     HOST_PRIVACY_POLICIES,
     "enforce_local",
+  );
+  config.host_browser_profile_mode = normalizeChoice(
+    config.host_browser_profile_mode,
+    HOST_PROFILE_MODES,
+    "existing",
   );
   config.model_preset = String(config.model_preset || "").trim();
   delete config.model;
@@ -137,6 +143,12 @@ export const store = createStore("browserConfig", {
     if (value === "warn") return "Warn When Using Cloud";
     if (value === "allow") return "Allow";
     return "Local Models Only";
+  },
+
+  hostBrowserProfileModeLabel() {
+    const value = this.config?.host_browser_profile_mode || "existing";
+    if (value === "agent") return "Clean Agent Profile";
+    return "Existing Browser Profile";
   },
 
   async loadHostBrowserStatus() {

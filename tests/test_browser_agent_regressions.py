@@ -155,6 +155,7 @@ def test_browser_config_normalizes_extension_paths(tmp_path):
         "autofocus_active_page": True,
         "runtime_backend": "container",
         "host_browser_privacy_policy": "enforce_local",
+        "host_browser_profile_mode": "existing",
         "model_preset": "",
     }
 
@@ -169,11 +170,13 @@ def test_browser_config_normalizes_host_backend_and_privacy_policy():
         {
             "runtime_backend": "host-required",
             "host_browser_privacy_policy": "warn",
+            "host_browser_profile_mode": "agent",
         }
     )
 
     assert config["runtime_backend"] == "host_required"
     assert config["host_browser_privacy_policy"] == "warn"
+    assert config["host_browser_profile_mode"] == "agent"
     assert (
         normalize_browser_config({"runtime_backend": "host_when_available"})["runtime_backend"]
         == "host_required"
