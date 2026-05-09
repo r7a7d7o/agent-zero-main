@@ -300,7 +300,10 @@ docker run -p 0:80 -v /path/to/your/work_dir:/a0/usr agent0ai/agent-zero
 
 ## Step 3: Configure Agent Zero
 
-The UI will show a warning banner "Missing LLM API Key for current settings". Click on `Add your API key` to enter Settings and start configuring A0.
+The UI will show a welcome banner when model setup is missing. Click
+**Start Onboarding** to choose Cloud or Local, add a provider key or account
+connection, and select your main and utility models. For the screenshot
+walkthrough, see the [First-Run Onboarding guide](../guides/onboarding.md).
 
 ### Settings Configuration
 
