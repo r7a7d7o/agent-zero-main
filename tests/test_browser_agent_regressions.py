@@ -98,6 +98,7 @@ from plugins._browser.helpers.extension_manager import (
 )
 import plugins._browser.helpers.extension_manager as browser_extension_manager_module
 from plugins._browser.helpers.runtime import (
+    BrowserPage,
     _BrowserRuntimeCore,
     _BrowserScreencast,
     list_runtime_sessions,
@@ -153,8 +154,9 @@ def test_browser_config_normalizes_extension_paths(tmp_path):
         "extension_paths": [str(extension_dir)],
         "default_homepage": "about:blank",
         "autofocus_active_page": True,
+        "max_open_tabs": 32,
         "runtime_backend": "container",
-        "host_browser_privacy_policy": "enforce_local",
+        "host_browser_privacy_policy": "allow",
         "host_browser_profile_mode": "existing",
         "model_preset": "",
     }
@@ -181,6 +183,13 @@ def test_browser_config_normalizes_host_backend_and_privacy_policy():
         normalize_browser_config({"runtime_backend": "host_when_available"})["runtime_backend"]
         == "host_required"
     )
+
+
+def test_browser_config_normalizes_max_open_tabs():
+    assert normalize_browser_config({"max_open_tabs": "12"})["max_open_tabs"] == 12
+    assert normalize_browser_config({"max_open_tabs": "0"})["max_open_tabs"] == 1
+    assert normalize_browser_config({"max_open_tabs": "200"})["max_open_tabs"] == 50
+    assert normalize_browser_config({"max_open_tabs": "oops"})["max_open_tabs"] == 32
 
 
 def test_browser_model_selection_uses_presets(monkeypatch):
@@ -2039,6 +2048,28 @@ async def test_browser_runtime_sessions_are_context_qualified(monkeypatch):
             "last_interacted_browser_id": 1,
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_browser_runtime_refuses_new_tabs_when_context_limit_is_reached(monkeypatch):
+    core = _BrowserRuntimeCore("ctx-limit")
+    core.pages = {
+        1: BrowserPage(1, SimpleNamespace()),
+        2: BrowserPage(2, SimpleNamespace()),
+    }
+
+    async def fake_ensure_started():
+        return None
+
+    monkeypatch.setattr(core, "ensure_started", fake_ensure_started)
+    monkeypatch.setattr(
+        browser_runtime_module,
+        "get_browser_config",
+        lambda: {"max_open_tabs": 2, "default_homepage": "about:blank"},
+    )
+
+    with pytest.raises(RepairableException, match="Browser tab limit reached"):
+        await core.open("https://example.com/")
 
 
 @pytest.mark.anyio

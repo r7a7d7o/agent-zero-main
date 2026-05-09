@@ -9,11 +9,19 @@ Browser tool actions must not open a Browser surface automatically. Use the tool
 
 Browser does not automatically load screenshots or surface images into model context. Screenshots are explicit only.
 
+resource hygiene:
+- reuse an existing tab with navigate for serial research instead of opening a new tab for every result
+- keep only a small working set of tabs open; close pages with close or close_all after extracting what you need
+- avoid list with include_content:true when many tabs are open; call content on the specific tab instead
+- avoid large multi fan-outs unless the user explicitly needs parallel browsing
+- prefer search_engine/document_query for text research and use browser for pages that need interaction, rendering, login, forms, or visual inspection
+
 actions: open list state set_active navigate back forward reload content detail screenshot click hover double_click right_click drag type submit type_submit scroll evaluate key_chord mouse wheel keyboard clipboard set_viewport select_option set_checked upload_file multi close close_all
 common args: action browser_id url ref target_ref text selector selectors script modifiers keys key include_content focus_popup event_type x y to_x to_y offset_x offset_y target_offset_x target_offset_y delta_x delta_y button quality full_page path paths value values checked width height calls
 
 workflow:
 - open creates a new browser and returns id/state
+- navigate reuses an existing browser_id and should be preferred during serial browsing
 - content returns readable page markdown with typed refs
 - detail inspects one ref, including link/image/input/button metadata
 - click/type/type_submit/submit/scroll use refs from latest content capture and return {action,state}

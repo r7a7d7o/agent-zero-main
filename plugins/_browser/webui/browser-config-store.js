@@ -31,7 +31,7 @@ function ensureConfig(config) {
   config.host_browser_privacy_policy = normalizeChoice(
     config.host_browser_privacy_policy,
     HOST_PRIVACY_POLICIES,
-    "enforce_local",
+    "allow",
   );
   config.host_browser_profile_mode = normalizeChoice(
     config.host_browser_profile_mode,
@@ -139,7 +139,7 @@ export const store = createStore("browserConfig", {
   },
 
   privacyPolicyLabel() {
-    const value = this.config?.host_browser_privacy_policy || "enforce_local";
+    const value = this.config?.host_browser_privacy_policy || "allow";
     if (value === "warn") return "Warn When Using Cloud";
     if (value === "allow") return "Allow";
     return "Local Models Only";

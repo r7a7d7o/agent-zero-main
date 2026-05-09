@@ -17,10 +17,13 @@ from typing import Any
 
 from helpers import files
 from helpers.defer import DeferredTask
+from helpers.errors import RepairableException
 from helpers.print_style import PrintStyle
 
 from plugins._browser.helpers.config import (
     DEFAULT_HOMEPAGE_KEY,
+    DEFAULT_MAX_OPEN_TABS,
+    MAX_OPEN_TABS_KEY,
     build_browser_launch_config,
     get_browser_config,
 )
@@ -846,6 +849,7 @@ class _BrowserRuntimeCore:
 
     async def open(self, url: str = "") -> dict[str, Any]:
         await self.ensure_started()
+        self._ensure_can_open_page()
         page = await self.context.new_page()
         browser_page = await self._register_page(page)
         self.last_interacted_browser_id = browser_page.id
@@ -861,6 +865,24 @@ class _BrowserRuntimeCore:
         if raw_url:
             return raw_url
         return str(get_browser_config().get(DEFAULT_HOMEPAGE_KEY) or "about:blank").strip() or "about:blank"
+
+    def _max_open_tabs(self) -> int:
+        try:
+            value = int(get_browser_config().get(MAX_OPEN_TABS_KEY, DEFAULT_MAX_OPEN_TABS))
+        except (TypeError, ValueError):
+            value = DEFAULT_MAX_OPEN_TABS
+        return max(1, value)
+
+    def _tab_limit_error(self) -> RepairableException:
+        max_open_tabs = self._max_open_tabs()
+        return RepairableException(
+            f"Browser tab limit reached ({len(self.pages)}/{max_open_tabs}). "
+            "Navigate an existing browser_id or close tabs with close/close_all before opening more."
+        )
+
+    def _ensure_can_open_page(self) -> None:
+        if len(self.pages) >= self._max_open_tabs():
+            raise self._tab_limit_error()
 
     async def list(self, include_content: bool = False) -> dict[str, Any]:
         await self.ensure_started()
@@ -2156,22 +2178,35 @@ class _BrowserRuntimeCore:
             if self._closing or page.is_closed():
                 return
             lock = self._ensure_registry_lock()
+            close_over_limit = False
             async with lock:
                 if self._closing:
                     return
                 if self._browser_id_for_page(page) is not None:
                     return
-                browser_page = self._register_page_locked(page)
-                new_id = browser_page.id
-                while self._pending_popups:
-                    waiter = self._pending_popups.pop(0)
-                    if not waiter.done():
-                        waiter.set_result(new_id)
-                        break
-                if new_id not in self._background_popup_pages:
-                    self.last_interacted_browser_id = new_id
+                if len(self.pages) >= self._max_open_tabs():
+                    limit_error = self._tab_limit_error()
+                    while self._pending_popups:
+                        waiter = self._pending_popups.pop(0)
+                        if not waiter.done():
+                            waiter.set_exception(limit_error)
+                            break
+                    close_over_limit = True
                 else:
-                    self._background_popup_pages.discard(new_id)
+                    browser_page = self._register_page_locked(page)
+                    new_id = browser_page.id
+                    while self._pending_popups:
+                        waiter = self._pending_popups.pop(0)
+                        if not waiter.done():
+                            waiter.set_result(new_id)
+                            break
+                    if new_id not in self._background_popup_pages:
+                        self.last_interacted_browser_id = new_id
+                    else:
+                        self._background_popup_pages.discard(new_id)
+            if close_over_limit:
+                with contextlib.suppress(Exception):
+                    await page.close()
         except Exception as exc:
             PrintStyle.warning(f"Popup registration failed: {exc}")
 

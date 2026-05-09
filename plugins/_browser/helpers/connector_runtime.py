@@ -49,6 +49,11 @@ HOST_BROWSER_PRIVACY_POLICY_KEY = getattr(
     "HOST_BROWSER_PRIVACY_POLICY_KEY",
     "host_browser_privacy_policy",
 )
+DEFAULT_HOST_BROWSER_PRIVACY_POLICY = getattr(
+    browser_config,
+    "DEFAULT_HOST_BROWSER_PRIVACY_POLICY",
+    "allow",
+)
 HOST_BROWSER_PROFILE_MODE_KEY = getattr(
     browser_config,
     "HOST_BROWSER_PROFILE_MODE_KEY",
@@ -294,7 +299,7 @@ class ConnectorBrowserRuntime:
     def _enforce_privacy(self, payload: dict[str, Any]) -> None:
         policy = str(
             get_browser_config(agent=self.agent).get(HOST_BROWSER_PRIVACY_POLICY_KEY)
-            or "enforce_local"
+            or DEFAULT_HOST_BROWSER_PRIVACY_POLICY
         ).strip()
         if not self._payload_is_sensitive(payload) or policy != "enforce_local":
             return
@@ -309,7 +314,7 @@ class ConnectorBrowserRuntime:
     def _privacy_warning(self, payload: dict[str, Any]) -> str:
         policy = str(
             get_browser_config(agent=self.agent).get(HOST_BROWSER_PRIVACY_POLICY_KEY)
-            or "enforce_local"
+            or DEFAULT_HOST_BROWSER_PRIVACY_POLICY
         ).strip()
         if policy != "warn" or not self._payload_is_sensitive(payload):
             return ""

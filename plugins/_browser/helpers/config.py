@@ -11,12 +11,17 @@ PLUGIN_NAME = "_browser"
 MODEL_PRESET_KEY = "model_preset"
 DEFAULT_HOMEPAGE_KEY = "default_homepage"
 AUTOFOCUS_ACTIVE_PAGE_KEY = "autofocus_active_page"
+MAX_OPEN_TABS_KEY = "max_open_tabs"
 RUNTIME_BACKEND_KEY = "runtime_backend"
 HOST_BROWSER_PRIVACY_POLICY_KEY = "host_browser_privacy_policy"
 HOST_BROWSER_PROFILE_MODE_KEY = "host_browser_profile_mode"
 RUNTIME_BACKENDS = {"container", "host_required"}
 HOST_BROWSER_PRIVACY_POLICIES = {"enforce_local", "warn", "allow"}
 HOST_BROWSER_PROFILE_MODES = {"existing", "agent"}
+DEFAULT_MAX_OPEN_TABS = 32
+MIN_MAX_OPEN_TABS = 1
+HARD_MAX_OPEN_TABS = 50
+DEFAULT_HOST_BROWSER_PRIVACY_POLICY = "allow"
 BASE_BROWSER_ARGS = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -70,6 +75,14 @@ def _normalize_bool(value: Any, default: bool = True) -> bool:
     return default
 
 
+def _normalize_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(maximum, number))
+
+
 def _normalize_choice(value: Any, *, allowed: set[str], default: str) -> str:
     normalized = str(value or "").strip().lower().replace("-", "_")
     if normalized in allowed:
@@ -104,13 +117,19 @@ def normalize_browser_config(settings: dict[str, Any] | None) -> dict[str, Any]:
             raw.get(AUTOFOCUS_ACTIVE_PAGE_KEY, True),
             default=True,
         ),
+        MAX_OPEN_TABS_KEY: _normalize_int(
+            raw.get(MAX_OPEN_TABS_KEY, DEFAULT_MAX_OPEN_TABS),
+            default=DEFAULT_MAX_OPEN_TABS,
+            minimum=MIN_MAX_OPEN_TABS,
+            maximum=HARD_MAX_OPEN_TABS,
+        ),
         RUNTIME_BACKEND_KEY: _normalize_runtime_backend(
             raw.get(RUNTIME_BACKEND_KEY, "container")
         ),
         HOST_BROWSER_PRIVACY_POLICY_KEY: _normalize_choice(
-            raw.get(HOST_BROWSER_PRIVACY_POLICY_KEY, "enforce_local"),
+            raw.get(HOST_BROWSER_PRIVACY_POLICY_KEY, DEFAULT_HOST_BROWSER_PRIVACY_POLICY),
             allowed=HOST_BROWSER_PRIVACY_POLICIES,
-            default="enforce_local",
+            default=DEFAULT_HOST_BROWSER_PRIVACY_POLICY,
         ),
         HOST_BROWSER_PROFILE_MODE_KEY: _normalize_choice(
             raw.get(HOST_BROWSER_PROFILE_MODE_KEY, "existing"),
