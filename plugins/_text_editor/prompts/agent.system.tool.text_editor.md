@@ -45,6 +45,7 @@ usage:
 
 #### patch
 edit existing file. prefer patch_text; use edits only right after read for tiny line edits
+if the user says patch, change without rewriting, or don't rewrite, use action patch instead of write
 args path plus exactly one of: patch_text string OR edits [{from to content}]
 patch_text uses current file content, no prior read required
 patch_text update-only forms:

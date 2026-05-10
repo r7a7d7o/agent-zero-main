@@ -46,9 +46,13 @@ async def _build_system_text(profile: str = "agent0") -> str:
 async def test_default_agent0_prompt_budget_and_guardrails():
     system_text = await _build_system_text()
 
-    assert tokens.approximate_tokens(system_text) <= 3000
-    assert "tool_name` must exactly match a listed tool name" in system_text
-    assert "tool_args` must stay a json object" in system_text
+    # The default prompt now intentionally includes the compact always-on tool
+    # surface plus skill metadata. Keep the guardrail close to the observed
+    # budget so prompt creep remains visible without pretending this surface is
+    # a tiny single-tool prompt.
+    assert tokens.approximate_tokens(system_text) <= 8500
+    assert "`tool_name` must be one listed tool name" in system_text
+    assert "- tool_args: key value pairs tool arguments" in system_text
     assert '"tool_name": "call_subordinate"' in system_text
     assert '"reset": true' in system_text
     assert '"tool_name": "text_editor"' in system_text
@@ -59,7 +63,7 @@ async def test_default_agent0_prompt_budget_and_guardrails():
     assert '"tool_name": "code_execution_remote"' in system_text
     assert '"tool_name": "text_editor_remote"' in system_text
     assert '"tool_name": "computer_use_remote"' not in system_text
-    assert "computer-use-remote" in system_text
+    assert "host-computer-use" in system_text
 
 
 def test_a0_small_profile_removed_and_prompt_text_generic():

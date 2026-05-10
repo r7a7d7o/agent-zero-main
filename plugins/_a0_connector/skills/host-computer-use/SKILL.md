@@ -1,22 +1,9 @@
 ---
-name: computer-use-remote
-description: Beta local desktop control through a connected A0 CLI host; use for screenshots, menus, browser chrome, and native UI tasks.
-version: 1.1.0
-author: Agent Zero Team
-tags: ["computer-use", "desktop", "local-ui", "screenshots", "native-ui"]
-trigger_patterns:
-  - "computer use"
-  - "computer-use"
-  - "computer_use_remote"
-  - "local desktop control"
-  - "control local browser"
-  - "click on screen"
-  - "native ui"
-allowed_tools:
-  - computer_use_remote
+name: host-computer-use
+description: Beta desktop control through the connected A0 CLI host. Use when the user asks for computer use, screenshots, screen inspection, menus, browser chrome, native UI tasks, clicking, scrolling, typing, or checking computer_use_remote status.
 ---
 
-# Computer Use Remote
+# Host Computer Use
 
 This skill unlocks the beta `computer_use_remote` tool for connected local desktop control through A0 CLI.
 
@@ -26,7 +13,7 @@ Load this skill before using `computer_use_remote` for local desktop and native 
 
 If the task is browser-only and the user is flexible, prefer direct browser tooling because it is usually more reliable and token-efficient than screenshot-driven desktop control.
 
-If the task needs shell execution on the CLI host, load `code-execution-remote` separately rather than treating desktop control and shell execution as one affordance.
+If the task needs shell execution on the CLI host, load `host-code-execution` separately rather than treating desktop control and shell execution as one affordance.
 
 ## Tool Contract
 

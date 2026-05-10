@@ -4,7 +4,7 @@ Runs shell-backed execution on the machine where a connected A0 CLI is running.
 Use this tool, not `code_execution_tool`, when the user asks for the connected
 local terminal, the A0 CLI host, their local machine, or explicitly says not to
 use Docker/server/container execution.
-For complex local project work, optionally load skill `code-execution-remote`.
+For complex local project work, optionally load skill `host-code-execution`.
 
 Availability and permissions are checked when the tool runs. If no CLI is
 connected, remote execution is disabled, or local access is not Read&Write for a

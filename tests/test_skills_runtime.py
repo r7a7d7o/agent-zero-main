@@ -198,13 +198,13 @@ def test_reactivating_name_only_scope_default_by_path_clears_hidden_override(mon
 def test_loaded_skill_entries_come_from_agent_data():
     agent = DummyAgent()
     agent.data[runtime.AGENT_DATA_NAME_LOADED_SKILLS] = [
-        "computer-use-remote",
+        "host-computer-use",
         "",
         "a0-development",
     ]
 
     assert runtime.get_loaded_skill_entries(agent) == [
-        {"name": "computer-use-remote"},
+        {"name": "host-computer-use"},
         {"name": "a0-development"},
     ]
 
@@ -276,16 +276,41 @@ def test_a0_manage_plugin_skill_frontmatter_is_valid_yaml():
     assert "Agent Zero Plugin Management" in body
 
 
+def test_renamed_skills_use_standard_frontmatter_only():
+    skill_paths = [
+        PROJECT_ROOT / "skills" / "build-skill" / "SKILL.md",
+        PROJECT_ROOT / "skills" / "scheduled-tasks" / "SKILL.md",
+        PROJECT_ROOT / "plugins" / "_a0_connector" / "skills" / "host-code-execution" / "SKILL.md",
+        PROJECT_ROOT / "plugins" / "_a0_connector" / "skills" / "host-computer-use" / "SKILL.md",
+        PROJECT_ROOT / "plugins" / "_a0_connector" / "skills" / "host-file-editing" / "SKILL.md",
+        PROJECT_ROOT / "plugins" / "_a0_connector" / "skills" / "setup-a0-cli" / "SKILL.md",
+        PROJECT_ROOT / "plugins" / "_browser" / "skills" / "browser-automation" / "SKILL.md",
+        PROJECT_ROOT / "plugins" / "_browser" / "skills" / "browser-extension-control" / "SKILL.md",
+        PROJECT_ROOT / "plugins" / "_browser" / "skills" / "browser-form-workflows" / "SKILL.md",
+    ]
+
+    for path in skill_paths:
+        frontmatter, body, errors = runtime.split_frontmatter(path.read_text(encoding="utf-8"))
+        assert errors == []
+        assert set(frontmatter) == {"name", "description"}
+        assert frontmatter["name"] == path.parent.name
+        assert frontmatter["description"]
+        assert body
+
+
 def test_unload_agent_skill_removes_loaded_skill_by_name():
     agent = DummyAgent()
     agent.data[runtime.AGENT_DATA_NAME_LOADED_SKILLS] = [
-        "computer-use-remote",
+        "host-computer-use",
         "a0-development",
     ]
 
     removed = runtime.unload_agent_skill(
         agent,
-        {"name": "computer-use-remote", "path": "/a0/skills/computer-use-remote"},
+        {
+            "name": "host-computer-use",
+            "path": "/a0/plugins/_a0_connector/skills/host-computer-use",
+        },
     )
 
     assert removed is True

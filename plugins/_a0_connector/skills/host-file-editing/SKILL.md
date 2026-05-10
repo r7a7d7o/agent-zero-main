@@ -1,25 +1,9 @@
 ---
-name: text-editor-remote
-description: Guide safe use of text_editor_remote for reading, writing, and patching files on the connected A0 CLI host machine.
-version: 1.0.0
-author: Agent Zero Team
-tags: ["agent-zero", "a0", "cli", "connector", "remote-files", "file-editing"]
-trigger_patterns:
-  - "text_editor_remote"
-  - "remote file editing"
-  - "edit my local files through a0 cli"
-  - "read files on the cli host"
-  - "patch files on the cli host"
-  - "connected local files"
-  - "connected local machine files"
-  - "local files not docker"
-  - "a0 cli files"
-  - "cli host files"
-allowed_tools:
-  - text_editor_remote
+name: host-file-editing
+description: Guide safe use of text_editor_remote for reading, writing, and patching files on the connected A0 CLI host. Use when the user asks to inspect or edit files on their computer, local files, CLI host files, or files that are explicitly not Docker/server files.
 ---
 
-# Text Editor Remote
+# Host File Editing
 
 ## Boundary
 

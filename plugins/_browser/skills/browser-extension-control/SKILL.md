@@ -1,7 +1,6 @@
 ---
-name: a0-browser-ext
-description: Create, inspect, install, and safely maintain Chrome extensions for Agent Zero's built-in Browser plugin.
-tags: ["agent-zero", "browser", "chrome-extension", "playwright", "manifest-v3"]
+name: browser-extension-control
+description: Create, inspect, install, and safely maintain Chrome extensions for Agent Zero's built-in Browser plugin. Use when the user asks to build a browser extension, modify an existing extension, install a Chrome Web Store extension, or review extension permissions.
 ---
 
 # Agent Zero Browser Extensions

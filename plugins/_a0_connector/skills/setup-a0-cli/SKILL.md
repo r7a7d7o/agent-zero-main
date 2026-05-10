@@ -1,20 +1,6 @@
 ---
-name: a0-setup-cli
-description: Guide the user through installing and connecting the A0 CLI on the host machine so Dockerized Agent Zero can work on real local files. Use when asked to install A0, set up the CLI connector, connect Agent Zero to local files, or troubleshoot host-vs-container setup confusion.
-version: 1.1.0
-author: Agent Zero Team
-tags: ["agent-zero", "a0", "cli", "connector", "docker", "setup", "local-files"]
-trigger_patterns:
-  - "install a0"
-  - "install a0 cli"
-  - "set up a0 cli"
-  - "set up a0 cli connector"
-  - "connect a0 to agent zero"
-  - "connect agent zero to local files"
-  - "let agent zero work on my local files"
-  - "install the terminal connector"
-  - "help me set up the a0 cli connector"
-  - "install a0 connector"
+name: setup-a0-cli
+description: Guide installing, connecting, or troubleshooting the A0 CLI connector on the user's host machine so Dockerized Agent Zero can work on real local files. Use for install A0, set up A0 CLI, connect local files, remote tools, host-vs-container confusion, or CLI connector setup problems.
 ---
 
 # A0 CLI Host Setup

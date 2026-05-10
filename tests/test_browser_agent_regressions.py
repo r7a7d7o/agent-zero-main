@@ -528,7 +528,14 @@ def test_browser_extension_menu_exposes_agent_and_url_paths():
     html = (PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-panel.html").read_text(
         encoding="utf-8"
     )
-    skill = PROJECT_ROOT / "skills" / "a0-browser-ext" / "SKILL.md"
+    skill = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_browser"
+        / "skills"
+        / "browser-extension-control"
+        / "SKILL.md"
+    )
 
     assert "Create New Extension with A0" in html
     assert "+ Create New with A0" not in html
@@ -902,19 +909,19 @@ def test_browser_tool_does_not_auto_open_canvas_policy_is_documented():
     assert "select_option" in prompt
     assert "set_checked" in prompt
     assert "upload_file" in prompt
-    assert "browser-forms" in prompt
+    assert "browser-form-workflows" in prompt
     assert "does not automatically load screenshots" in prompt
     assert "already open" in config
     assert "already-open Browser surface" in config_html
 
 
 def test_browser_forms_skill_is_plugin_owned_and_discoverable():
-    skill_path = PROJECT_ROOT / "plugins" / "_browser" / "skills" / "browser-forms" / "SKILL.md"
+    skill_path = PROJECT_ROOT / "plugins" / "_browser" / "skills" / "browser-form-workflows" / "SKILL.md"
     assert skill_path.exists()
     skill = skill_path.read_text(encoding="utf-8")
     assert skill.startswith("---\n")
     frontmatter = skill.split("---", 2)[1]
-    assert "name: browser-forms" in frontmatter
+    assert "name: browser-form-workflows" in frontmatter
     assert "description:" in frontmatter
     assert "select_option" in skill
     assert "set_checked" in skill

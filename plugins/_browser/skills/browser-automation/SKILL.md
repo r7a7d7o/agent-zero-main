@@ -1,5 +1,5 @@
 ---
-name: browser-tool
+name: browser-automation
 description: Use for complex Agent Zero browser automation, including multi-tab browsing, screenshots, forms, uploads, raw pointer/keyboard actions, host-vs-container browser mode, and visual verification workflows.
 ---
 
@@ -39,7 +39,7 @@ Screenshot args include `quality`, `full_page`, and optional `path`. PNG is used
 - `select_option` works for native selects and detectable ARIA listbox/combobox controls.
 - `set_checked` works for checkbox, radio, switch, and toggle-like refs.
 - `upload_file` works for file input refs or associated labels; verify the file exists in the active browser environment.
-- For fragile forms, load skill `browser-forms`.
+- For fragile forms, load skill `browser-form-workflows`.
 
 ## Pointer And Keyboard
 

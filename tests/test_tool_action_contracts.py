@@ -66,7 +66,7 @@ def _load_skills_tool(monkeypatch, skill_root: Path):
     skills_stub.AGENT_DATA_NAME_LOADED_SKILLS = "loaded_skills"
     skills_stub.MAX_ACTIVE_SKILLS = 20
     fake_skill = _FakeSkill(
-        name="browser-forms",
+        name="browser-form-workflows",
         description="Use for complex browser forms.",
         path=skill_root,
         tags=[],
@@ -99,13 +99,13 @@ def test_skills_tool_accepts_action_alias_for_search(monkeypatch, tmp_path: Path
 
     response = asyncio.run(tool.execute(**tool.args))
 
-    assert "browser-forms" in response.message
+    assert "browser-form-workflows" in response.message
 
 
 def test_skills_tool_read_file_action_reads_inside_skill_dir(
     monkeypatch, tmp_path: Path
 ):
-    skill_root = tmp_path / "browser-forms"
+    skill_root = tmp_path / "browser-form-workflows"
     skill_root.mkdir()
     (skill_root / "notes.md").write_text("Use labels before typing.\n", encoding="utf-8")
     module = _load_skills_tool(monkeypatch, skill_root)
@@ -115,7 +115,7 @@ def test_skills_tool_read_file_action_reads_inside_skill_dir(
         None,
         {
             "action": "read_file",
-            "skill_name": "browser-forms",
+            "skill_name": "browser-form-workflows",
             "file_path": "notes.md",
         },
         "",
@@ -124,7 +124,7 @@ def test_skills_tool_read_file_action_reads_inside_skill_dir(
 
     response = asyncio.run(tool.execute(**tool.args))
 
-    assert "Skill file: browser-forms/notes.md" in response.message
+    assert "Skill file: browser-form-workflows/notes.md" in response.message
     assert "Use labels before typing." in response.message
 
 
@@ -464,9 +464,10 @@ def test_computer_use_remote_is_skill_gated():
         / "plugins/_a0_connector/prompts/agent.system.tool.computer_use_remote.md"
     )
     skill_text = (
-        project_root / "skills/computer-use-remote/SKILL.md"
+        project_root
+        / "plugins/_a0_connector/skills/host-computer-use/SKILL.md"
     ).read_text(encoding="utf-8")
 
     assert not prompt_path.exists()
     assert '"tool_name": "computer_use_remote"' in skill_text
-    assert "Beta local desktop control" in skill_text
+    assert "Beta desktop control" in skill_text

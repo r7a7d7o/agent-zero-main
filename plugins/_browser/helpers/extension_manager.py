@@ -84,7 +84,7 @@ def install_chrome_web_store_extension(source: str) -> dict[str, Any]:
     extension_id = parse_chrome_web_store_extension_id(source)
     target = get_extensions_root() / "chrome-web-store" / extension_id
 
-    with tempfile.TemporaryDirectory(prefix="a0-browser-ext-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="browser-extension-control-") as tmp:
         archive_path = Path(tmp) / f"{extension_id}.crx"
         _download_crx(extension_id, archive_path)
         payload_path = Path(tmp) / f"{extension_id}.zip"

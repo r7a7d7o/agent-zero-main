@@ -133,7 +133,14 @@ def test_remote_file_and_exec_tools_are_standard_tool_prompts_independent_from_c
 
 
 def test_beta_computer_use_remote_is_skill_only_not_standard_tool_prompt():
-    skill = PROJECT_ROOT / "skills" / "computer-use-remote" / "SKILL.md"
+    skill = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_a0_connector"
+        / "skills"
+        / "host-computer-use"
+        / "SKILL.md"
+    )
 
     assert not (PROMPT_ROOT / "agent.system.tool.computer_use_remote.md").exists()
     assert '"tool_name": "computer_use_remote"' in skill.read_text(encoding="utf-8")
@@ -288,7 +295,7 @@ def test_remote_affordance_skills_parse():
         / "plugins"
         / "_a0_connector"
         / "skills"
-        / "text-editor-remote"
+        / "host-file-editing"
         / "SKILL.md"
     )
     code_execution_skill = _parse_skill_frontmatter(
@@ -296,32 +303,43 @@ def test_remote_affordance_skills_parse():
         / "plugins"
         / "_a0_connector"
         / "skills"
-        / "code-execution-remote"
+        / "host-code-execution"
         / "SKILL.md"
     )
     computer_skill = _parse_skill_frontmatter(
-        PROJECT_ROOT / "skills" / "computer-use-remote" / "SKILL.md"
+        PROJECT_ROOT
+        / "plugins"
+        / "_a0_connector"
+        / "skills"
+        / "host-computer-use"
+        / "SKILL.md"
     )
 
     assert not legacy_connector_skill.exists()
-    assert text_editor_skill["name"] == "text-editor-remote"
-    assert text_editor_skill["allowed_tools"] == ["text_editor_remote"]
-    assert "connected local files" in text_editor_skill["trigger_patterns"]
-    assert "not docker" in code_execution_skill["trigger_patterns"]
-    assert "connected local terminal" in code_execution_skill["trigger_patterns"]
-    assert code_execution_skill["name"] == "code-execution-remote"
-    assert code_execution_skill["allowed_tools"] == ["code_execution_remote"]
-    assert computer_skill["name"] == "computer-use-remote"
-    assert computer_skill["allowed_tools"] == ["computer_use_remote"]
+    assert text_editor_skill["name"] == "host-file-editing"
+    assert "text_editor_remote" in text_editor_skill["description"]
+    assert "not Docker/server files" in text_editor_skill["description"]
+    assert code_execution_skill["name"] == "host-code-execution"
+    assert "code_execution_remote" in code_execution_skill["description"]
+    assert "not Docker" in code_execution_skill["description"]
+    assert computer_skill["name"] == "host-computer-use"
+    assert "computer_use_remote" in computer_skill["description"]
 
 
 def test_remote_tool_stubs_are_self_contained_and_reference_per_tool_skills():
     text_stub = (PROMPT_ROOT / "agent.system.tool.text_editor_remote.md").read_text(encoding="utf-8")
     exec_stub = (PROMPT_ROOT / "agent.system.tool.code_execution_remote.md").read_text(encoding="utf-8")
-    computer_skill = (PROJECT_ROOT / "skills" / "computer-use-remote" / "SKILL.md").read_text(encoding="utf-8")
+    computer_skill = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_a0_connector"
+        / "skills"
+        / "host-computer-use"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
-    assert "optionally load skill `text-editor-remote`" in text_stub
-    assert "optionally load skill `code-execution-remote`" in exec_stub
+    assert "optionally load skill `host-file-editing`" in text_stub
+    assert "optionally load skill `host-code-execution`" in exec_stub
     assert '"tool_name": "text_editor_remote"' in text_stub
     assert '"tool_name": "code_execution_remote"' in exec_stub
     assert '"tool_name": "computer_use_remote"' in computer_skill

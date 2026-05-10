@@ -1,28 +1,9 @@
 ---
-name: code-execution-remote
-description: Guide safe use of code_execution_remote for shell-backed execution on the connected A0 CLI host machine.
-version: 1.0.0
-author: Agent Zero Team
-tags: ["agent-zero", "a0", "cli", "connector", "remote-execution", "shell"]
-trigger_patterns:
-  - "code_execution_remote"
-  - "remote shell execution"
-  - "run commands on the cli host"
-  - "run python on the cli host"
-  - "run node on the cli host"
-  - "connected local terminal"
-  - "connected terminal"
-  - "local terminal"
-  - "my terminal"
-  - "a0 cli"
-  - "cli host"
-  - "not docker"
-  - "not the docker terminal"
-allowed_tools:
-  - code_execution_remote
+name: host-code-execution
+description: Guide safe use of code_execution_remote for shell-backed execution on the connected A0 CLI host. Use when the user asks for their computer, local terminal, CLI host, remote shell, not Docker, or host-side Python/Node/terminal commands.
 ---
 
-# Code Execution Remote
+# Host Code Execution
 
 ## Boundary
 

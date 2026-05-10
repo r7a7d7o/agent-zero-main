@@ -3,7 +3,7 @@
 Reads, writes, and patches files on the machine where a connected A0 CLI is
 running. Use this tool, not server-side file tools, when the user asks for files
 on the connected local machine, A0 CLI host, or explicitly says not to use
-Docker/server files. For complex remote edits, optionally load skill `text-editor-remote`.
+Docker/server files. For complex remote edits, optionally load skill `host-file-editing`.
 
 Availability and permissions are checked when the tool runs. If no CLI is
 connected, remote file access is disabled, or a write/patch needs Read&Write,
@@ -18,6 +18,7 @@ report that to the user instead of falling back to server-side file tools.
 
 ## Notes
 - Prefer `read` before line-number edits.
+- If the user says patch, change without rewriting, or don't rewrite, use `action: "patch"` instead of `write`.
 - Prefer `patch_text` for context-anchored changes and `edits` only for fresh, surgical line ranges.
 - If freshness checks reject a line patch, reread the file and retry with updated ranges.
 - Relative paths are relative to the CLI host filesystem. Do not rewrite them to

@@ -1,5 +1,5 @@
 ---
-name: scheduler-tasks
+name: scheduled-tasks
 description: Use for complex Agent Zero scheduler work, including creating, updating, deleting, running, waiting for, timezone-correcting, or auditing scheduled, planned, and adhoc tasks.
 ---
 
@@ -22,7 +22,7 @@ Use the `scheduler` tool to manage saved tasks. Always inspect existing tasks be
 
 ## Schedule Fields
 
-Schedules use cron-like fields:
+Schedules use cron-like fields. Do not put ISO datetimes into `schedule`.
 
 - `minute`
 - `hour`
@@ -31,7 +31,38 @@ Schedules use cron-like fields:
 - `weekday`
 - `timezone`
 
-Use IANA timezones such as `Europe/Rome`. Omit timezone to use the current user timezone. Planned task datetimes should be ISO strings such as `2026-05-09T18:25:00`.
+Use IANA timezones such as `Europe/Rome`. Omit timezone to use the current user timezone. Planned task datetimes go in `plan`, not `schedule`, and should be ISO strings such as `2026-05-09T18:25:00`.
+
+For one future reminder, prefer `create_planned_task` with:
+
+```json
+{
+  "action": "create_planned_task",
+  "name": "drink water",
+  "prompt": "Remind the user to drink water.",
+  "plan": ["2026-05-11T09:15:00"],
+  "dedicated_context": true
+}
+```
+
+For a recurring or cron-shaped scheduled task, use `create_scheduled_task` with:
+
+```json
+{
+  "action": "create_scheduled_task",
+  "name": "weekday stretch",
+  "prompt": "Remind the user to stretch.",
+  "schedule": {
+    "minute": "15",
+    "hour": "9",
+    "day": "*",
+    "month": "*",
+    "weekday": "1-5",
+    "timezone": "Europe/Rome"
+  },
+  "dedicated_context": true
+}
+```
 
 ## Safety
 

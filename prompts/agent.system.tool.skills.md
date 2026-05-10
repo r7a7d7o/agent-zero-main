@@ -7,6 +7,8 @@ workflow:
 - action `list`: discover available skills
 - action `load`: load one skill by `skill_name`
 - action `read_file`: open one file inside a loaded skill directory
+if the user says "find/search a skill", call `search` before `load` even when the likely skill name seems obvious
+`read_file` requires both `skill_name` and `file_path`; load the skill first, then read `SKILL.md` or the named relative file
 after loading a skill, follow its instructions and use referenced files or scripts with other tools
 reload a skill if its instructions are no longer in context
 example:
