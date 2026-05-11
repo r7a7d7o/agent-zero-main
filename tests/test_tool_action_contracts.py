@@ -173,6 +173,8 @@ def test_memory_forget_tool_imports_plugin_memory_load(monkeypatch):
             "query": "codex memory forget token",
             "threshold": 0.99,
             "filter": "area=='codex_sweep'",
+            "include_exact": True,
+            "cascade": True,
         }
     ]
 

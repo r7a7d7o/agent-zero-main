@@ -30,6 +30,9 @@
 - Do not break information related to the same subject into multiple memories, keep them as one text
 - If there are multiple facts related to the same subject, merge them into one more detailed memory instead
 - Example: Instead of three memories "User's dog is Max", "Max is 6 years old", "Max is white and brown", create one memory "User's dog is Max, 6 years old, white and brown."
+- If the history changes or corrects a previously stated fact, output only the new complete current fact; do not output both old and new versions
+- Prefer a single durable profile-style sentence for mutable user/project preferences, such as "User currently prefers..." or "Project currently uses..."
+- Do not memorize temporary test markers, temporary behavior checks, or cleanup-only facts
 
 # Correct examples of data worth memorizing with (explanation)
 > User's name is John Doe (name is important)
@@ -45,6 +48,8 @@
 > Today is Monday (just date, no value in this information)
 > Market inquiry (just a topic without detail)
 > RAM Status (just a topic without detail)
+> User used to prefer X before changing to Y (historical preference is usually not useful; memorize the current preference only)
+> Temporary marker ABC123 was used in a memory test (test residue, not useful)
 
 
 # Further WRONG examples

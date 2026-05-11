@@ -9,6 +9,10 @@ notes:
 - `threshold` is similarity from `0` to `1`
 - `filter` is a metadata expression (e.g. `area=='main'`)
 - confirm destructive changes when accuracy matters
+- when the user updates a durable fact/preference, load related memories first, forget/delete superseded versions, then save one complete current version
+- do not append a second memory for the same mutable subject when the new statement replaces the old one
+- `memory_forget` also cleans exact matches and derived fragment/solution records related to removed memories
+- use `memory_save` for stable current facts, not short-lived test markers, greetings, or one-off conversation events
 
 example:
 ~~~json

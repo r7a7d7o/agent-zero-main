@@ -728,9 +728,11 @@ class MemoryConsolidator:
                 updated_count += 1
                 updated_ids.append(new_id)
 
-        # Step 2: Insert additional new memory if provided
+        # Step 2: Insert the new memory only when no existing memory was updated.
+        # UPDATE means "repopulate the existing subject", not "append another
+        # equally-important memory". This keeps mutable facts from piling up.
         new_memory_id = None
-        if result.new_memory_content:
+        if result.new_memory_content and not updated_ids:
             # LLM metadata takes precedence over original metadata when there are conflicts
             final_metadata = {
                 'area': area,
