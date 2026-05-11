@@ -820,9 +820,13 @@ class TaskScheduler:
             save_tmp_chat(context)
             return context
         else:
-            PrintStyle.warning(
+            message = (
                 f"Scheduler Task {task.name} loaded from task {task.uuid} but context not found"
             )
+            if task.is_dedicated():
+                PrintStyle.info(f"{message}; creating dedicated context")
+            else:
+                PrintStyle.warning(message)
             return await self.__new_context(task)
 
     async def _persist_chat(self, task: Union[ScheduledTask, AdHocTask, PlannedTask], context: AgentContext):

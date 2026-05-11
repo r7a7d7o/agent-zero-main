@@ -44,9 +44,10 @@ usage:
 ~~~
 
 #### patch
-edit existing file. prefer patch_text; use edits only right after read for tiny line edits
+edit existing file. prefer exact replace for simple "change X to Y"; use patch_text for context changes; use edits only right after read for tiny line edits
 if the user says patch, change without rewriting, or don't rewrite, use action patch instead of write
-args path plus exactly one of: patch_text string OR edits [{from to content}]
+args path plus exactly one of: old_text+new_text OR patch_text string OR edits [{from to content}]
+exact replace: `old_text` must be the exact current text span and must match once; `new_text` is the replacement
 patch_text uses current file content, no prior read required
 patch_text update-only forms:
 - insert after anchor: @@ exact existing line then +new lines
@@ -61,13 +62,14 @@ ensure valid syntax in content (all braces brackets tags closed)
 usage:
 ~~~json
 {
-    "thoughts": ["A context patch is safer than line-number surgery here."],
+    "thoughts": ["I can replace one exact current string without rewriting the whole file."],
     "headline": "Patching file",
     "tool_name": "text_editor",
     "tool_args": {
         "action": "patch",
         "path": "/path/file.py",
-        "patch_text": "*** Begin Patch\n*** Update File: file.py\n@@ def run():\n+    print('ready')\n*** End Patch"
+        "old_text": "status = 'draft'",
+        "new_text": "status = 'ready'"
     }
 }
 ~~~

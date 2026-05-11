@@ -29,6 +29,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 DEFAULT_SEARCH_THRESHOLD = 0.5
 MAX_REMOTE_DOCUMENT_BYTES = 50 * 1024 * 1024
+SMALL_DOCUMENT_QA_FALLBACK_CHARS = 12_000
 
 
 class DocumentQueryStore:
@@ -369,7 +370,7 @@ class DocumentQueryHelper:
         await self.agent.handle_intervention()
 
         # index documents
-        await asyncio.gather(
+        document_contents = await asyncio.gather(
             *[self.document_get_content(uri, True) for uri in document_uris]
         )
         await self.agent.handle_intervention()
@@ -409,19 +410,27 @@ class DocumentQueryHelper:
                 selected_chunks[chunk.metadata["id"]] = chunk
 
         if not selected_chunks:
-            self.progress_callback("No relevant content found in the documents")
-            content = f"!!! No content found for documents: {json.dumps(document_uris)} matching queries: {json.dumps(questions)}"
-            return False, content
+            content = self._small_document_fallback_content(
+                document_uris, document_contents
+            )
+            if not content:
+                self.progress_callback("No relevant content found in the documents")
+                content = f"!!! No content found for documents: {json.dumps(document_uris)} matching queries: {json.dumps(questions)}"
+                return False, content
+            self.progress_callback(
+                "No matching chunks found; using complete small-document content"
+            )
+        else:
+            content = "\n\n----\n\n".join(
+                [chunk.page_content for chunk in selected_chunks.values()]
+            )
 
         self.progress_callback(
-            f"Processing {len(questions)} questions in context of {len(selected_chunks)} chunks"
+            f"Processing {len(questions)} questions in document context"
         )
         await self.agent.handle_intervention()
 
         questions_str = "\n".join([f" *  {question}" for question in questions])
-        content = "\n\n----\n\n".join(
-            [chunk.page_content for chunk in selected_chunks.values()]
-        )
 
         qa_system_message = self.agent.parse_prompt(
             "fw.document_query.system_prompt.md"
@@ -439,6 +448,23 @@ class DocumentQueryHelper:
         self.progress_callback(f"Q&A process completed")
 
         return True, str(ai_response)
+
+    @staticmethod
+    def _small_document_fallback_content(
+        document_uris: Sequence[str], document_contents: Sequence[str]
+    ) -> str:
+        total_chars = 0
+        sections = []
+
+        for uri, content in zip(document_uris, document_contents):
+            if not isinstance(content, str) or not content.strip():
+                continue
+            total_chars += len(content)
+            if total_chars > SMALL_DOCUMENT_QA_FALLBACK_CHARS:
+                return ""
+            sections.append(f"## {uri}\n\n{content.strip()}")
+
+        return "\n\n----\n\n".join(sections)
 
     async def document_get_content(
         self, document_uri: str, add_to_db: bool = False

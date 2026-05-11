@@ -20,12 +20,14 @@ If the task belongs inside Agent Zero's own runtime, use the normal server-side 
 
 - Start with `read` when inspecting a file or preparing line-based edits.
 - Use `write` only when replacing or creating the whole file is truly the right operation.
-- Prefer `patch` with `patch_text` for context-anchored edits, especially after inserts/deletes or when line numbers may have shifted.
+- Prefer `patch` with `old_text` and `new_text` for simple exact replacements.
+- Use `patch_text` for context-anchored edits, especially after inserts/deletes or when line numbers may have shifted.
 - Use `patch` with `edits` only for small line-range edits based on the latest remote read.
 - If freshness-aware line patching rejects an edit as stale, reread the file and retry with updated ranges.
 
 ## Patch Text Rules
 
+- Exact replace requires `old_text` to match one exact current span; use a longer span if it matches multiple places.
 - `patch_text` supports update hunks for one file.
 - Use one `@@ existing line` anchor, then `+new line` entries for insertion.
 - For replacement, use `@@ before target` followed by `-old` and `+new`, or use `@@ old target` followed by the same replacement pair.

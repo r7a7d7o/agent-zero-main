@@ -209,6 +209,89 @@ def test_behaviour_adjustment_normalizes_duplicate_rules(monkeypatch):
     assert rules == "## Behavioral rules\n* Favor Linux commands.\n* Token rule.\n"
 
 
+def test_behaviour_prompts_preserve_exact_rules_and_avoid_promptinclude():
+    behaviour_prompt = Path("prompts/agent.system.tool.behaviour.md").read_text(
+        encoding="utf-8"
+    )
+    merge_prompt = Path("prompts/behaviour.merge.sys.md").read_text(
+        encoding="utf-8"
+    )
+    promptinclude_prompt = Path(
+        "plugins/_promptinclude/prompts/agent.system.promptinclude.md"
+    ).read_text(encoding="utf-8")
+
+    assert "exact-response rules" in behaviour_prompt
+    assert "preserve it verbatim" in behaviour_prompt
+    assert "respond exactly with a phrase" in merge_prompt
+    assert "use behaviour_adjustment, not promptinclude files" in promptinclude_prompt
+
+
+def _load_a2a_chat_tool(monkeypatch):
+    _install_tool_stub(monkeypatch)
+    sys.modules.pop("tools.a2a_chat", None)
+    return importlib.import_module("tools.a2a_chat")
+
+
+def test_a2a_extracts_latest_assistant_text_from_history(monkeypatch):
+    module = _load_a2a_chat_tool(monkeypatch)
+
+    final = {
+        "result": {
+            "history": [
+                {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "what is 2+2?"}],
+                },
+                {
+                    "role": "assistant",
+                    "parts": [{"kind": "text", "text": "4"}],
+                },
+            ]
+        }
+    }
+
+    assert module._extract_latest_assistant_text(final) == "4"
+
+
+def test_a2a_extracts_status_or_artifact_text_when_history_is_empty(monkeypatch):
+    module = _load_a2a_chat_tool(monkeypatch)
+
+    status_final = {
+        "result": {
+            "status": {
+                "message": {
+                    "parts": [{"kind": "text", "text": "status answer"}]
+                }
+            }
+        }
+    }
+    artifact_final = {
+        "result": {
+            "artifacts": [
+                {"parts": [{"kind": "text", "text": "artifact answer"}]}
+            ]
+        }
+    }
+
+    assert module._extract_latest_assistant_text(status_final) == "status answer"
+    assert module._extract_latest_assistant_text(artifact_final) == "artifact answer"
+
+
+def test_a2a_session_key_normalizes_explicit_a2a_path(monkeypatch):
+    module = _load_a2a_chat_tool(monkeypatch)
+
+    assert module._session_key("http://localhost:32080/a2a") == "http://localhost:32080"
+    assert module._session_key("http://localhost:32080") == "http://localhost:32080"
+
+
+def test_a2a_empty_response_message_is_explicit_failure(monkeypatch):
+    module = _load_a2a_chat_tool(monkeypatch)
+
+    assert module._extract_latest_assistant_text({"result": {"history": []}}) == ""
+    assert "failed" in module.A2A_EMPTY_RESPONSE_ERROR
+    assert "not success" in module.A2A_EMPTY_RESPONSE_ERROR
+
+
 def test_notify_user_prompt_documents_numeric_priority_values():
     prompt = Path("prompts/agent.system.tool.notify_user.md").read_text(
         encoding="utf-8"

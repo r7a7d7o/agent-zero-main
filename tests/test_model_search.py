@@ -22,9 +22,9 @@ def _handler():
 def test_model_search_parses_openai_style_data():
     handler = _handler()
 
-    assert handler._parse({"data": [{"id": "gpt-4.1"}, {"id": "gpt-4.1-mini"}]}, "openai") == [
+    assert handler._parse({"data": [{"id": "gpt-4.1"}, {"id": "gpt-4o-mini"}]}, "openai") == [
         "gpt-4.1",
-        "gpt-4.1-mini",
+        "gpt-4o-mini",
     ]
 
 

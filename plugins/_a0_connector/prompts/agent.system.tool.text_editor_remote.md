@@ -14,11 +14,12 @@ report that to the user instead of falling back to server-side file tools.
 - `path`: file path on the CLI host filesystem
 - `read`: optional `line_from`, `line_to`
 - `write`: requires `content`
-- `patch`: requires either `patch_text` or `edits`
+- `patch`: requires one of `old_text` + `new_text`, `patch_text`, or `edits`
 
 ## Notes
 - Prefer `read` before line-number edits.
 - If the user says patch, change without rewriting, or don't rewrite, use `action: "patch"` instead of `write`.
+- For simple "change X to Y" requests, prefer exact replace with `old_text` and `new_text`; `old_text` must match one exact current span.
 - Prefer `patch_text` for context-anchored changes and `edits` only for fresh, surgical line ranges.
 - If freshness checks reject a line patch, reread the file and retry with updated ranges.
 - Relative paths are relative to the CLI host filesystem. Do not rewrite them to

@@ -23,7 +23,10 @@ from plugins._a0_connector.helpers.ws_runtime import (
     select_remote_file_target_sid,
     store_pending_file_op,
 )
-from plugins._text_editor.helpers.patch_request import parse_patch_request
+from plugins._text_editor.helpers.patch_request import (
+    exact_replace_to_patch_text,
+    parse_patch_request,
+)
 
 
 FILE_OP_TIMEOUT = 30.0
@@ -83,7 +86,12 @@ class TextEditorRemote(Tool):
             patch_request, err = parse_patch_request(
                 self.args.get("edits"),
                 self.args.get("patch_text"),
-                both_error="provide either edits or patch_text for patch, not both",
+                self.args.get("old_text"),
+                self.args.get("new_text"),
+                both_error=(
+                    "provide exactly one patch form: edits, patch_text, "
+                    "or old_text/new_text"
+                ),
             )
             if err:
                 return Response(
@@ -93,6 +101,13 @@ class TextEditorRemote(Tool):
             if patch_request and patch_request.mode == "patch_text":
                 result = await self._execute_context_patch(
                     path, patch_request.patch_text
+                )
+            elif patch_request and patch_request.mode == "replace":
+                result = await self._execute_context_patch(
+                    path,
+                    exact_replace_to_patch_text(
+                        path, patch_request.old_text, patch_request.new_text
+                    ),
                 )
             else:
                 result = await self._execute_patch(
