@@ -118,6 +118,84 @@ def test_model_config_frontend_tracks_inline_api_key_edits():
     assert "$store.modelConfig.resetApiKeyDrafts();" in modal_content
 
 
+def test_model_switcher_frontend_renders_custom_overrides():
+    switcher_path = PROJECT_ROOT / "plugins" / "_model_config" / "webui" / "switcher-mixin.js"
+    refresh_extension_path = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_model_config"
+        / "extensions"
+        / "webui"
+        / "apply_snapshot_before"
+        / "refresh-switcher.js"
+    )
+
+    switcher_content = switcher_path.read_text(encoding="utf-8")
+    refresh_extension_content = refresh_extension_path.read_text(encoding="utf-8")
+
+    assert "function normalizeModelIdentity(value)" in switcher_content
+    assert "formatModelIdentity(models.main)" in switcher_content
+    assert "formatModelIdentity(models.utility)" in switcher_content
+    assert "normalizeModelIdentity(o.chat || o)" in switcher_content
+    assert "normalizeModelIdentity(o.utility)" in switcher_content
+    assert "_model_config_override_revision" in refresh_extension_content
+    assert "modelConfigStore.refreshSwitcher(contextId)" in refresh_extension_content
+
+
+def test_model_override_notifies_state_sync(monkeypatch):
+    from helpers import state_monitor_integration
+    from plugins._model_config.api import model_override
+
+    calls = []
+
+    class FakeContext:
+        id = "ctx-1"
+
+        def __init__(self):
+            self.output_data = {}
+
+        def set_output_data(self, key, value):
+            self.output_data[key] = value
+
+    ctx = FakeContext()
+    monkeypatch.setattr(
+        state_monitor_integration,
+        "mark_dirty_for_context",
+        lambda context_id, *, reason=None: calls.append((context_id, reason)),
+    )
+
+    model_override._notify_model_override_changed(ctx)
+
+    assert "_model_config_override_revision" in ctx.output_data
+    assert calls == [("ctx-1", "model_config.model_override")]
+
+
+def test_connector_model_switcher_notifies_state_sync(monkeypatch):
+    from helpers import state_monitor_integration
+    from plugins._a0_connector.api.v1 import model_switcher
+
+    calls = []
+
+    class FakeContext:
+        def __init__(self):
+            self.output_data = {}
+
+        def set_output_data(self, key, value):
+            self.output_data[key] = value
+
+    ctx = FakeContext()
+    monkeypatch.setattr(
+        state_monitor_integration,
+        "mark_dirty_for_context",
+        lambda context_id, *, reason=None: calls.append((context_id, reason)),
+    )
+
+    model_switcher._notify_model_override_changed(ctx, "ctx-1")
+
+    assert "_model_config_override_revision" in ctx.output_data
+    assert calls == [("ctx-1", "a0_connector.model_switcher")]
+
+
 def test_model_config_provider_switch_resets_custom_api_base():
     model_field_path = PROJECT_ROOT / "plugins" / "_model_config" / "webui" / "model-field.html"
     content = model_field_path.read_text(encoding="utf-8")

@@ -5,6 +5,20 @@ const CREATE_AGENT_PROFILE_PROMPT = `I want to create a new Agent Zero agent pro
 
 Use the a0-create-agent skill. Guide me gently with one or two questions per turn. Start by asking what this agent should be excellent at, infer sensible defaults, and only produce the AgentProfileBlueprint JSON after we confirm the compact profile summary. Prefer a normal user profile in /a0/usr/agents unless I choose another scope.`;
 
+function normalizeModelIdentity(value) {
+  if (!value || typeof value !== "object") return null;
+  const provider = String(value.provider || "").trim();
+  const name = String(value.name || "").trim();
+  if (!provider && !name) return null;
+  return { provider, name };
+}
+
+function formatModelIdentity(value) {
+  if (!value) return "";
+  if (value.provider && value.name) return `${value.provider}/${value.name}`;
+  return value.name || value.provider || "";
+}
+
 export const switcherState = {
   switcherAllowed: false,
   switcherOverride: null,
@@ -216,7 +230,10 @@ export const switcherMethods = {
   getSwitcherLabel() {
     const o = this.switcherOverride;
     if (!o) return 'Default LLM';
-    return o.preset_name || o.name || o.provider || 'Custom';
+    if (o.preset_name) return o.preset_name;
+
+    const models = this.getCustomOverrideModels();
+    return formatModelIdentity(models.main) || formatModelIdentity(models.utility) || o.name || o.provider || 'Custom';
   },
 
   getActivePreset() {
@@ -227,10 +244,21 @@ export const switcherMethods = {
 
   getActiveModels() {
     const preset = this.getActivePreset();
-    if (!preset) return { main: null, utility: null };
+    if (preset) {
+      return {
+        main: normalizeModelIdentity(preset.chat),
+        utility: normalizeModelIdentity(preset.utility),
+      };
+    }
+    return this.getCustomOverrideModels();
+  },
+
+  getCustomOverrideModels() {
+    const o = this.switcherOverride;
+    if (!o || o.preset_name) return { main: null, utility: null };
     return {
-      main: preset.chat?.name ? { provider: preset.chat.provider, name: preset.chat.name } : null,
-      utility: preset.utility?.name ? { provider: preset.utility.provider, name: preset.utility.name } : null,
+      main: normalizeModelIdentity(o.chat || o),
+      utility: normalizeModelIdentity(o.utility),
     };
   },
 };

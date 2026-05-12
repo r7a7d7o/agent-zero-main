@@ -1,10 +1,13 @@
 """POST /api/plugins/_a0_connector/v1/model_switcher."""
 from __future__ import annotations
 
+import time
 from typing import Callable
 
 from helpers.api import Request, Response
 import plugins._a0_connector.api.v1.base as connector_base
+
+_MODEL_OVERRIDE_REVISION_KEY = "_model_config_override_revision"
 
 
 def _model_payload(config: dict | None, *, has_api_key: bool = False) -> dict[str, object]:
@@ -76,6 +79,18 @@ def _provider_payload(
     return options
 
 
+def _notify_model_override_changed(context: object, context_id: str) -> None:
+    if hasattr(context, "set_output_data"):
+        context.set_output_data(_MODEL_OVERRIDE_REVISION_KEY, time.time())
+
+    try:
+        from helpers.state_monitor_integration import mark_dirty_for_context
+
+        mark_dirty_for_context(context_id, reason="a0_connector.model_switcher")
+    except Exception:
+        pass
+
+
 class ModelSwitcher(connector_base.ProtectedConnectorApiHandler):
     async def process(self, input: dict, request: Request) -> dict | Response:
         from agent import AgentContext
@@ -142,11 +157,13 @@ class ModelSwitcher(connector_base.ProtectedConnectorApiHandler):
                 return Response(status=404, response=f"Preset '{preset_name}' not found")
             context.set_data("chat_model_override", {"preset_name": preset_name})
             save_tmp_chat(context)
+            _notify_model_override_changed(context, context_id)
             return build_state()
 
         if action == "clear":
             context.set_data("chat_model_override", None)
             save_tmp_chat(context)
+            _notify_model_override_changed(context, context_id)
             return build_state()
 
         if action == "set_override":
@@ -162,6 +179,7 @@ class ModelSwitcher(connector_base.ProtectedConnectorApiHandler):
                 override["utility"] = utility_model
             context.set_data("chat_model_override", override)
             save_tmp_chat(context)
+            _notify_model_override_changed(context, context_id)
             return build_state()
 
         return Response(status=400, response=f"Unknown action: {action}")

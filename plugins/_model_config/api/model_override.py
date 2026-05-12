@@ -1,7 +1,22 @@
+import time
+
 from helpers.api import ApiHandler, Request, Response
 from helpers.persist_chat import save_tmp_chat
 from agent import AgentContext
 from plugins._model_config.helpers import model_config
+
+_MODEL_OVERRIDE_REVISION_KEY = "_model_config_override_revision"
+
+
+def _notify_model_override_changed(ctx: AgentContext) -> None:
+    ctx.set_output_data(_MODEL_OVERRIDE_REVISION_KEY, time.time())
+
+    try:
+        from helpers.state_monitor_integration import mark_dirty_for_context
+
+        mark_dirty_for_context(ctx.id, reason="model_config.model_override")
+    except Exception:
+        pass
 
 
 class ModelOverride(ApiHandler):
@@ -29,6 +44,7 @@ class ModelOverride(ApiHandler):
                 return Response(status=400, response="Missing or invalid override config")
             ctx.set_data("chat_model_override", override_config)
             save_tmp_chat(ctx)
+            _notify_model_override_changed(ctx)
             return {"ok": True, "override": override_config}
 
         elif action == "set_preset":
@@ -45,11 +61,13 @@ class ModelOverride(ApiHandler):
             override_value = {"preset_name": preset_name}
             ctx.set_data("chat_model_override", override_value)
             save_tmp_chat(ctx)
+            _notify_model_override_changed(ctx)
             return {"ok": True, "preset_name": preset_name}
 
         elif action == "clear":
             ctx.set_data("chat_model_override", None)
             save_tmp_chat(ctx)
+            _notify_model_override_changed(ctx)
             return {"ok": True, "override": None}
 
         return Response(status=400, response=f"Unknown action: {action}")
