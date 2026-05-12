@@ -1,5 +1,7 @@
 import importlib.util
+import socket
 import sys
+import tempfile
 import types
 import zipfile
 from pathlib import Path
@@ -779,6 +781,52 @@ def test_self_update_manager_usr_backup_skips_broken_symlinks(tmp_path):
 
     assert "usr/settings.json" in names
     assert "usr/workdir/reachy-mini-mcp/.venv/bin/python" not in names
+
+
+def test_self_update_manager_usr_backup_skips_runtime_sockets():
+    manager = load_self_update_manager()
+    with tempfile.TemporaryDirectory(prefix="a0su-", dir="/tmp") as temp_root:
+        repo_dir = Path(temp_root) / "repo"
+        usr_dir = repo_dir / "usr"
+        gnupg_dir = (
+            usr_dir
+            / "plugins"
+            / "_desktop"
+            / "profiles"
+            / "agent-zero-desktop"
+            / ".gnupg"
+        )
+        gnupg_dir.mkdir(parents=True)
+        (usr_dir / "settings.json").write_text('{"ok": true}\n', encoding="utf-8")
+        socket_path = gnupg_dir / "S.gpg-agent"
+        messages = []
+
+        class ListLogger:
+            def log(self, message=""):
+                messages.append(message)
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as runtime_socket:
+            runtime_socket.bind(str(socket_path))
+            backup_path = manager.create_usr_backup(
+                repo_dir=repo_dir,
+                backup_path=str(Path(temp_root) / "backups"),
+                backup_name="usr-backup.zip",
+                conflict_policy="rename",
+                logger=ListLogger(),
+            )
+
+        with zipfile.ZipFile(backup_path) as archive:
+            names = set(archive.namelist())
+
+        assert "usr/settings.json" in names
+        assert (
+            "usr/plugins/_desktop/profiles/agent-zero-desktop/.gnupg/S.gpg-agent"
+            not in names
+        )
+        assert any(
+            "Skipping non-regular usr backup entry" in message
+            for message in messages
+        )
 
 
 def test_self_update_manager_clean_uv_cache_uses_uv_when_available(monkeypatch):
