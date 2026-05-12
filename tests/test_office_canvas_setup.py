@@ -220,6 +220,23 @@ def test_document_artifacts_only_open_desktop_from_explicit_document_ui_requests
         "auto-open-document-results.js",
     )
     document_actions = read("plugins", "_office", "extensions", "webui", "lib", "document-actions.js")
+    document_handler = read(
+        "plugins",
+        "_office",
+        "extensions",
+        "webui",
+        "get_tool_message_handler",
+        "document-artifact-handler.js",
+    )
+    response_cards = read(
+        "plugins",
+        "_office",
+        "extensions",
+        "webui",
+        "set_messages_after_loop",
+        "document-response-file-cards.js",
+    )
+    messages_css = read("webui", "css", "messages.css")
     document_tool = read("plugins", "_office", "tools", "document_artifact.py")
     office_api = read("plugins", "_office", "api", "office_session.py")
 
@@ -234,16 +251,57 @@ def test_document_artifacts_only_open_desktop_from_explicit_document_ui_requests
     assert "syncDocumentResultsIntoOpenOfficeModal" in auto_open
     assert "isOfficeCanvas" not in auto_open
     assert "officeStore" in auto_open
+    assert "desktopStore" in auto_open
+    assert "syncOpenDesktopCanvas" in auto_open
+    assert "syncOpenOfficeModal" in auto_open
+    assert "isDesktopSurfaceOpen" in auto_open
+    assert "hasSameDocument" in auto_open
+    assert 'source: "tool-result-sync"' in auto_open
+    assert '".modal .office-panel"' not in auto_open
+    assert "normalizeDocumentMetadata" in document_actions
+    assert "buildDocumentFileCard" in document_actions
+    assert "document-file-card" in document_actions
+    assert "buildDocumentFileCard" not in document_handler
+    assert "buildDocumentFileActionButtons" not in document_handler
+    assert "document-file-card-wrapper" not in document_handler
+    assert "message-document-artifact" not in document_handler
+    assert "actionButtons: []" in document_handler
+    assert "injectDocumentCardsIntoFinalResponses" in response_cards
+    assert "buildDocumentFileCard" in response_cards
+    assert "buildDocumentFileActionButtons" in response_cards
+    assert "message-agent-response" in response_cards
+    assert "document-response-file-cards" in response_cards
+    assert "document-response-file-action" in response_cards
+    assert "RESPONSE_CARD_ACTIONS" in response_cards
+    assert "documentIdentityKey" in response_cards
+    assert "uniqueByDocument" in response_cards
+    assert "PENDING_TTL_MS" in response_cards
+    assert "pendingContextId" in response_cards
+    assert "globalThis.getContext" in response_cards
+    assert "prunePendingDocuments" in response_cards
+    assert "wrapper.dataset.documents" in response_cards
+    assert "refreshResponseFileActions" in response_cards
+    assert "parseStoredDocuments" in response_cards
     assert "openDocumentInDesktop" in document_actions
     assert "openDocumentArtifact" in document_actions
-    assert "await openDocumentInDesktop(kvps);" in document_actions
+    assert "await openDocumentInDesktop(document);" in document_actions
     assert 'ensureModalOpen("/plugins/_office/webui/main.html")' not in document_actions
     assert 'ensureModalOpen("/plugins/_office/webui/main.html")' not in auto_open
-    assert "Open Document" in document_actions
+    assert "Open in canvas" in document_actions
+    assert "Copy path" not in document_actions
+    assert "copyToClipboard" not in document_actions
+    assert "Details" not in document_handler
+    assert "Details" not in response_cards
+    assert "/api/download_work_dir_file" in document_actions
     assert 'openSurface("desktop"' in document_actions
-    assert "Edit in Writer" in document_actions
-    assert "Edit in Calc" in document_actions
-    assert "Edit in Impress" in document_actions
+    assert "Open in canvas with Writer" in document_actions
+    assert "Open in canvas with Calc" in document_actions
+    assert "Open in canvas with Impress" in document_actions
+    assert '"md", "odt", "ods", "odp", "docx", "xlsx", "pptx"' in document_actions
+    assert ".document-file-card" in messages_css
+    assert ".document-response-file-cards" in messages_css
+    assert ".document-file-action-label" not in messages_css
+    assert ".process-step-detail-content.document-file-card-wrapper" not in messages_css
     assert "open_in_canvas: bool = False" in document_tool
     assert '"open_in_canvas": bool(open_in_canvas)' in document_tool
     assert '"open_in_desktop": bool(open_in_desktop)' in document_tool

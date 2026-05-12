@@ -34,62 +34,49 @@ def standalone_report() -> str:
     )
 
 
-def test_explicit_docx_request_creates_document_artifact():
+def test_explicit_docx_request_no_longer_creates_document_artifact_from_response_text():
     decision = document_affordance.decide_response_artifact(
         "Please create a DOCX report for the leadership review.",
         substantial_text(),
     )
 
-    assert decision is not None
-    assert decision.kind == "document"
-    assert decision.fmt == "docx"
-    assert decision.reason == "explicit_handoff"
+    assert decision is None
 
 
-def test_explicit_spreadsheet_file_request_creates_spreadsheet_artifact():
+def test_explicit_spreadsheet_file_request_no_longer_creates_artifact_from_response_text():
     decision = document_affordance.decide_response_artifact(
         "Build an editable spreadsheet file for this budget.",
         substantial_text(),
     )
 
-    assert decision is not None
-    assert decision.kind == "spreadsheet"
-    assert decision.fmt == "ods"
-    assert decision.reason == "explicit_handoff"
+    assert decision is None
 
 
-def test_explicit_excel_request_keeps_xlsx_compatibility_format():
+def test_explicit_excel_request_no_longer_keeps_xlsx_decision_from_response_text():
     decision = document_affordance.decide_response_artifact(
         "Build an editable Excel XLSX file for this budget.",
         substantial_text(),
     )
 
-    assert decision is not None
-    assert decision.kind == "spreadsheet"
-    assert decision.fmt == "xlsx"
+    assert decision is None
 
 
-def test_explicit_presentation_file_request_uses_odp_by_default():
+def test_explicit_presentation_file_request_no_longer_creates_artifact_from_response_text():
     decision = document_affordance.decide_response_artifact(
         "Create a presentation file for this roadmap.",
         substantial_text(),
     )
 
-    assert decision is not None
-    assert decision.kind == "presentation"
-    assert decision.fmt == "odp"
+    assert decision is None
 
 
-def test_convert_into_document_creates_document_artifact():
+def test_convert_into_document_no_longer_creates_artifact_from_response_text():
     decision = document_affordance.decide_response_artifact(
         "Convert this into a document.",
         substantial_text(),
     )
 
-    assert decision is not None
-    assert decision.kind == "document"
-    assert decision.fmt == "md"
-    assert decision.reason == "explicit_handoff"
+    assert decision is None
 
 
 def test_long_document_topic_does_not_create_artifact_without_handoff_signal():
@@ -119,7 +106,7 @@ def test_office_as_workplace_topic_is_not_a_handoff_signal():
     assert decision is None
 
 
-def test_deliverable_request_needs_standalone_artifact_shape():
+def test_deliverable_request_does_not_create_artifact_from_response_text():
     decision = document_affordance.decide_response_artifact(
         "Draft a report about retention risks.",
         substantial_text(),
@@ -128,7 +115,7 @@ def test_deliverable_request_needs_standalone_artifact_shape():
     assert decision is None
 
 
-def test_deliverable_request_with_artifact_shape_creates_document_artifact():
+def test_deliverable_request_with_artifact_shape_does_not_create_document_artifact():
     decision = document_affordance.decide_response_artifact(
         "Draft a report about retention risks.",
         standalone_report(),
@@ -153,6 +140,22 @@ def test_chat_only_instruction_blocks_even_explicit_file_request():
     )
 
     assert decision is None
+
+
+def test_response_hook_is_inert_compatibility_shim():
+    hook = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_office"
+        / "extensions"
+        / "python"
+        / "tool_execute_after"
+        / "_20_document_response_affordance.py"
+    ).read_text(encoding="utf-8")
+
+    assert "decide_response_artifact" not in hook
+    assert "create_document" not in hook
+    assert "hist_add_tool_result" not in hook
 
 
 def test_created_response_does_not_claim_canvas_was_opened():

@@ -540,6 +540,12 @@ def test_corrected_tool_prompts_only_teach_action_contract():
         assert "action" in text
         for token in forbidden:
             assert token not in text
+        if "document" in path.name or "_office/skills" in str(path):
+            assert "faux UI action labels" in text
+            assert "Open document" in text
+            assert "Download file" in text
+            assert "Canvas was not opened automatically" not in text
+            assert "Open Document, or Desktop edit actions" not in text
 
 
 def test_computer_use_remote_is_skill_gated():

@@ -158,6 +158,46 @@ def test_odf_and_ooxml_creation_and_direct_edits_still_work(office_state):
     assert ods_rows[1][1] == 12500
     assert ods_rows[2][0] == "Research"
 
+
+def test_document_artifact_markdown_append_accepts_common_model_shapes(office_state):
+    doc = document_store.create_document("document", "Append Shapes", "md", "# Title\n\nBase")
+
+    updated, payload = artifact_editor.edit_artifact(
+        doc,
+        operation="append_text",
+        value="Added line 1\nAdded line 2",
+    )
+    assert payload["changed"] is True
+    assert payload["lines_appended"] == 2
+    assert artifact_editor.read_artifact(updated)["text"].endswith("Added line 1\nAdded line 2")
+
+    updated, payload = artifact_editor.edit_artifact(
+        updated,
+        update={"add_lines": ["Added line 3", "Added line 4"]},
+    )
+    assert payload["operation"] == "append_text"
+    assert payload["lines_appended"] == 2
+    assert artifact_editor.read_artifact(updated)["text"].endswith(
+        "Added line 1\nAdded line 2\nAdded line 3\nAdded line 4",
+    )
+
+    updated, payload = artifact_editor.edit_artifact(
+        updated,
+        edits=[{"op": "append_lines", "value": ["Added line 5", "Added line 6"]}],
+    )
+    assert payload["operation"] == "append_text"
+    assert payload["lines_appended"] == 2
+    assert artifact_editor.read_artifact(updated)["text"].endswith(
+        "Added line 3\nAdded line 4\nAdded line 5\nAdded line 6",
+    )
+
+
+def test_document_artifact_markdown_append_rejects_empty_content(office_state):
+    doc = document_store.create_document("document", "Empty Append", "md", "# Title")
+
+    with pytest.raises(ValueError, match="content is required for append_text"):
+        artifact_editor.edit_artifact(doc, operation="append_text")
+
     odp = document_store.create_document(
         "presentation",
         "Roadmap ODP",
@@ -314,7 +354,9 @@ def test_odf_is_advertised_and_docx_remains_explicit_compatibility(office_state)
     assert "DOCX/XLSX/PPTX are compatibility formats" in prompt
     assert "`method` is accepted as an alias for action" not in prompt
     assert "they do not open a surface automatically" in prompt
-    assert "explicit Download, Open Document, or Desktop edit message actions" in prompt
+    assert "do not write faux UI action labels" in prompt
+    assert '"Open document" or "Download file"' in prompt
+    assert "explicit Download, Open Document, or Desktop edit message actions" not in prompt
     doc = document_store.create_document("document", "Use ODT", "odt", "")
     assert doc["extension"] == "odt"
 

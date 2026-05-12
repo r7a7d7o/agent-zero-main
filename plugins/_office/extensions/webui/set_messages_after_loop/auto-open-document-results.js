@@ -1,4 +1,5 @@
 import { store as officeStore } from "/plugins/_office/webui/office-store.js";
+import { store as desktopStore } from "/plugins/_desktop/webui/desktop-store.js";
 import { open as openSurface } from "/js/surfaces.js";
 
 const SYNC_WINDOW_MS = 10 * 60 * 1000;
@@ -34,16 +35,8 @@ export default async function syncDocumentResultsIntoOpenOfficeModal(context) {
       continue;
     }
 
-    globalThis.setTimeout(async () => {
-      if (!isOfficeModalOpen()) return;
-      const office = officeStore;
-      if (!office || isDirtySameDocument(office, { path, file_id: fileId })) return;
-      await office.openSession?.({
-        path,
-        file_id: fileId,
-        refresh: true,
-        source: "tool-result-sync",
-      });
+    globalThis.setTimeout(() => {
+      void syncOpenDocumentSurfaces({ path, file_id: fileId });
     }, 0);
   }
 }
@@ -129,20 +122,91 @@ function documentExtension(payload = {}, document = {}) {
 }
 
 function isOfficeModalOpen() {
-  return Boolean(
+  if (
     globalThis.isModalOpen?.("/plugins/_office/webui/main.html")
       || globalThis.isModalOpen?.("plugins/_office/webui/main.html")
-      || globalThis.document?.querySelector?.(".office-modal .office-panel, .modal .office-panel"),
+  ) {
+    return true;
+  }
+
+  const panels = Array.from(globalThis.document?.querySelectorAll?.(".modal-inner.office-modal .office-panel") || []);
+  return panels.some((panel) => !isDesktopPanel(panel));
+}
+
+function isDesktopSurfaceOpen() {
+  return Boolean(
+    globalThis.document?.querySelector?.(
+      '[data-surface-id="desktop"] .office-panel, .modal-inner[data-surface-id="desktop"] .office-panel, .modal-inner[data-canvas-surface="desktop"] .office-panel',
+    ),
   );
 }
 
-function isDirtySameDocument(office, document = {}) {
-  if (!office?.dirty || !office?.session) return false;
-  const path = String(document.path || "");
-  const fileId = String(document.file_id || "");
+async function syncOpenDocumentSurfaces(document = {}) {
+  await syncOpenDesktopCanvas(document);
+  await syncOpenOfficeModal(document);
+}
+
+async function syncOpenDesktopCanvas(document = {}) {
+  const desktop = desktopStore;
+  if (!desktop || !isDesktopSurfaceOpen()) return false;
+  if (!hasSameDocument(desktop, document)) return false;
+  if (isDirtySameDocument(desktop, document)) return false;
+  await desktop.openSession?.({
+    path: document.path || "",
+    file_id: document.file_id || "",
+    refresh: true,
+    source: "tool-result-sync",
+  });
+  return true;
+}
+
+async function syncOpenOfficeModal(document = {}) {
+  const office = officeStore;
+  if (!office || !isOfficeModalOpen()) return false;
+  if (!hasSameDocument(office, document)) return false;
+  if (isDirtySameDocument(office, document)) return false;
+  await office.openSession?.({
+    path: document.path || "",
+    file_id: document.file_id || "",
+    refresh: true,
+    source: "tool-result-sync",
+  });
+  return true;
+}
+
+function isDesktopPanel(panel = null) {
   return Boolean(
-    (fileId && office.session.file_id === fileId)
-      || (path && office.session.path === path),
+    panel?.closest?.('[data-surface-id="desktop"], [data-canvas-surface="desktop"]'),
+  );
+}
+
+function hasSameDocument(store, document = {}) {
+  return documentEntries(store).some((entry) => documentsMatch(entry, document));
+}
+
+function isDirtySameDocument(store, document = {}) {
+  return documentEntries(store).some((entry) => {
+    if (!documentsMatch(entry, document)) return false;
+    const isActive = entry === store?.session || (entry.tab_id && entry.tab_id === store?.activeTabId);
+    return Boolean(entry.dirty || (isActive && store?.dirty));
+  });
+}
+
+function documentEntries(store) {
+  const entries = [];
+  if (store?.session) entries.push(store.session);
+  if (Array.isArray(store?.tabs)) entries.push(...store.tabs);
+  return entries;
+}
+
+function documentsMatch(entry = {}, document = {}) {
+  const path = String(document.path || "").trim();
+  const fileId = String(document.file_id || "").trim();
+  const entryPath = String(entry.path || entry.document?.path || "").trim();
+  const entryFileId = String(entry.file_id || entry.document?.file_id || "").trim();
+  return Boolean(
+    (fileId && entryFileId === fileId)
+      || (path && entryPath === path),
   );
 }
 

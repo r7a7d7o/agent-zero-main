@@ -1,16 +1,4 @@
 import {
-  createActionButton,
-  copyToClipboard,
-} from "/components/messages/action-buttons/simple-action-buttons.js";
-import {
-  buildDocumentFileActionButtons,
-  documentFromLog,
-  parseDocumentResult,
-} from "../lib/document-actions.js";
-import { store as stepDetailStore } from "/components/modals/process-step-detail/step-detail-store.js";
-import { store as speechStore } from "/components/chat/speech/speech-store.js";
-import {
-  buildDetailPayload,
   cleanStepTitle,
   drawProcessStep,
 } from "/js/messages.js";
@@ -34,35 +22,15 @@ function drawDocumentArtifactTool({
   const args = arguments[0];
   const title = cleanStepTitle(heading);
   const displayKvps = { ...kvps };
-  const contentText = String(content ?? "");
-  const documentResult = parseDocumentResult(contentText);
-  const document = documentFromLog(args, documentResult);
-  const headerLabels = [
-    kvps?._tool_name && { label: kvps._tool_name, class: "tool-name-badge" },
-    document?.format && { label: String(document.format).toUpperCase(), class: "tool-name-badge" },
-  ].filter(Boolean);
 
-  const actionButtons = buildDocumentFileActionButtons(document);
-
-  if (contentText.trim()) {
-    actionButtons.push(
-      createActionButton("detail", "", () =>
-        stepDetailStore.showStepDetail(buildDetailPayload(args, { headerLabels })),
-      ),
-      createActionButton("speak", "", () => speechStore.speak(contentText)),
-      createActionButton("copy", "", () => copyToClipboard(contentText)),
-    );
-  }
-
-  const result = drawProcessStep({
+  return drawProcessStep({
     id,
     title,
     code: "DOC",
     classes: undefined,
     kvps: displayKvps,
     content,
-    actionButtons: actionButtons.filter(Boolean),
+    actionButtons: [],
     log: args,
   });
-  return result;
 }

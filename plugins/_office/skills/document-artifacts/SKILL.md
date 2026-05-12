@@ -26,7 +26,7 @@ allowed_tools:
 
 Use `document_artifact` for substantial deliverables that should remain editable in the custom document editor or LibreOffice Desktop. Markdown remains the default for ordinary writing, notes, reports, briefs, and drafts when no binary office file is needed. For LibreOffice office files, ODF is first-class: use ODT for Writer, ODS for Spreadsheet/Calc, and ODP for Presentation/Impress. Use DOCX, XLSX, or PPTX only when the user explicitly asks for OOXML compatibility, provides an existing file in that format, or needs that compatibility format.
 
-The document UI and Desktop are user-owned. Creating, reading, or editing an artifact must save the file and update its state, but it must not open a document modal or Desktop surface automatically if the user has not asked for that UI. Tool results provide explicit Download, Open Document, or Desktop edit actions for the user. Use the `open` action, `open_in_canvas: true`, or `open_in_desktop: true` only when the user explicitly asks to open the document/editor/Desktop.
+The document UI and Desktop are user-owned. Creating, reading, or editing an artifact must save the file and update its state, but it must not open a document modal or Desktop surface automatically if the user has not asked for that UI. Use the `open` action, `open_in_canvas: true`, or `open_in_desktop: true` only when the user explicitly asks to open the document/editor/Desktop. After create/edit, answer briefly with what changed and the saved path when useful; do not write faux UI action labels such as "Open document" or "Download file", and do not add a note saying the canvas was not opened automatically unless the user explicitly asks about UI behavior.
 
 For format-specific work, prefer the matching skill when available:
 
@@ -87,6 +87,19 @@ Edit text in a Markdown, ODT, DOCX, ODP, or PPTX file:
 }
 ```
 
+Append text to a Markdown, ODT, or DOCX file:
+```json
+{
+  "tool_name": "document_artifact",
+  "tool_args": {
+    "action": "edit",
+    "file_id": "abc123",
+    "operation": "append_text",
+    "content": "\nAdded line 1\nAdded line 2"
+  }
+}
+```
+
 Set spreadsheet cells:
 ```json
 {
@@ -134,6 +147,7 @@ Create an embedded spreadsheet chart:
 
 Arguments:
 
+- `set_text`, `append_text`, and `prepend_text` use `content` for the text being written; do not put that text in value, update, or edits.
 - `replace_text` and `delete_text` require `find`; `replace_text` uses `replace`.
 - `set_cells` accepts `{ "A1": "value", "Sheet2!B3": 42 }` or `[{"sheet":"Sheet1","cell":"A1","value":"value"}]`.
 - `rows` accepts an array of rows. `content` can also be CSV, TSV, or a Markdown table.

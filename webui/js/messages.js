@@ -1692,17 +1692,20 @@ function convertPathsToLinks(str) {
     let html = "";
     for (const part of parts) {
       conc += "/" + part;
-      html += `/<a href="#" class="path-link" onclick="openFileLink('${conc}');">${part}</a>`;
+      html += `/<a href="#" class="path-link" data-path="${conc}" onclick="event.preventDefault(); openFileLink(this.dataset.path);">${part}</a>`;
     }
     return html;
   }
 
   const prefix = `(?:^|[> \`'"\\n]|&#39;|&quot;)`;
+  const pathPart = `[a-zA-Z0-9_.~@%+=,()\\-]+(?: [a-zA-Z0-9_.~@%+=,()\\-]+)*`;
+  const spacedFilePath = `\\/(?:${pathPart}\\/)*${pathPart}\\.[a-zA-Z0-9]{1,12}`;
   const folder = `[a-zA-Z0-9_\\/.\\-]`;
   const file = `[a-zA-Z0-9_\\-\\/]`;
-  const suffix = `(?<!\\.)`;
+  const simplePath = `\\/${folder}*${file}(?<!\\.)`;
+  const suffix = `(?=$|[\\s.,;:!?\\)\\]\\}]|&#39;|&quot;)`;
   const pathRegex = new RegExp(
-    `(?<=${prefix})\\/${folder}*${file}${suffix}`,
+    `(?<=${prefix})(?:${spacedFilePath}|${simplePath})${suffix}`,
     "g",
   );
 

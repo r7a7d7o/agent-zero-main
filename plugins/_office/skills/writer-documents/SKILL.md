@@ -23,7 +23,7 @@ allowed_tools:
 
 Use ODT for LibreOffice Writer documents. Use DOCX only when the user explicitly asks for Word/DOCX/OOXML compatibility, provides an existing `.docx`, or needs that compatibility format. For ordinary writing with no binary requirement, use Markdown instead.
 
-The document UI and Desktop are user-owned. Creating or editing an ODT or DOCX must save the file and return action buttons, but must not open a document modal or Desktop surface automatically. Use Desktop/Writer only for explicit GUI requests, visual layout polish, or final visual confirmation.
+The document UI and Desktop are user-owned. Creating or editing an ODT or DOCX must save the file, but must not open a document modal or Desktop surface automatically. Use Desktop/Writer only for explicit GUI requests, visual layout polish, or final visual confirmation. Do not write faux UI action labels such as "Open document" or "Download file", and do not add a note saying the canvas was not opened automatically unless the user explicitly asks about UI behavior.
 
 ## Workflow
 

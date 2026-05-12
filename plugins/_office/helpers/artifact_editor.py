@@ -86,7 +86,20 @@ def edit_artifact(
     """Apply a direct saved edit to an Office artifact and return updated metadata."""
     path = Path(doc["path"])
     ext = str(doc["extension"]).lower()
+    operation, content, find, replace, cells, rows, chart, slides, kwargs = _normalize_edit_inputs(
+        operation=operation,
+        content=content,
+        find=find,
+        replace=replace,
+        cells=cells,
+        rows=rows,
+        chart=chart,
+        slides=slides,
+        kwargs=kwargs,
+    )
     op = normalize_operation(operation, content=content, find=find, cells=cells, rows=rows, chart=chart, slides=slides)
+    if op in {"append_text", "prepend_text"} and content == "":
+        raise ValueError(f"content is required for {op}")
     before = path.read_bytes()
 
     invalidate_sessions = bool(kwargs.pop("invalidate_sessions", False))
@@ -132,6 +145,130 @@ def edit_artifact(
     return updated_doc, payload
 
 
+def _normalize_edit_inputs(
+    *,
+    operation: str = "",
+    content: str = "",
+    find: str = "",
+    replace: str = "",
+    cells: Any = None,
+    rows: Any = None,
+    chart: Any = None,
+    slides: Any = None,
+    kwargs: dict[str, Any] | None = None,
+) -> tuple[str, str, str, str, Any, Any, Any, Any, dict[str, Any]]:
+    kwargs = dict(kwargs or {})
+    edit_spec = _edit_spec_from_kwargs(kwargs)
+
+    operation = _first_text(
+        operation,
+        edit_spec.get("operation"),
+        edit_spec.get("op"),
+        edit_spec.get("edit"),
+        edit_spec.get("type"),
+    )
+
+    lines = _first_present(
+        edit_spec.get("add_lines"),
+        edit_spec.get("append_lines"),
+        edit_spec.get("lines"),
+        kwargs.get("add_lines"),
+        kwargs.get("append_lines"),
+    )
+    if not operation and lines is not None:
+        operation = "append_text"
+
+    if content == "":
+        content = _text_from_lines(lines)
+    if content == "":
+        content = _first_text(
+            edit_spec.get("content"),
+            edit_spec.get("text"),
+            edit_spec.get("value"),
+            edit_spec.get("body"),
+            kwargs.get("content"),
+            kwargs.get("text"),
+            kwargs.get("value"),
+            kwargs.get("body"),
+        )
+
+    if find == "":
+        find = _first_text(
+            edit_spec.get("find"),
+            edit_spec.get("old_text"),
+            edit_spec.get("old"),
+            kwargs.get("old_text"),
+            kwargs.get("old"),
+        )
+
+    if replace == "":
+        replace = _first_text(
+            edit_spec.get("replace"),
+            edit_spec.get("replacement"),
+            edit_spec.get("new_text"),
+            edit_spec.get("new"),
+            kwargs.get("replacement"),
+            kwargs.get("new_text"),
+            kwargs.get("new"),
+        )
+
+    if replace == "" and _looks_like_replace_operation(operation):
+        replace = _first_text(edit_spec.get("value"), kwargs.get("value"))
+
+    cells = cells if cells is not None else _first_present(edit_spec.get("cells"), kwargs.get("cells"))
+    rows = rows if rows is not None else _first_present(edit_spec.get("rows"), kwargs.get("rows"))
+    chart = chart if chart is not None else _first_present(edit_spec.get("chart"), kwargs.get("chart"))
+    slides = slides if slides is not None else _first_present(edit_spec.get("slides"), kwargs.get("slides"))
+
+    return operation, content, find, replace, cells, rows, chart, slides, kwargs
+
+
+def _edit_spec_from_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    for key in ("edit", "edits", "update", "patch"):
+        spec = _first_mapping(kwargs.get(key))
+        if spec:
+            return spec
+    return {}
+
+
+def _first_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                return item
+    return {}
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _text_from_lines(value)
+        if text != "":
+            return text
+    return ""
+
+
+def _text_from_lines(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "\n".join(str(item) for item in value)
+    return str(value)
+
+
+def _looks_like_replace_operation(operation: str = "") -> bool:
+    op = str(operation or "").strip().lower().replace("-", "_")
+    return op in {"replace", "replace_text", "patch", "update"}
+
+
 def _refresh_open_editor_sessions(file_id: str) -> None:
     try:
         from plugins._office.helpers import markdown_sessions
@@ -164,7 +301,13 @@ def normalize_operation(
         "update": "replace_text" if find else "set_text",
         "replace": "replace_text",
         "append": "append_text",
+        "append_line": "append_text",
+        "append_lines": "append_text",
+        "add_line": "append_text",
+        "add_lines": "append_text",
         "prepend": "prepend_text",
+        "prepend_line": "prepend_text",
+        "prepend_lines": "prepend_text",
         "write": "set_text",
         "set": "set_text",
         "set_content": "set_text",

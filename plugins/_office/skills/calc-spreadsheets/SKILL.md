@@ -25,7 +25,7 @@ allowed_tools:
 
 Use ODS when the user asks for a spreadsheet, workbook, editable table, budget, formulas, or Calc file. Use XLSX only when the user asks for Excel/XLSX compatibility, provides an existing `.xlsx`, or needs embedded spreadsheet charts supported by the tool.
 
-The document UI and Desktop are user-owned. Creating or editing an ODS or XLSX must save the workbook and return action buttons, but must not open a document modal or Desktop surface automatically. Use Desktop/Calc only for explicit GUI requests, visual chart/layout polish, or final visual confirmation.
+The document UI and Desktop are user-owned. Creating or editing an ODS or XLSX must save the workbook, but must not open a document modal or Desktop surface automatically. Use Desktop/Calc only for explicit GUI requests, visual chart/layout polish, or final visual confirmation. Do not write faux UI action labels such as "Open document" or "Download file", and do not add a note saying the canvas was not opened automatically unless the user explicitly asks about UI behavior.
 
 ## Workflow
 

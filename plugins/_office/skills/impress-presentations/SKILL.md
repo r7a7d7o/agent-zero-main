@@ -25,7 +25,7 @@ allowed_tools:
 
 Use ODP when the user asks for a presentation, slides, a deck, or an Impress artifact. Use PPTX only when the user asks for PowerPoint/PPTX compatibility or provides an existing `.pptx`.
 
-The document UI and Desktop are user-owned. Creating or editing an ODP or PPTX must save the deck and return action buttons, but must not open a document modal or Desktop surface automatically. Use Desktop/Impress only for explicit GUI requests, visual layout polish, or final visual confirmation.
+The document UI and Desktop are user-owned. Creating or editing an ODP or PPTX must save the deck, but must not open a document modal or Desktop surface automatically. Use Desktop/Impress only for explicit GUI requests, visual layout polish, or final visual confirmation. Do not write faux UI action labels such as "Open document" or "Download file", and do not add a note saying the canvas was not opened automatically unless the user explicitly asks about UI behavior.
 
 ## Workflow
 
