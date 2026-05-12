@@ -118,6 +118,30 @@ def test_model_config_frontend_tracks_inline_api_key_edits():
     assert "$store.modelConfig.resetApiKeyDrafts();" in modal_content
 
 
+def test_model_config_provider_switch_resets_custom_api_base():
+    model_field_path = PROJECT_ROOT / "plugins" / "_model_config" / "webui" / "model-field.html"
+    content = model_field_path.read_text(encoding="utf-8")
+    select_start = content.index('<select x-model="model.provider"')
+    select_end = content.index("</select>", select_start)
+    provider_select = content[select_start:select_end]
+
+    assert 'x-model="model.provider"' in provider_select
+    assert '@change="model.api_base = \'\'"' in provider_select
+
+
+def test_model_config_vision_toggle_is_outside_advanced_settings():
+    model_field_path = PROJECT_ROOT / "plugins" / "_model_config" / "webui" / "model-field.html"
+    content = model_field_path.read_text(encoding="utf-8")
+
+    vision_start = content.index('<div class="field-title">Supports Vision</div>')
+    advanced_start = content.index("<!-- Advanced Settings (collapsed by default) -->")
+    max_embeds_start = content.index('<div class="field-title">Max embeds</div>')
+
+    assert content.count('<div class="field-title">Supports Vision</div>') == 1
+    assert vision_start < advanced_start
+    assert advanced_start < max_embeds_start
+
+
 def test_ollama_cloud_provider_config_requires_key_and_base_url():
     import yaml
 
