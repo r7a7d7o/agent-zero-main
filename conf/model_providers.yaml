@@ -93,6 +93,13 @@ chat:
     litellm_provider: moonshot
     models_list:
       endpoint_url: "https://api.moonshot.cn/v1/models"
+  nebius:
+    name: Nebius Token Factory
+    litellm_provider: openai
+    models_list:
+      endpoint_url: "/models"
+    kwargs:
+      api_base: https://api.tokenfactory.nebius.com/v1
   ollama:
     name: Ollama
     litellm_provider: ollama

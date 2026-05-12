@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -43,18 +45,22 @@ def test_onboarding_provider_grid_names_are_present_in_metadata():
     assert "TOP_CLOUD_PROVIDER_IDS" in provider_ui
     assert '"venice"' in provider_ui
     assert '"xai"' in provider_ui
+    assert '"nebius"' in provider_ui
     assert provider_ui.index('"venice"') < provider_ui.index('"zai"')
     assert provider_ui.index('"xai"') > provider_ui.index("MORE_CLOUD_PROVIDER_IDS")
     assert 'name: "Google"' in provider_ui
     assert 'docs_url: "https://openrouter.ai/workspaces/default/keys"' in provider_ui
     assert 'docs_url: "https://ai.google.dev/gemini-api/docs/api-key"' in provider_ui
     assert 'docs_url: "https://docs.venice.ai/guides/getting-started/generating-api-key"' in provider_ui
+    assert 'docs_url: "https://docs.tokenfactory.nebius.com/api-reference/introduction"' in provider_ui
     assert 'docs_url: "https://lmstudio.ai/docs/developer/core/authentication"' in provider_ui
     assert 'docs_url: ""' in provider_ui
     assert "api_key_mode: none" in model_metadata
     assert "api_key_mode: optional" in model_metadata
     assert "Ollama Cloud" in provider_yaml
     assert "https://ollama.com/v1" in provider_yaml
+    assert "Nebius Token Factory" in provider_yaml
+    assert "https://api.tokenfactory.nebius.com/v1" in provider_yaml
     assert not (PROJECT_ROOT / "plugins/_model_config/conf/model_providers.yaml").exists()
 
     for name in [
@@ -66,6 +72,7 @@ def test_onboarding_provider_grid_names_are_present_in_metadata():
         "DeepSeek",
         "xAI",
         "Moonshot AI",
+        "Nebius Token Factory",
         "Z.AI",
         "Mistral AI",
         "Azure OpenAI",
@@ -100,6 +107,18 @@ def test_onboarding_provider_grid_names_are_present_in_metadata():
         "zai-logo.svg",
     ]:
         assert logo in provider_ui
+
+
+def test_nebius_provider_config_uses_openai_compatible_token_factory_endpoint():
+    provider_path = PROJECT_ROOT / "conf/model_providers.yaml"
+    provider_config = yaml.safe_load(provider_path.read_text(encoding="utf-8"))
+    nebius = provider_config["chat"]["nebius"]
+
+    assert nebius["name"] == "Nebius Token Factory"
+    assert nebius["litellm_provider"] == "openai"
+    assert nebius["kwargs"]["api_base"] == "https://api.tokenfactory.nebius.com/v1"
+    assert nebius["models_list"]["endpoint_url"] == "/models"
+    assert "api_key_mode" not in nebius
 
 
 def test_discovery_auto_modal_extension_contains_required_guards():

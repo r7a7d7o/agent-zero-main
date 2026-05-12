@@ -17,6 +17,7 @@ export const MORE_CLOUD_PROVIDER_IDS = [
   "groq",
   "xai",
   "moonshot",
+  "nebius",
   "huggingface",
   "github_copilot",
   "sambanova",
@@ -142,6 +143,15 @@ export const ONBOARDING_PROVIDER_OVERRIDES = {
     api_key_mode: "required",
     model_list_autoload: true,
     short_description: "Kimi models with long-context strengths.",
+  },
+  nebius: {
+    logo: "https://nebius.com/favicon.ico",
+    setup_url: "https://tokenfactory.nebius.com/",
+    api_key_url: "https://tokenfactory.nebius.com/api-keys",
+    docs_url: "https://docs.tokenfactory.nebius.com/api-reference/introduction",
+    api_key_mode: "required",
+    model_list_autoload: true,
+    short_description: "OpenAI-compatible inference for open models.",
   },
   ollama: {
     logo: "https://ollama.com/public/ollama.png",
