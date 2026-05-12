@@ -14,23 +14,40 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 SESSION_ID = "agent-zero-desktop"
+PLUGIN_NAME = "_desktop"
 BASE_DIR = Path(os.environ.get("A0_BASE_DIR") or ("/a0" if Path("/a0").exists() else PROJECT_ROOT))
-STATE_DIR = BASE_DIR / "usr" / "_desktop"
+STATE_DIR = BASE_DIR / "usr" / "plugins" / PLUGIN_NAME
+RETIRED_STATE_DIR = BASE_DIR / "usr" / PLUGIN_NAME
 SESSION_DIR = STATE_DIR / "sessions"
 PROFILE_DIR = STATE_DIR / "profiles"
 SCREENSHOT_DIR = STATE_DIR / "screenshots"
 RECENT_SCREENSHOT_SECONDS = 600
+_SAFE_CONTEXT_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 
 
 def session_manifest_path(session_id: str = SESSION_ID) -> Path:
     return Path(os.environ.get("A0_DESKTOP_MANIFEST") or SESSION_DIR / f"{session_id}.json")
 
 
+def context_screenshot_dir(context_id: str = "") -> Path:
+    return SCREENSHOT_DIR / _safe_context_id(context_id)
+
+
+def _safe_context_id(context_id: str = "") -> str:
+    raw = str(context_id or os.environ.get("A0_DESKTOP_CONTEXT_ID") or "default")
+    return _SAFE_CONTEXT_RE.sub("_", raw).strip("._") or "default"
+
+
 def session_manifest_exists(session_id: str = SESSION_ID) -> bool:
     return session_manifest_path(session_id).exists()
 
 
-def collect_state(*, include_screenshot: bool = False, screenshot_path: str | Path | None = None) -> dict[str, Any]:
+def collect_state(
+    *,
+    include_screenshot: bool = False,
+    screenshot_path: str | Path | None = None,
+    context_id: str = "",
+) -> dict[str, Any]:
     errors: list[str] = []
     env_info = resolve_environment(errors=errors)
     display = env_info["display"]
@@ -46,10 +63,16 @@ def collect_state(*, include_screenshot: bool = False, screenshot_path: str | Pa
     pointer = collect_pointer(env, capabilities, errors)
     active_window = collect_active_window(env, capabilities, errors)
     windows = collect_windows(env, capabilities, errors)
-    screenshot = latest_screenshot()
+    screenshot = latest_screenshot(context_id=context_id)
 
     if include_screenshot:
-        screenshot = capture_screenshot(env, capabilities, path=screenshot_path, errors=errors)
+        screenshot = capture_screenshot(
+            env,
+            capabilities,
+            path=screenshot_path,
+            errors=errors,
+            context_id=context_id,
+        )
 
     return stable_state(
         display=display,
@@ -70,6 +93,7 @@ def capture_screenshot(
     *,
     path: str | Path | None = None,
     errors: list[str] | None = None,
+    context_id: str = "",
 ) -> dict[str, Any]:
     local_errors = errors if errors is not None else []
     capabilities = capabilities or collect_capabilities()
@@ -85,9 +109,10 @@ def capture_screenshot(
         local_errors.append(message)
         return {"ok": False, "path": "", "format": "", "captured_at": "", "error": message}
 
-    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    screenshot_dir = context_screenshot_dir(context_id)
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    target = Path(path) if path else SCREENSHOT_DIR / f"desktop-{timestamp}.png"
+    target = Path(path) if path else screenshot_dir / f"desktop-{timestamp}.png"
     target.parent.mkdir(parents=True, exist_ok=True)
     raw_path = target.with_suffix(".xwd")
 
@@ -291,19 +316,31 @@ def resolve_environment(*, errors: list[str] | None = None, session_id: str = SE
         display = ""
         local_errors.append("Desktop DISPLAY is unavailable; the persistent Desktop session is not running.")
 
-    profile_dir = str(
-        os.environ.get("A0_DESKTOP_PROFILE")
-        or os.environ.get("A0_DESKTOP_HOME")
-        or payload.get("profile_dir")
-        or os.environ.get("HOME")
-        or PROFILE_DIR / session_id
+    profile_dir = _state_path_from_retired_root(
+        Path(
+            os.environ.get("A0_DESKTOP_PROFILE")
+            or os.environ.get("A0_DESKTOP_HOME")
+            or payload.get("profile_dir")
+            or os.environ.get("HOME")
+            or PROFILE_DIR / session_id
+        )
     )
 
     return {
         "display": display,
-        "profile_dir": profile_dir,
+        "profile_dir": str(profile_dir),
         "manifest": str(manifest),
     }
+
+
+def _state_path_from_retired_root(path: Path) -> Path:
+    try:
+        relative = path.resolve(strict=False).relative_to(
+            RETIRED_STATE_DIR.resolve(strict=False)
+        )
+    except ValueError:
+        return path
+    return STATE_DIR / relative
 
 
 def display_env(*, display: str, profile_dir: str) -> dict[str, str]:
@@ -480,12 +517,13 @@ def parse_xprop(output: str) -> dict[str, str]:
     return values
 
 
-def latest_screenshot() -> dict[str, Any]:
-    if not SCREENSHOT_DIR.exists():
+def latest_screenshot(*, context_id: str = "") -> dict[str, Any]:
+    screenshot_dir = context_screenshot_dir(context_id)
+    if not screenshot_dir.exists():
         return {"ok": False, "path": "", "format": "", "captured_at": "", "recent": False}
     candidates = [
         path
-        for path in SCREENSHOT_DIR.iterdir()
+        for path in screenshot_dir.iterdir()
         if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".xwd"}
     ]
     if not candidates:
@@ -640,19 +678,25 @@ def main(argv: list[str] | None = None) -> int:
     state_parser = subparsers.add_parser("state")
     state_parser.add_argument("--json", action="store_true")
     state_parser.add_argument("--screenshot", action="store_true")
+    state_parser.add_argument("--context-id", default="")
 
     observe_parser = subparsers.add_parser("observe")
     observe_parser.add_argument("--json", action="store_true")
     observe_parser.add_argument("--screenshot", action="store_true")
+    observe_parser.add_argument("--context-id", default="")
 
     screenshot_parser = subparsers.add_parser("screenshot")
     screenshot_parser.add_argument("path", nargs="?")
     screenshot_parser.add_argument("--json", action="store_true")
+    screenshot_parser.add_argument("--context-id", default="")
 
     args = parser.parse_args(argv)
     command = args.command or "state"
     if command in {"state", "observe"}:
-        payload = collect_state(include_screenshot=bool(args.screenshot))
+        payload = collect_state(
+            include_screenshot=bool(args.screenshot),
+            context_id=str(args.context_id or ""),
+        )
         print(json.dumps(payload, sort_keys=True))
         return 0 if payload.get("ok") else 1
 
@@ -664,6 +708,7 @@ def main(argv: list[str] | None = None) -> int:
             collect_capabilities(),
             path=args.path,
             errors=errors,
+            context_id=str(args.context_id or ""),
         )
         if args.json:
             print(json.dumps(payload, sort_keys=True))

@@ -148,6 +148,7 @@ class DesktopSession(ApiHandler):
     def _state(self, input: dict) -> dict:
         return desktop_session.get_manager().state(
             include_screenshot=bool(input.get("include_screenshot") is True),
+            context_id=str(input.get("ctxid") or input.get("context_id") or ""),
         )
 
     def _shutdown(self, input: dict) -> dict:

@@ -23,13 +23,16 @@ from plugins._office.helpers import document_store, libreoffice
 
 
 OFFICIAL_EXTENSIONS = {"odt", "ods", "odp", "docx", "xlsx", "pptx"}
+PLUGIN_NAME = "_desktop"
 SYSTEM_SESSION_ID = "agent-zero-desktop"
 SYSTEM_FILE_ID = "system-desktop"
 SYSTEM_TITLE = "Desktop"
-STATE_DIR = Path(files.get_abs_path("usr", "_desktop"))
+STATE_DIR = Path(files.get_abs_path("usr", "plugins", PLUGIN_NAME))
+RETIRED_STATE_DIR = Path(files.get_abs_path("usr", PLUGIN_NAME))
 SESSION_DIR = STATE_DIR / "sessions"
 PROFILE_DIR = STATE_DIR / "profiles"
 LEGACY_SESSION_DIRS = (
+    RETIRED_STATE_DIR / "sessions",
     Path(files.get_abs_path("tmp", "_office", "desktop", "sessions")),
 )
 DISPLAY_BASE = 120
@@ -283,10 +286,13 @@ class DesktopSessionManager:
             "url_intents": url_intents,
         }
 
-    def state(self, *, include_screenshot: bool = False) -> dict[str, Any]:
+    def state(self, *, include_screenshot: bool = False, context_id: str = "") -> dict[str, Any]:
         with self._lock:
             self._reap_dead_locked()
-        return desktop_state.collect_state(include_screenshot=include_screenshot)
+        return desktop_state.collect_state(
+            include_screenshot=include_screenshot,
+            context_id=context_id,
+        )
 
     def claim_url_intents(self, session_id: str = SYSTEM_SESSION_ID) -> list[dict[str, Any]]:
         session = self.get(session_id) or self.get(SYSTEM_SESSION_ID)
@@ -558,7 +564,9 @@ class DesktopSessionManager:
                 xpra_port=xpra_port,
                 token=SYSTEM_SESSION_ID,
                 url=_xpra_url(SYSTEM_SESSION_ID),
-                profile_dir=Path(payload.get("profile_dir") or PROFILE_DIR / SYSTEM_SESSION_ID),
+                profile_dir=_state_path_from_retired_root(
+                    Path(payload.get("profile_dir") or PROFILE_DIR / SYSTEM_SESSION_ID)
+                ),
                 width=int(payload.get("width") or DEFAULT_SCREEN_WIDTH),
                 height=int(payload.get("height") or DEFAULT_SCREEN_HEIGHT),
                 process_ids=process_ids,
@@ -1612,6 +1620,16 @@ def collect_desktop_status() -> dict[str, Any]:
             else f"Agent Zero Desktop sessions need: {', '.join(missing)}."
         ),
     }
+
+
+def _state_path_from_retired_root(path: Path) -> Path:
+    try:
+        relative = path.resolve(strict=False).relative_to(
+            RETIRED_STATE_DIR.resolve(strict=False)
+        )
+    except ValueError:
+        return path
+    return STATE_DIR / relative
 
 
 def _runtime_preparation_status() -> dict[str, Any]:

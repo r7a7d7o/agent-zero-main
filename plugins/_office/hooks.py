@@ -7,14 +7,16 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from helpers import files, system_packages
+from helpers import files, state_migration, system_packages
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-STATE_DIR = Path(files.get_abs_path("usr", "_office"))
+PLUGIN_NAME = "_office"
+STATE_DIR = Path(files.get_abs_path("usr", "plugins", PLUGIN_NAME))
+RETIRED_STATE_DIR = Path(files.get_abs_path("usr", PLUGIN_NAME))
 DOCUMENT_STATE_DIR = STATE_DIR / "documents"
 LEGACY_DOCUMENT_STATE_DIRS = [
-    Path(files.get_abs_path("usr", "plugins", "_office", "documents")),
+    RETIRED_STATE_DIR / "documents",
     Path(files.get_abs_path("usr", "state", "_office", "documents")),
     Path(files.get_abs_path("usr", "state", "office", "documents")),
 ]
@@ -84,6 +86,7 @@ def cleanup_stale_runtime_state(force: bool = False) -> dict[str, Any]:
     warnings: list[str] = []
     errors: list[str] = []
 
+    _migrate_retired_plugin_state(migrated, warnings, errors)
     _migrate_legacy_document_state(migrated, warnings, errors)
 
     retired_web_paths = [
@@ -123,7 +126,7 @@ def cleanup_stale_runtime_state(force: bool = False) -> dict[str, Any]:
 
     _retire_supervisor_program(errors)
     _ensure_runtime_dependencies(installed, errors)
-    _ensure_desktop_runtime_compat(installed, removed, warnings, errors)
+    _ensure_desktop_runtime_compat(installed, removed, migrated, warnings, errors)
     return {
         "ok": not errors,
         "skipped": not cleanup_needed,
@@ -209,9 +212,25 @@ def _migrate_legacy_document_state(
     )
 
 
+def _migrate_retired_plugin_state(
+    migrated: list[str],
+    warnings: list[str],
+    errors: list[str],
+) -> None:
+    state_migration.migrate_retired_state_tree(
+        source=RETIRED_STATE_DIR,
+        destination=STATE_DIR,
+        owner="Office",
+        migrated=migrated,
+        warnings=warnings,
+        errors=errors,
+    )
+
+
 def _ensure_desktop_runtime_compat(
     installed: list[str],
     removed: list[str],
+    migrated: list[str],
     warnings: list[str],
     errors: list[str],
 ) -> None:
@@ -239,6 +258,7 @@ def _ensure_desktop_runtime_compat(
         return
     installed.extend(str(item) for item in result.get("installed") or [])
     removed.extend(str(item) for item in result.get("removed") or [])
+    migrated.extend(str(item) for item in result.get("migrated") or [])
     warnings.extend(str(item) for item in result.get("warnings") or [])
     errors.extend(str(item) for item in result.get("errors") or [])
 

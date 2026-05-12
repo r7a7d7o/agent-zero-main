@@ -184,8 +184,8 @@ def test_desktop_plugin_owns_routes_runtime_surface_and_state_paths():
     assert 'data-surface-id="desktop"' in desktop_main
     assert "virtual_desktop.session_url" in desktop_session
     assert 'owner="desktop"' in desktop_session
-    assert 'STATE_DIR = Path(files.get_abs_path("usr", "_desktop"))' in desktop_session
-    assert 'STATE_DIR = BASE_DIR / "usr" / "_desktop"' in desktop_state
+    assert 'STATE_DIR = Path(files.get_abs_path("usr", "plugins", PLUGIN_NAME))' in desktop_session
+    assert 'STATE_DIR = BASE_DIR / "usr" / "plugins" / PLUGIN_NAME' in desktop_state
     assert "> x-component > div[x-data] > .office-panel" in desktop_web_panel
     assert ".office-state-line > span:not(.material-symbols-outlined)" in desktop_web_panel
 
@@ -201,7 +201,7 @@ def test_plugin_owned_runtime_state_paths_are_declared():
     docker_playwright = read("docker", "run", "fs", "ins", "install_playwright.sh")
 
     assert 'PLUGIN_NAME = "_office"' in office_documents
-    assert 'STATE_DIR = Path(files.get_abs_path("usr", PLUGIN_NAME, "documents"))' in office_documents
+    assert 'STATE_DIR = Path(files.get_abs_path("usr", "plugins", PLUGIN_NAME, "documents"))' in office_documents
     assert 'PLAYWRIGHT_CACHE_DIR = ("tmp", "playwright")' in browser_playwright
     assert '"usr", "plugins", "_browser", "playwright"' in browser_playwright
     assert "Path(files.get_abs_path(*PLAYWRIGHT_CACHE_DIR))" in browser_playwright
@@ -335,8 +335,8 @@ def test_office_and_desktop_skills_are_rehomed_and_renamed():
     desktopctl = (desktop_skills / "linux-desktop" / "scripts" / "desktopctl.sh").read_text(encoding="utf-8")
     assert "/a0/plugins/_desktop/skills/linux-desktop/scripts/desktopctl.sh" in desktop_skill
     assert "Open in Desktop action" in desktop_skill
-    assert "$BASE_DIR/usr/_desktop/profiles/$SESSION" in desktopctl
-    assert "$BASE_DIR/usr/_desktop/sessions/$SESSION.json" in desktopctl
+    assert "$BASE_DIR/usr/plugins/_desktop/profiles/$SESSION" in desktopctl
+    assert "$BASE_DIR/usr/plugins/_desktop/sessions/$SESSION.json" in desktopctl
 
 
 def test_skill_catalog_and_connector_boundaries_are_static_guarded():

@@ -3,8 +3,8 @@ set -euo pipefail
 
 SESSION="${A0_DESKTOP_SESSION:-agent-zero-desktop}"
 BASE_DIR="${A0_BASE_DIR:-/a0}"
-PROFILE_DIR="${A0_DESKTOP_PROFILE:-$BASE_DIR/usr/_desktop/profiles/$SESSION}"
-MANIFEST="${A0_DESKTOP_MANIFEST:-$BASE_DIR/usr/_desktop/sessions/$SESSION.json}"
+PROFILE_DIR="${A0_DESKTOP_PROFILE:-$BASE_DIR/usr/plugins/_desktop/profiles/$SESSION}"
+MANIFEST="${A0_DESKTOP_MANIFEST:-$BASE_DIR/usr/plugins/_desktop/sessions/$SESSION.json}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DESKTOP_STATE_HELPER="$SCRIPT_DIR/../../../helpers/desktop_state.py"
 DESKTOP_STATE_PYTHON="${A0_DESKTOP_STATE_PYTHON:-$(command -v /usr/bin/python3 || command -v python3 || true)}"
@@ -55,10 +55,12 @@ Usage: desktopctl.sh <command> [args]
 Commands:
   env                         Print the X11 environment used for the Desktop.
   check                       Verify that xdotool can reach the Desktop display.
-  state --json                Return structured Desktop state as JSON.
-  observe --json [--screenshot]
+  state --json [--screenshot] [--context-id ID]
+                              Return structured Desktop state as JSON.
+  observe --json [--screenshot] [--context-id ID]
                               Return structured state, optionally with a fresh screenshot.
-  screenshot [PATH]           Capture the Desktop to PATH, or to the default screenshot directory.
+  screenshot [PATH] [--context-id ID]
+                              Capture the Desktop to PATH, or to the default screenshot directory.
   active-window               Print the active window name.
   geometry PATTERN            Print the first matching visible window geometry.
   wait-window PATTERN         Wait for a visible matching window and print its id.
@@ -295,7 +297,8 @@ case "$command_name" in
       echo "state currently requires --json." >&2
       exit 2
     fi
-    desktop_state state --json
+    shift
+    desktop_state state --json "$@"
     ;;
   observe)
     if [ "${1:-}" != "--json" ]; then
@@ -310,7 +313,7 @@ case "$command_name" in
       shift
       desktop_state screenshot --json "$@"
     elif [ "$#" -gt 0 ]; then
-      desktop_state screenshot "$1"
+      desktop_state screenshot "$@"
     else
       desktop_state screenshot
     fi

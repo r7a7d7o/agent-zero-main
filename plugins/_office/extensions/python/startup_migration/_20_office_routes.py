@@ -41,5 +41,7 @@ def _prepare_runtime_safely() -> None:
 def _log_runtime_preparation_result(result: dict[str, Any]) -> None:
     if result.get("errors"):
         PrintStyle.warning("Office document runtime preparation reported errors:", result["errors"])
-    elif result.get("installed") or result.get("removed"):
+    elif result.get("warnings"):
+        PrintStyle.warning("Office document runtime preparation reported warnings:", result["warnings"])
+    elif result.get("installed") or result.get("removed") or result.get("migrated"):
         PrintStyle.info("Office document runtime prepared:", result)

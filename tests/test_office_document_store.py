@@ -607,12 +607,12 @@ def test_office_session_desktop_state_action_defaults_without_screenshot(monkeyp
     calls = []
 
     class FakeManager:
-        def state(self, *, include_screenshot=False):
-            calls.append(include_screenshot)
+        def state(self, *, include_screenshot=False, context_id=""):
+            calls.append((include_screenshot, context_id))
             return {
                 "ok": True,
                 "display": ":120",
-                "profile_dir": "/a0/usr/_desktop/profiles/agent-zero-desktop",
+                "profile_dir": "/a0/usr/plugins/_desktop/profiles/agent-zero-desktop",
                 "size": {"width": 1440, "height": 900},
                 "pointer": {"x": 0, "y": 0, "screen": 0, "window": 0},
                 "active_window": None,
@@ -633,7 +633,7 @@ def test_office_session_desktop_state_action_defaults_without_screenshot(monkeyp
 
     assert default_result["ok"] is True
     assert screenshot_result["ok"] is True
-    assert calls == [False, True]
+    assert calls == [(False, ""), (True, "")]
     monkeypatch.delitem(sys.modules, "plugins._office.api.office_session", raising=False)
     api_package = sys.modules.get("plugins._office.api")
     if api_package is not None:
@@ -1135,11 +1135,17 @@ def test_desktop_session_removes_stale_lock_file(tmp_path):
 
 
 def _isolate_office_cleanup_hook(monkeypatch, tmp_path):
+    state_dir = tmp_path / "usr" / "plugins" / "_office"
+    retired_state_dir = tmp_path / "usr" / "_office"
     monkeypatch.setattr(hooks, "RETIRED_WEB_APT_SOURCE_FILE", tmp_path / "missing.sources")
     monkeypatch.setattr(hooks, "RETIRED_WEB_APT_KEYRING_FILE", tmp_path / "missing.gpg")
     monkeypatch.setattr(hooks, "RETIRED_WEB_SUPERVISOR_FILE", tmp_path / "missing.conf")
     monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [])
-    monkeypatch.setattr(hooks, "CLEANUP_MARKER", tmp_path / "state" / "cleanup.done")
+    monkeypatch.setattr(hooks, "STATE_DIR", state_dir)
+    monkeypatch.setattr(hooks, "RETIRED_STATE_DIR", retired_state_dir)
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", state_dir / "documents")
+    monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
+    monkeypatch.setattr(hooks, "CLEANUP_MARKER", state_dir / "cleanup.done")
     monkeypatch.setattr(hooks, "_installed_retired_web_packages", lambda: [])
     monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
     monkeypatch.setattr(hooks, "_kill_old_processes", lambda errors: None)
@@ -1148,10 +1154,31 @@ def _isolate_office_cleanup_hook(monkeypatch, tmp_path):
     monkeypatch.setattr(hooks.shutil, "which", lambda name: "")
 
 
+def test_cleanup_hook_moves_retired_office_state_to_plugin_state(tmp_path, monkeypatch):
+    _isolate_office_cleanup_hook(monkeypatch, tmp_path)
+    retired_state = tmp_path / "usr" / "_office"
+    plugin_state = tmp_path / "usr" / "plugins" / "_office"
+    (retired_state / "documents" / "backups").mkdir(parents=True)
+    (retired_state / "documents" / "documents.sqlite3").write_text("db\n", encoding="utf-8")
+    (retired_state / "documents" / "backups" / "draft.md").write_text("backup\n", encoding="utf-8")
+    (retired_state / "stale-cleanup-v3.done").write_text("ok\n", encoding="utf-8")
+    plugin_state.mkdir(parents=True)
+
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, migrated, warnings, errors: None)
+
+    result = hooks.cleanup_stale_runtime_state(force=True)
+
+    assert result["ok"] is True
+    assert (plugin_state / "documents" / "documents.sqlite3").read_text(encoding="utf-8") == "db\n"
+    assert (plugin_state / "documents" / "backups" / "draft.md").read_text(encoding="utf-8") == "backup\n"
+    assert (plugin_state / "stale-cleanup-v3.done").read_text(encoding="utf-8") == "ok\n"
+    assert not retired_state.exists()
+
+
 def test_cleanup_hook_migrates_legacy_document_state_without_removing_source(tmp_path, monkeypatch):
     _isolate_office_cleanup_hook(monkeypatch, tmp_path)
-    legacy_documents = tmp_path / "usr" / "plugins" / "_office" / "documents"
-    document_state = tmp_path / "usr" / "_office" / "documents"
+    legacy_documents = tmp_path / "usr" / "state" / "_office" / "documents"
+    document_state = tmp_path / "usr" / "plugins" / "_office" / "documents"
     legacy_documents.mkdir(parents=True)
     (legacy_documents / "documents.sqlite3").write_text("legacy-db\n", encoding="utf-8")
     (legacy_documents / "backups").mkdir()
@@ -1159,7 +1186,7 @@ def test_cleanup_hook_migrates_legacy_document_state_without_removing_source(tmp
 
     monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", document_state)
     monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [legacy_documents])
-    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, migrated, warnings, errors: None)
 
     result = hooks.cleanup_stale_runtime_state(force=True)
 
@@ -1173,7 +1200,7 @@ def test_cleanup_hook_migrates_legacy_document_state_without_removing_source(tmp
 def test_cleanup_hook_prefers_existing_new_document_state_without_merge(tmp_path, monkeypatch):
     _isolate_office_cleanup_hook(monkeypatch, tmp_path)
     legacy_documents = tmp_path / "legacy-documents"
-    document_state = tmp_path / "usr" / "_office" / "documents"
+    document_state = tmp_path / "usr" / "plugins" / "_office" / "documents"
     legacy_documents.mkdir(parents=True)
     document_state.mkdir(parents=True)
     (legacy_documents / "documents.sqlite3").write_text("legacy-db\n", encoding="utf-8")
@@ -1181,7 +1208,7 @@ def test_cleanup_hook_prefers_existing_new_document_state_without_merge(tmp_path
 
     monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", document_state)
     monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [legacy_documents])
-    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, migrated, warnings, errors: None)
 
     result = hooks.cleanup_stale_runtime_state(force=True)
 
@@ -1201,19 +1228,22 @@ def test_office_hook_desktop_compat_forwards_runtime_result(monkeypatch):
         lambda: {
             "installed": ["xpra-server"],
             "removed": ["firefox-esr"],
+            "migrated": ["desktop state"],
             "warnings": ["desktop warning"],
             "errors": ["desktop error"],
         },
     )
     installed = []
     removed = []
+    migrated = []
     warnings = []
     errors = []
 
-    hooks._ensure_desktop_runtime_compat(installed, removed, warnings, errors)
+    hooks._ensure_desktop_runtime_compat(installed, removed, migrated, warnings, errors)
 
     assert installed == ["xpra-server"]
     assert removed == ["firefox-esr"]
+    assert migrated == ["desktop state"]
     assert warnings == ["desktop warning"]
     assert errors == ["desktop error"]
 
@@ -1266,14 +1296,15 @@ def test_installed_retired_web_packages_discovers_collabora_split_packages(monke
 
 def test_cleanup_hook_delegates_desktop_runtime_for_legacy_self_update(tmp_path, monkeypatch):
     _isolate_office_cleanup_hook(monkeypatch, tmp_path)
-    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "plugins" / "_office" / "documents")
     monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
     calls = []
 
-    def fake_desktop_compat(installed, removed, warnings, errors):
+    def fake_desktop_compat(installed, removed, migrated, warnings, errors):
         calls.append("desktop")
         installed.append("xpra-server")
         removed.append("firefox-esr")
+        migrated.append("desktop state migrated")
         warnings.append("desktop runtime prepared through office compatibility hook")
 
     monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", fake_desktop_compat)
@@ -1283,6 +1314,7 @@ def test_cleanup_hook_delegates_desktop_runtime_for_legacy_self_update(tmp_path,
     assert calls == ["desktop"]
     assert result["installed"] == ["xpra-server"]
     assert result["removed"] == ["firefox-esr"]
+    assert result["migrated"] == ["desktop state migrated"]
     assert result["warnings"] == ["desktop runtime prepared through office compatibility hook"]
 
 
@@ -1310,12 +1342,12 @@ def test_cleanup_hook_removes_stale_runtime_state_idempotently(tmp_path, monkeyp
     monkeypatch.setattr(hooks, "RETIRED_WEB_SUPERVISOR_FILE", supervisor)
     monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [runtime_dir, legacy_cool_dir, legacy_collabora_dir])
     monkeypatch.setattr(hooks, "CLEANUP_MARKER", marker)
-    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "plugins" / "_office" / "documents")
     monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
     monkeypatch.setattr(hooks, "_installed_retired_web_packages", lambda: [])
     monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
     monkeypatch.setattr(hooks, "_kill_old_processes", lambda errors: None)
-    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, migrated, warnings, errors: None)
 
     def fake_ensure(installed, errors):
         assert not source.exists()
@@ -1397,7 +1429,7 @@ def test_cleanup_hook_reruns_when_stale_packages_exist_after_old_marker(tmp_path
     monkeypatch.setattr(hooks, "RETIRED_WEB_SUPERVISOR_FILE", tmp_path / "missing.conf")
     monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [])
     monkeypatch.setattr(hooks, "CLEANUP_MARKER", marker)
-    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "plugins" / "_office" / "documents")
     monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
     retired_web_packages = [
         "coolwsd",
@@ -1409,7 +1441,7 @@ def test_cleanup_hook_reruns_when_stale_packages_exist_after_old_marker(tmp_path
     monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
     monkeypatch.setattr(hooks, "_ensure_runtime_dependencies", lambda installed, errors: None)
     monkeypatch.setattr(hooks, "_kill_old_processes", lambda errors: None)
-    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, migrated, warnings, errors: None)
 
     def fake_purge(removed, errors, **kwargs):
         removed.extend(kwargs["installed_packages"])
@@ -1433,12 +1465,12 @@ def test_cleanup_hook_removes_retired_supervisor_program_after_marker(tmp_path, 
     monkeypatch.setattr(hooks, "RETIRED_WEB_SUPERVISOR_FILE", tmp_path / "missing.conf")
     monkeypatch.setattr(hooks, "RETIRED_WEB_RUNTIME_DIRS", [])
     monkeypatch.setattr(hooks, "CLEANUP_MARKER", marker)
-    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "_office" / "documents")
+    monkeypatch.setattr(hooks, "DOCUMENT_STATE_DIR", tmp_path / "usr" / "plugins" / "_office" / "documents")
     monkeypatch.setattr(hooks, "LEGACY_DOCUMENT_STATE_DIRS", [])
     monkeypatch.setattr(hooks, "_installed_retired_web_packages", lambda: [])
     monkeypatch.setattr(hooks, "_installed_packages", lambda packages: [])
     monkeypatch.setattr(hooks, "_ensure_runtime_dependencies", lambda installed, errors: None)
-    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, warnings, errors: None)
+    monkeypatch.setattr(hooks, "_ensure_desktop_runtime_compat", lambda installed, removed, migrated, warnings, errors: None)
     monkeypatch.setattr(hooks.shutil, "which", lambda name: "/usr/bin/supervisorctl" if name == "supervisorctl" else "")
 
     def fake_supervisorctl(*args):
@@ -1513,6 +1545,32 @@ def test_desktop_runtime_packages_include_libreoffice_for_desktop_status():
     assert "libreoffice-writer" in desktop_hooks.RUNTIME_PACKAGES
     assert "libreoffice-calc" in desktop_hooks.RUNTIME_PACKAGES
     assert "libreoffice-impress" in desktop_hooks.RUNTIME_PACKAGES
+
+
+def test_desktop_cleanup_moves_retired_state_to_plugin_state(tmp_path, monkeypatch):
+    retired_state = tmp_path / "usr" / "_desktop"
+    plugin_state = tmp_path / "usr" / "plugins" / "_desktop"
+    (retired_state / "profiles" / "agent-zero-desktop").mkdir(parents=True)
+    (retired_state / "profiles" / "agent-zero-desktop" / "profile.txt").write_text("profile\n", encoding="utf-8")
+    (retired_state / "sessions").mkdir()
+    (retired_state / "sessions" / "agent-zero-desktop.json").write_text("{}\n", encoding="utf-8")
+    (retired_state / "screenshots").mkdir()
+    (retired_state / "screenshots" / "desktop.png").write_bytes(b"png")
+    plugin_state.mkdir(parents=True)
+
+    monkeypatch.setattr(desktop_hooks, "STATE_DIR", plugin_state)
+    monkeypatch.setattr(desktop_hooks, "RETIRED_STATE_DIR", retired_state)
+    monkeypatch.setattr(desktop_hooks, "_installed_packages", lambda packages: [])
+    monkeypatch.setattr(desktop_hooks, "_ensure_runtime_dependencies", lambda installed, errors: None)
+    monkeypatch.setattr(desktop_hooks, "_cleanup_desktop_sessions", lambda errors: None)
+
+    result = desktop_hooks.cleanup_stale_runtime_state(force=True)
+
+    assert result["ok"] is True
+    assert (plugin_state / "profiles" / "agent-zero-desktop" / "profile.txt").read_text(encoding="utf-8") == "profile\n"
+    assert (plugin_state / "sessions" / "agent-zero-desktop.json").read_text(encoding="utf-8") == "{}\n"
+    assert (plugin_state / "screenshots" / "default" / "desktop.png").read_bytes() == b"png"
+    assert not retired_state.exists()
 
 
 def test_cleanup_hook_installs_missing_desktop_session_dependencies(monkeypatch):

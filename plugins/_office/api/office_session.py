@@ -221,7 +221,10 @@ class OfficeSession(ApiHandler):
 
     def _desktop_state(self, input: dict) -> dict:
         include_screenshot = bool(input.get("include_screenshot") is True)
-        return desktop_session.get_manager().state(include_screenshot=include_screenshot)
+        return desktop_session.get_manager().state(
+            include_screenshot=include_screenshot,
+            context_id=str(input.get("ctxid") or input.get("context_id") or ""),
+        )
 
     def _desktop_shutdown(self, input: dict) -> dict:
         save_first = input.get("save_first") is not False

@@ -9,7 +9,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from helpers import system_packages
+from helpers import files, state_migration, system_packages
 
 LIBREOFFICE_RUNTIME_PACKAGES = (
     "libreoffice-core",
@@ -61,6 +61,9 @@ OPTIONAL_RUNTIME_PACKAGES = (
 RETIRED_RUNTIME_PACKAGES = (
     "firefox-esr",
 )
+PLUGIN_NAME = "_desktop"
+STATE_DIR = Path(files.get_abs_path("usr", "plugins", PLUGIN_NAME))
+RETIRED_STATE_DIR = Path(files.get_abs_path("usr", PLUGIN_NAME))
 _preparation_lock = threading.RLock()
 _preparation_state: dict[str, Any] = {
     "preparing": False,
@@ -81,7 +84,12 @@ def cleanup_stale_runtime_state(force: bool = False) -> dict[str, Any]:
     try:
         installed: list[str] = []
         removed: list[str] = []
+        migrated: list[str] = []
+        warnings: list[str] = []
         errors: list[str] = []
+
+        _migrate_retired_plugin_state(migrated, warnings, errors)
+        _migrate_unscoped_screenshots(migrated, warnings, errors)
 
         retired_packages = _installed_packages(RETIRED_RUNTIME_PACKAGES)
         if retired_packages:
@@ -95,6 +103,8 @@ def cleanup_stale_runtime_state(force: bool = False) -> dict[str, Any]:
             "skipped": False,
             "removed": removed,
             "installed": installed,
+            "migrated": migrated,
+            "warnings": warnings,
             "errors": errors,
         }
         return result
@@ -115,6 +125,50 @@ def runtime_preparation_status() -> dict[str, Any]:
             "result": _preparation_state["result"],
             "error": str(_preparation_state["error"]),
         }
+
+
+def _migrate_retired_plugin_state(
+    migrated: list[str],
+    warnings: list[str],
+    errors: list[str],
+) -> None:
+    state_migration.migrate_retired_state_tree(
+        source=RETIRED_STATE_DIR,
+        destination=STATE_DIR,
+        owner="Desktop",
+        migrated=migrated,
+        warnings=warnings,
+        errors=errors,
+    )
+
+
+def _migrate_unscoped_screenshots(
+    migrated: list[str],
+    warnings: list[str],
+    errors: list[str],
+) -> None:
+    screenshots_dir = STATE_DIR / "screenshots"
+    if not screenshots_dir.exists():
+        return
+    legacy_screenshots = [
+        path
+        for path in screenshots_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".xwd"}
+    ]
+    if not legacy_screenshots:
+        return
+
+    context_dir = screenshots_dir / "default"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    for screenshot in legacy_screenshots:
+        state_migration.migrate_retired_state_tree(
+            source=screenshot,
+            destination=context_dir / screenshot.name,
+            owner="Desktop screenshot",
+            migrated=migrated,
+            warnings=warnings,
+            errors=errors,
+        )
 
 
 def _begin_runtime_preparation() -> None:
