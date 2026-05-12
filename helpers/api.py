@@ -16,7 +16,6 @@ from flask import (
     url_for,
 )
 from werkzeug.wrappers.response import Response as BaseResponse
-from agent import AgentContext
 from helpers.print_style import PrintStyle
 from helpers.errors import format_error
 from helpers import files, cache
