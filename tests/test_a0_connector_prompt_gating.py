@@ -350,3 +350,40 @@ def test_remote_tool_stubs_are_self_contained_and_reference_per_tool_skills():
     assert "a0-cli-remote-workflows" not in text_stub
     assert "a0-cli-remote-workflows" not in exec_stub
     assert "a0-cli-remote-workflows" not in computer_skill
+
+
+def test_host_browser_requests_route_to_browser_tool_not_desktop_or_shell_fallbacks():
+    browser_prompt = (
+        PROJECT_ROOT / "plugins" / "_browser" / "prompts" / "agent.system.tool.browser.md"
+    ).read_text(encoding="utf-8")
+    exec_stub = (PROMPT_ROOT / "agent.system.tool.code_execution_remote.md").read_text(encoding="utf-8")
+    exec_skill = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_a0_connector"
+        / "skills"
+        / "host-code-execution"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    computer_skill = (
+        PROJECT_ROOT
+        / "plugins"
+        / "_a0_connector"
+        / "skills"
+        / "host-computer-use"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert 'When the user asks for "my browser"' in browser_prompt
+    assert "Do not substitute `computer_use_remote`" in browser_prompt
+    assert "code_execution_remote" in browser_prompt
+    assert "Python `webbrowser.open`" in browser_prompt
+    assert "chrome://inspect/#remote-debugging" in browser_prompt
+    assert "Do not start `computer_use_remote` for web-page navigation" in computer_skill
+    assert (
+        "Do not fall back to `code_execution_remote`, `xdg-open`, `sensible-browser`, "
+        "or Python `webbrowser.open`"
+    ) in computer_skill
+    assert "do not use shell launchers" in exec_skill
+    assert "Use a shell launcher only when the user explicitly wants" not in exec_skill
+    assert "Do not use this tool as a fallback for host-browser navigation/control" in exec_stub

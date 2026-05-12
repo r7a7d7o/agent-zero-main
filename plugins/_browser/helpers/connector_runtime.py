@@ -79,6 +79,22 @@ _REQUIRED_API_NAMES_RE = re.compile(
     r"const\s+REQUIRED_API_NAMES\s*=\s*Object\.freeze\(\[(?P<body>.*?)\]\);",
     re.S,
 )
+_HOST_BROWSER_REMOTE_DEBUGGING_HELP = (
+    'For an already-open Chrome-family browser, open `chrome://inspect/#remote-debugging`, '
+    'enable "Allow remote debugging for this browser instance", run `/browser host on`, '
+    "and retry."
+)
+_REMOTE_DEBUGGING_ERROR_TOKENS = (
+    "remote debugging",
+    "remote-debugging",
+    "devtoolsactiveport",
+    "devtools endpoint",
+    "cdp endpoint",
+    "cannot connect to the host browser",
+    "127.0.0.1:9222",
+    "localhost:9222",
+    "blocks playwright remote debugging",
+)
 
 
 class ConnectorBrowserRuntime:
@@ -253,11 +269,7 @@ class ConnectorBrowserRuntime:
         sid = self._select_sid()
         if not sid:
             statuses = host_browser_metadata_for_context(self.context_id)
-            detail = self._format_statuses(statuses)
-            raise RuntimeError(
-                "Host browser is required but no subscribed A0 CLI advertises host-browser support"
-                + (f": {detail}" if detail else ".")
-            )
+            raise RuntimeError(self._host_browser_unavailable_message(statuses))
 
         if self._needs_prepare(sid, payload):
             await self._send_browser_op(
@@ -323,7 +335,11 @@ class ConnectorBrowserRuntime:
         if not isinstance(response, dict):
             raise RuntimeError(f"Unexpected host browser response: {response!r}")
         if not response.get("ok"):
-            raise RuntimeError(str(response.get("error") or "Host browser operation failed"))
+            raise RuntimeError(
+                self._host_browser_error_message(
+                    response.get("error") or "Host browser operation failed"
+                )
+            )
         return response.get("result")
 
     def _select_sid(self) -> str | None:
@@ -445,6 +461,27 @@ class ConnectorBrowserRuntime:
                 f"reason={status.get('support_reason') or 'none'}"
             )
         return "; ".join(parts)
+
+    @classmethod
+    def _host_browser_unavailable_message(cls, statuses: list[dict[str, Any]]) -> str:
+        detail = cls._format_statuses(statuses)
+        message = (
+            "Host browser is required but no subscribed A0 CLI advertises host-browser support"
+            + (f": {detail}" if detail else ".")
+        )
+        return cls._host_browser_error_message(message)
+
+    @staticmethod
+    def _host_browser_error_message(error: Any) -> str:
+        message = str(error or "Host browser operation failed").strip()
+        if not message:
+            message = "Host browser operation failed"
+        normalized = message.lower()
+        if "chrome://inspect/#remote-debugging" in normalized:
+            return message
+        if any(token in normalized for token in _REMOTE_DEBUGGING_ERROR_TOKENS):
+            return f"{message}\n\n{_HOST_BROWSER_REMOTE_DEBUGGING_HELP}"
+        return message
 
 
 @lru_cache(maxsize=1)

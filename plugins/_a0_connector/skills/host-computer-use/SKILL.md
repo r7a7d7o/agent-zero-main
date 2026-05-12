@@ -1,6 +1,6 @@
 ---
 name: host-computer-use
-description: Beta desktop control through the connected A0 CLI host. Use when the user asks for computer use, screenshots, screen inspection, menus, browser chrome, native UI tasks, clicking, scrolling, typing, or checking computer_use_remote status.
+description: Beta desktop control through the connected A0 CLI host. Use for screenshots, screen inspection, menus, native app UI, OS-level clicking, scrolling, typing, or checking computer_use_remote status. Do not use for ordinary browser navigation; host browser requests should use the browser tool.
 ---
 
 # Host Computer Use
@@ -14,6 +14,13 @@ Load this skill before using `computer_use_remote` for local desktop and native 
 If the task is browser-only and the user is flexible, prefer direct browser tooling because it is usually more reliable and token-efficient than screenshot-driven desktop control.
 
 If the task needs shell execution on the CLI host, load `host-code-execution` separately rather than treating desktop control and shell execution as one affordance.
+
+## Browser Boundary
+
+- If the user asks to use/open/control their host browser, local browser, Chrome, "my browser", or a URL in the host browser, use the `browser` tool. The Browser plugin chooses Docker or A0 CLI host-browser runtime from Browser settings and can surface Chrome remote-debugging setup.
+- Do not start `computer_use_remote` for web-page navigation just because the phrase "host browser" appears. Use this skill only for desktop/browser-chrome tasks that the `browser` tool cannot express.
+- If host-browser setup fails or mentions remote debugging, tell the user to open `chrome://inspect/#remote-debugging`, enable "Allow remote debugging for this browser instance", run `/browser host on`, and retry.
+- Do not fall back to `code_execution_remote`, `xdg-open`, `sensible-browser`, or Python `webbrowser.open` for host-browser control. Those can launch pages without giving Agent Zero browser control or setup diagnostics.
 
 ## Tool Contract
 

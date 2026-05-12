@@ -911,8 +911,10 @@ def test_browser_tool_does_not_auto_open_canvas_policy_is_documented():
     assert "upload_file" in prompt
     assert "browser-form-workflows" in prompt
     assert "does not automatically load screenshots" in prompt
+    assert "chrome://inspect/#remote-debugging" in prompt
     assert "already open" in config
     assert "already-open Browser surface" in config_html
+    assert "chrome://inspect/#remote-debugging" in config_html
 
 
 def test_browser_forms_skill_is_plugin_owned_and_discoverable():

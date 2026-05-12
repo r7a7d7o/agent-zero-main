@@ -5,6 +5,8 @@ Prefer `search_engine` or `document_query` for plain text research. The tool mus
 
 The browser may run in Docker container mode or A0 CLI host-browser mode depending on settings. Container-mode paths resolve inside Agent Zero; host-mode paths resolve on the connected A0 CLI host.
 
+When the user asks for "my browser", "host browser", "local browser", local Chrome, or opening a URL in their host browser, use this `browser` tool. Do not substitute `computer_use_remote`, `code_execution_remote`, or host shell launchers such as `xdg-open`, `sensible-browser`, or Python `webbrowser.open`. If host-browser setup fails and mentions remote debugging, stop and tell the user to open `chrome://inspect/#remote-debugging`, enable "Allow remote debugging for this browser instance", run `/browser host on`, and retry.
+
 For complex browser workflows, load skill `browser-automation`. For fragile forms, load skill `browser-form-workflows`.
 
 Actions: `open`, `list`, `state`, `set_active`, `navigate`, `back`, `forward`, `reload`, `content`, `detail`, `screenshot`, `click`, `hover`, `double_click`, `right_click`, `drag`, `type`, `submit`, `type_submit`, `scroll`, `evaluate`, `key_chord`, `mouse`, `wheel`, `keyboard`, `clipboard`, `set_viewport`, `select_option`, `set_checked`, `upload_file`, `multi`, `close`, `close_all`.

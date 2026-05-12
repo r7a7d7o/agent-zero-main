@@ -11,6 +11,13 @@ connected, remote execution is disabled, or local access is not Read&Write for a
 mutating command, report that to the user instead of falling back to server-side
 execution.
 
+Do not use this tool as a fallback for host-browser navigation/control. For
+"my browser", host browser, local browser/Chrome, or opening a URL in the host
+browser, use the `browser` tool. If Browser reports missing Chrome
+remote-debugging consent, tell the user to open `chrome://inspect/#remote-debugging`,
+enable "Allow remote debugging for this browser instance", run `/browser host on`,
+and retry.
+
 ## Arguments
 - `runtime`: one of `terminal`, `python`, `nodejs`, `output`, `reset`
 - `session`: integer session id (default `0`)

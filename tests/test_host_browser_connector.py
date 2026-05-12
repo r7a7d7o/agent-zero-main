@@ -12,7 +12,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from helpers.errors import RepairableException
 from plugins._a0_connector.helpers import ws_runtime
 from plugins._browser.helpers.connector_runtime import (
     ConnectorBrowserRuntime,
@@ -33,7 +32,7 @@ def test_host_required_runtime_error_is_repairable(monkeypatch):
         lambda agent=None: {"runtime_backend": "host_required"},
     )
 
-    with pytest.raises(RepairableException, match="Bring Your Own Browser"):
+    with pytest.raises(browser_selector.RepairableException, match="Bring Your Own Browser"):
         asyncio.run(browser_selector.get_tool_runtime(_agent("ctx-host-required-missing")))
 
 
@@ -293,6 +292,24 @@ def test_connector_runtime_forwards_host_profile_mode(monkeypatch):
     runtime = ConnectorBrowserRuntime("ctx-host", _agent("ctx-host"))
 
     assert runtime._payload_for_call("open", "example.com")["profile_mode"] == "agent"
+
+
+def test_connector_runtime_adds_remote_debugging_help_to_cdp_errors():
+    runtime = ConnectorBrowserRuntime("ctx-host", _agent("ctx-host"))
+
+    message = runtime._host_browser_error_message(
+        "Cannot connect to the host browser remote-debugging endpoint "
+        "ws://127.0.0.1:9222/devtools/browser/test. Original error: refused"
+    )
+
+    assert "chrome://inspect/#remote-debugging" in message
+    assert "Allow remote debugging for this browser instance" in message
+    assert "/browser host on" in message
+    already_helpful = (
+        "Open chrome://inspect/#remote-debugging and enable "
+        '"Allow remote debugging for this browser instance".'
+    )
+    assert runtime._host_browser_error_message(already_helpful) == already_helpful
 
 
 def test_host_browser_artifacts_materialize_inside_multi_results(monkeypatch, tmp_path):

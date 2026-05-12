@@ -11,6 +11,8 @@ Use `code_execution_remote` only for shell-backed execution on the machine where
 
 If the task belongs inside Agent Zero's own runtime, use the normal server-side execution tool instead.
 
+Browser boundary: do not use shell launchers such as `xdg-open`, `sensible-browser`, `open`, `start`, or Python `webbrowser.open` as a fallback for requests to use/control/open a page in the host browser. Use the `browser` tool instead; if it reports missing Chrome remote-debugging consent, stop and relay the `chrome://inspect/#remote-debugging` instructions.
+
 ## Access Modes
 
 - Remote execution can be disabled locally in the CLI. If the tool returns a disabled/no-client error, explain the required CLI toggle instead of falling back to the server runtime.
