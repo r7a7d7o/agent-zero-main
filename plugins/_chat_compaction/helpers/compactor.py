@@ -1,5 +1,6 @@
 """Core compaction logic for the compaction plugin."""
 import os
+from collections import deque
 from datetime import datetime
 
 import models as models_module
@@ -15,6 +16,9 @@ from helpers.persist_chat import (
 from helpers.state_monitor_integration import mark_dirty_all
 
 MIN_COMPACTION_TOKENS = 1000
+COMPACTION_CHUNK_TARGET_RATIO = 0.9
+COMPACTION_CHUNK_VERIFY_RATIO = 0.98
+
 from plugins._model_config.helpers.model_config import (
     get_chat_model_config,
     get_utility_model_config,
@@ -199,13 +203,10 @@ async def _compact_large_history(
     agent, full_text: str, token_count: int, max_input_tokens: int, log_item, model
 ) -> str:
     """Handle large histories by splitting into chunks and summarizing iteratively."""
+    chunks = _split_text_for_compaction(agent, full_text, token_count, max_input_tokens)
     log_item.update(
-        content=f"History is large (~{token_count} tokens). Splitting into chunks...",
+        content=f"History is large (~{token_count} tokens). Splitting into {len(chunks)} chunks...",
     )
-
-    lines = full_text.split('\n')
-    mid = len(lines) // 2
-    chunks = ['\n'.join(lines[:mid]), '\n'.join(lines[mid:])]
 
     summaries = []
     for i, chunk in enumerate(chunks, 1):
@@ -239,6 +240,91 @@ async def _compact_large_history(
         response_callback=stream_cb,
     )
     return final_summary
+
+
+def _split_text_for_compaction(
+    agent, full_text: str, token_count: int, max_input_tokens: int
+) -> list[str]:
+    """Split large compaction input into prompt-safe chunks.
+
+    The previous line-midpoint split left a single-line payload as one empty
+    chunk plus one still-oversized chunk. This splitter derives a conservative
+    character target from the measured token density, then verifies each prompt
+    and keeps splitting any chunk that still exceeds the model input budget.
+    """
+    text = full_text or ""
+    if not text:
+        return []
+
+    prompt_overhead = _compaction_input_tokens(agent, "")
+    usable_tokens = max(max_input_tokens - prompt_overhead, 1)
+    target_tokens = max(int(usable_tokens * COMPACTION_CHUNK_TARGET_RATIO), 1)
+
+    if token_count <= target_tokens:
+        return [text]
+
+    chars_per_token = max(len(text) / max(token_count, 1), 0.01)
+    target_chars = max(int(target_tokens * chars_per_token), 1)
+    chunks = _split_text_by_chars(text, target_chars)
+
+    verified: list[str] = []
+    max_verified_tokens = max(int(max_input_tokens * COMPACTION_CHUNK_VERIFY_RATIO), 1)
+    pending = deque(chunk for chunk in chunks if chunk)
+
+    while pending:
+        chunk = pending.popleft()
+        if not chunk:
+            continue
+
+        if (
+            len(chunk) <= 1
+            or _compaction_input_tokens(agent, chunk) <= max_verified_tokens
+        ):
+            verified.append(chunk)
+            continue
+
+        split_chunks = _split_text_by_chars(chunk, max(len(chunk) // 2, 1))
+        if len(split_chunks) <= 1:
+            verified.append(chunk)
+        else:
+            pending.extendleft(reversed(split_chunks))
+
+    return verified
+
+
+def _compaction_input_tokens(agent, conversation: str) -> int:
+    system_prompt = agent.read_prompt("compact.sys.md")
+    user_prompt = agent.read_prompt("compact.msg.md", conversation=conversation)
+    return tokens.approximate_tokens(system_prompt) + tokens.approximate_tokens(
+        user_prompt
+    )
+
+
+def _split_text_by_chars(text: str, target_chars: int) -> list[str]:
+    if not text:
+        return []
+
+    target_chars = max(int(target_chars), 1)
+    chunks: list[str] = []
+    start = 0
+    length = len(text)
+
+    while start < length:
+        end = min(start + target_chars, length)
+        if end < length:
+            floor = start + max((end - start) // 2, 1)
+            split_at = text.rfind("\n", floor, end)
+            if split_at == -1:
+                split_at = text.rfind(" ", floor, end)
+            if split_at > start:
+                end = split_at + 1
+
+        chunk = text[start:end]
+        if chunk:
+            chunks.append(chunk)
+        start = end
+
+    return chunks
 
 
 async def get_compaction_stats(context) -> dict:
