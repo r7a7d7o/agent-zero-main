@@ -245,6 +245,9 @@ def test_connector_runtime_normalizes_host_navigation_payloads(monkeypatch):
         [
             {"action": "open", "url": "example.com"},
             {"action": "navigate", "browser_id": 1, "url": "127.0.0.1:8000/path"},
+            {"action": "click", "browser_id": 1, "x": 12, "y": 34},
+            {"action": "type", "browser_id": 1, "text": "agent-zero.ai"},
+            {"action": "key_chord", "browser_id": 1, "keys": "CTRL+A"},
             {
                 "action": "multi",
                 "calls": [{"action": "open", "url": "nested.example"}],
@@ -258,9 +261,25 @@ def test_connector_runtime_normalizes_host_navigation_payloads(monkeypatch):
     assert navigate_payload["url"] == "https://novinky.cz/"
     assert multi_payload["calls"][0]["url"] == "https://example.com/"
     assert multi_payload["calls"][1]["url"] == "http://127.0.0.1:8000/path"
-    assert multi_payload["calls"][2]["calls"][0]["url"] == "https://nested.example/"
-    assert multi_payload["calls"][3] == {"action": "content", "browser_id": 1}
+    assert multi_payload["calls"][2] == {
+        "action": "mouse",
+        "browser_id": 1,
+        "x": 12,
+        "y": 34,
+        "event_type": "click",
+        "button": "left",
+    }
+    assert multi_payload["calls"][3] == {
+        "action": "keyboard",
+        "browser_id": 1,
+        "text": "agent-zero.ai",
+        "key": "",
+    }
+    assert multi_payload["calls"][4]["keys"] == ["Control", "A"]
+    assert multi_payload["calls"][5]["calls"][0]["url"] == "https://nested.example/"
+    assert multi_payload["calls"][6] == {"action": "content", "browser_id": 1}
     assert open_payload["profile_mode"] == "existing"
+    assert runtime._payload_for_call("key_chord", 1, "CTRL+A")["keys"] == ["Control", "A"]
 
 
 def test_connector_runtime_forwards_host_profile_mode(monkeypatch):

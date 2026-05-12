@@ -15,6 +15,8 @@ Workflow:
 - `open` creates a tab and returns id/state.
 - `content` returns markdown with refs like `[link 3]`, `[button 6]`, `[input text 8]`.
 - Interactions use refs from the latest `content` capture.
+- For same-page controls that are easier to identify structurally, `click`, `type`, `submit`, `type_submit`, `scroll`, `select_option`, `set_checked`, and `upload_file` may use `selector` instead of `ref`; the tool resolves the selector through `content` first.
+- `click` with `x`/`y` and no `ref` is treated as a coordinate mouse click. `type` with text and no `ref` types into the currently focused element. `key_chord` accepts either `["Control", "A"]` or `"CTRL+A"`.
 - `navigate` reuses an existing `browser_id` and is preferred for serial browsing.
 - Screenshots are explicit only; the browser does not automatically load screenshots. Call `vision_load` with the returned path before reasoning visually.
 - Keep the tab set small; close pages after extracting what you need.

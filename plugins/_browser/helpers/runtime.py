@@ -535,6 +535,18 @@ class BrowserRuntime:
 
 class _BrowserRuntimeCore:
     _VALID_MODIFIERS = {"Control", "Shift", "Alt", "Meta"}
+    _KEY_ALIASES = {
+        "cmd": "Meta",
+        "command": "Meta",
+        "control": "Control",
+        "ctrl": "Control",
+        "escape": "Escape",
+        "esc": "Escape",
+        "meta": "Meta",
+        "option": "Alt",
+        "return": "Enter",
+        "space": "Space",
+    }
     _POPUP_WAIT_SECONDS = 2.0
 
     def __init__(self, context_id: str):
@@ -593,6 +605,29 @@ class _BrowserRuntimeCore:
         if bad:
             raise ValueError(
                 f"unsupported modifiers: {sorted(bad)}; allowed: {sorted(self._VALID_MODIFIERS)}"
+            )
+        return normalized
+
+    @classmethod
+    def _normalize_keys(cls, keys: list[str] | str | None) -> list[str]:
+        if keys is None:
+            return []
+        if isinstance(keys, str):
+            raw = re.split(r"\s*\+\s*|\s*,\s*", keys.strip())
+        elif isinstance(keys, list):
+            raw = keys
+        else:
+            raw = [str(keys)]
+        normalized: list[str] = []
+        for key in raw:
+            value = str(key or "").strip()
+            if not value:
+                continue
+            normalized.append(
+                cls._KEY_ALIASES.get(
+                    value.lower(),
+                    value.upper() if len(value) == 1 and value.isalpha() else value,
+                )
             )
         return normalized
 
@@ -980,6 +1015,15 @@ class _BrowserRuntimeCore:
             return await self.detail(bid, ref)
         if action == "click":
             ref = call.get("ref")
+            if ref is None and (call.get("x") or call.get("y")):
+                return await self.mouse(
+                    bid,
+                    "click",
+                    float(call.get("x") or 0),
+                    float(call.get("y") or 0),
+                    button=call.get("button") or "left",
+                    modifiers=self._normalize_modifiers(call.get("modifiers")),
+                )
             if ref is None:
                 raise ValueError("click requires ref")
             return await self.click(
@@ -990,7 +1034,11 @@ class _BrowserRuntimeCore:
         if action == "type":
             ref = call.get("ref")
             if ref is None:
-                raise ValueError("type requires ref")
+                return await self.keyboard(
+                    bid,
+                    key="",
+                    text=str(call.get("text") or ""),
+                )
             return await self.type(bid, ref, call.get("text") or "")
         if action == "submit":
             ref = call.get("ref")
@@ -1010,10 +1058,10 @@ class _BrowserRuntimeCore:
         if action == "evaluate":
             return await self.evaluate(bid, call.get("script") or "")
         if action in {"key_chord", "keychord"}:
-            keys = call.get("keys") or []
+            keys = self._normalize_keys(call.get("keys"))
             if not keys:
                 raise ValueError("key_chord requires non-empty keys")
-            return await self.key_chord(bid, list(keys))
+            return await self.key_chord(bid, keys)
         if action == "mouse":
             return await self.mouse(
                 bid, call.get("event_type") or "click",

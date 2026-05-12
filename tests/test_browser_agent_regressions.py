@@ -1237,7 +1237,7 @@ def test_browser_content_helper_keeps_label_wrapped_controls_referenceable():
         PROJECT_ROOT / "plugins" / "_browser" / "assets" / "browser-page-content.js"
     ).read_text(encoding="utf-8")
 
-    assert 'const VERSION = "11"' in helper
+    assert 'const VERSION = "12"' in helper
     assert "function patchOpenShadowDom" in helper
     assert "Element.prototype.attachShadow = patched" in helper
     assert "const REQUIRED_API_NAMES = Object.freeze([" in helper
@@ -1249,6 +1249,18 @@ def test_browser_content_helper_keeps_label_wrapped_controls_referenceable():
     assert "getLabelElementText(labelElement, element)" in helper
     assert "return renderControlLabelReferences(node, context);" in helper
     assert "return renderControlLabelReferences(element, context);" in helper
+    assert "function isGlobalOrDelegatedEventBinding" in helper
+    assert 'parts.includes("window")' in helper
+    assert 'parts.includes("outside")' in helper
+
+
+def test_browser_panel_exposes_agent_friendly_address_input():
+    panel = (
+        PROJECT_ROOT / "plugins" / "_browser" / "webui" / "browser-panel.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'class="browser-address-form" aria-label="Browser navigation"' in panel
+    assert 'class="browser-address" aria-label="Browser address" name="browser_address"' in panel
 
 
 def test_browser_runtime_requires_current_content_helper_for_modifier_clicks():
@@ -1637,6 +1649,9 @@ async def test_browser_tool_dispatches_v1_agent_actions(monkeypatch):
     await execute(action="select_option", browser_id=1, ref=6, value="CA")
     await execute(action="set_checked", browser_id=1, ref=7, checked=False)
     await execute(action="upload_file", browser_id=1, ref=8, paths=["/tmp/a.txt"])
+    await execute(action="key_chord", browser_id=1, keys="CTRL+A")
+    await execute(action="click", browser_id=1, x=10, y=20)
+    await execute(action="type", browser_id=1, text="agent-zero.ai")
 
     assert calls == [
         ("screenshot_file", (1,), {"quality": 91, "full_page": True, "path": "/tmp/a.jpg"}),
@@ -1690,6 +1705,81 @@ async def test_browser_tool_dispatches_v1_agent_actions(monkeypatch):
         ("select_option", (1, 6), {"value": "CA", "values": None}),
         ("set_checked", (1, 7), {"checked": False}),
         ("upload_file", (1, 8), {"path": "", "paths": ["/tmp/a.txt"]}),
+        ("key_chord", (1, ["Control", "A"]), {}),
+        ("mouse", (1, "click", 10, 20), {"button": "left", "modifiers": None}),
+        ("keyboard", (1,), {"key": "", "text": "agent-zero.ai"}),
+    ]
+
+
+@pytest.mark.anyio
+async def test_browser_tool_resolves_selector_for_reference_actions(monkeypatch):
+    calls = []
+
+    class FakeRuntime:
+        async def call(self, method, *args, **kwargs):
+            calls.append((method, args, kwargs))
+            if method == "content":
+                return {"input.browser-address": "[input text 31] Browser address"}
+            return {"ok": True, "method": method, "args": args, "kwargs": kwargs}
+
+    async def fake_get_runtime(context_id, create=True, agent=None):
+        del create, agent
+        assert context_id == "ctx"
+        return FakeRuntime()
+
+    monkeypatch.setattr(browser_tool_module, "get_runtime", fake_get_runtime)
+    tool = browser_tool_module.Browser(
+        agent=SimpleNamespace(context=SimpleNamespace(id="ctx")),
+        name="browser",
+        method=None,
+        args={},
+        message="",
+        loop_data=None,
+    )
+
+    response = await tool.execute(
+        action="type_submit",
+        browser_id=1,
+        selector="input.browser-address",
+        text="agent-zero.ai",
+    )
+
+    assert response.break_loop is False
+    assert calls == [
+        ("content", (1, {"selector": "input.browser-address"}), {}),
+        ("type_submit", (1, "31", "agent-zero.ai"), {}),
+    ]
+
+
+@pytest.mark.anyio
+async def test_browser_runtime_multi_accepts_human_shaped_input_calls():
+    calls = []
+    core = _BrowserRuntimeCore("ctx")
+
+    async def fake_mouse(browser_id, event_type, x, y, *, button="left", modifiers=None):
+        calls.append(("mouse", browser_id, event_type, x, y, button, modifiers))
+        return {"ok": True}
+
+    async def fake_keyboard(browser_id, *, key="", text=""):
+        calls.append(("keyboard", browser_id, key, text))
+        return {"ok": True}
+
+    async def fake_key_chord(browser_id, keys):
+        calls.append(("key_chord", browser_id, keys))
+        return {"ok": True}
+
+    core.mouse = fake_mouse
+    core.keyboard = fake_keyboard
+    core.key_chord = fake_key_chord
+
+    assert await core._dispatch_call({"action": "click", "browser_id": 1, "x": 10, "y": 20}) == {"ok": True}
+    assert await core._dispatch_call({"action": "type", "browser_id": 1, "text": "agent-zero.ai"}) == {"ok": True}
+    assert await core._dispatch_call({"action": "key_chord", "browser_id": 1, "keys": "CTRL+A"}) == {"ok": True}
+
+    assert calls == [
+        ("mouse", 1, "click", 10.0, 20.0, "left", None),
+        ("keyboard", 1, "", "agent-zero.ai"),
+        ("key_chord", 1, ["Control", "A"]),
     ]
 
 

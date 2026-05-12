@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -82,6 +83,7 @@ class Browser(Tool):
             modifiers = [modifiers] if modifiers else None
         elif isinstance(modifiers, list) and not modifiers:
             modifiers = None
+        keys = self._normalize_keys(keys)
 
         try:
             if action == "open":
@@ -114,34 +116,70 @@ class Browser(Tool):
                 payload = self._selector_payload(selector, selectors)
                 result = await runtime.call("content", browser_id, payload)
             elif action == "detail":
-                result = await runtime.call("detail", browser_id, self._require_ref(ref))
+                result = await runtime.call(
+                    "detail",
+                    browser_id,
+                    await self._resolve_ref(runtime, browser_id, ref, selector, action),
+                )
             elif action == "click":
-                if modifiers:
+                resolved_ref = await self._resolve_ref(
+                    runtime,
+                    browser_id,
+                    ref,
+                    selector,
+                    action,
+                    required=not self._has_coordinates(x, y),
+                )
+                if resolved_ref is None and self._has_coordinates(x, y):
                     result = await runtime.call(
-                        "click", browser_id, self._require_ref(ref),
+                        "mouse", browser_id, "click", x, y,
+                        button=button or "left", modifiers=modifiers,
+                    )
+                elif modifiers:
+                    result = await runtime.call(
+                        "click", browser_id, resolved_ref,
                         modifiers=modifiers, focus_popup=focus_popup,
                     )
                 else:
-                    result = await runtime.call("click", browser_id, self._require_ref(ref))
+                    result = await runtime.call("click", browser_id, resolved_ref)
             elif action == "type":
-                result = await runtime.call("type", browser_id, self._require_ref(ref), text)
+                resolved_ref = await self._resolve_ref(
+                    runtime,
+                    browser_id,
+                    ref,
+                    selector,
+                    action,
+                    required=False,
+                )
+                if resolved_ref is None:
+                    result = await runtime.call("keyboard", browser_id, key="", text=text)
+                else:
+                    result = await runtime.call("type", browser_id, resolved_ref, text)
             elif action == "submit":
-                result = await runtime.call("submit", browser_id, self._require_ref(ref))
+                result = await runtime.call(
+                    "submit",
+                    browser_id,
+                    await self._resolve_ref(runtime, browser_id, ref, selector, action),
+                )
             elif action in {"type_submit", "typesubmit"}:
                 result = await runtime.call(
                     "type_submit",
                     browser_id,
-                    self._require_ref(ref),
+                    await self._resolve_ref(runtime, browser_id, ref, selector, action),
                     text,
                 )
             elif action == "scroll":
-                result = await runtime.call("scroll", browser_id, self._require_ref(ref))
+                result = await runtime.call(
+                    "scroll",
+                    browser_id,
+                    await self._resolve_ref(runtime, browser_id, ref, selector, action),
+                )
             elif action == "evaluate":
                 result = await runtime.call("evaluate", browser_id, script)
             elif action in {"key_chord", "keychord"}:
                 if not keys:
                     raise ValueError("key_chord requires non-empty 'keys' list")
-                result = await runtime.call("key_chord", browser_id, list(keys))
+                result = await runtime.call("key_chord", browser_id, keys)
             elif action == "hover":
                 result = await runtime.call(
                     "hover",
@@ -232,7 +270,7 @@ class Browser(Tool):
                 result = await runtime.call(
                     "select_option",
                     browser_id,
-                    self._require_ref(ref),
+                    await self._resolve_ref(runtime, browser_id, ref, selector, action),
                     value=value,
                     values=values,
                 )
@@ -240,14 +278,14 @@ class Browser(Tool):
                 result = await runtime.call(
                     "set_checked",
                     browser_id,
-                    self._require_ref(ref),
+                    await self._resolve_ref(runtime, browser_id, ref, selector, action),
                     checked=True if checked is None else bool(checked),
                 )
             elif action == "upload_file":
                 result = await runtime.call(
                     "upload_file",
                     browser_id,
-                    self._require_ref(ref),
+                    await self._resolve_ref(runtime, browser_id, ref, selector, action),
                     path=path,
                     paths=paths,
                 )
@@ -289,6 +327,85 @@ class Browser(Tool):
         if ref is None or str(ref).strip() == "":
             raise ValueError("ref is required for this browser action")
         return ref
+
+    @staticmethod
+    def _has_ref(ref: int | str | None) -> bool:
+        return ref is not None and str(ref).strip() != ""
+
+    @staticmethod
+    def _has_coordinates(x: float, y: float) -> bool:
+        return bool(float(x or 0) or float(y or 0))
+
+    @classmethod
+    async def _resolve_ref(
+        cls,
+        runtime: Any,
+        browser_id: int | str | None,
+        ref: int | str | None,
+        selector: str = "",
+        action: str = "action",
+        *,
+        required: bool = True,
+    ) -> int | str | None:
+        if cls._has_ref(ref):
+            return ref
+
+        selector = str(selector or "").strip()
+        if selector:
+            content = await runtime.call("content", browser_id, {"selector": selector})
+            resolved = cls._first_ref_from_content(content, selector)
+            if resolved is not None:
+                return resolved
+            raise ValueError(
+                f"{action} could not resolve selector {selector!r} to a browser ref"
+            )
+
+        if required:
+            return cls._require_ref(ref)
+        return None
+
+    @staticmethod
+    def _first_ref_from_content(content: Any, selector: str = "") -> str | None:
+        if isinstance(content, dict):
+            values: list[Any] = []
+            if selector and selector in content:
+                values.append(content.get(selector))
+            values.extend(value for key, value in content.items() if key != selector)
+            text = "\n".join(str(value or "") for value in values)
+        else:
+            text = str(content or "")
+        match = re.search(r"\[[^\]\n]*?\b(\d+)\]", text)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _normalize_keys(keys: list[str] | str | None) -> list[str]:
+        if keys is None:
+            return []
+        if isinstance(keys, str):
+            raw = re.split(r"\s*\+\s*|\s*,\s*", keys.strip())
+        elif isinstance(keys, list):
+            raw = keys
+        else:
+            raw = [str(keys)]
+        aliases = {
+            "cmd": "Meta",
+            "command": "Meta",
+            "control": "Control",
+            "ctrl": "Control",
+            "escape": "Escape",
+            "esc": "Escape",
+            "meta": "Meta",
+            "option": "Alt",
+            "return": "Enter",
+            "space": "Space",
+        }
+        normalized: list[str] = []
+        for key in raw:
+            value = str(key or "").strip()
+            if not value:
+                continue
+            normalized.append(aliases.get(value.lower(), value.upper() if len(value) == 1 and value.isalpha() else value))
+        return normalized
 
     @staticmethod
     def _selector_payload(selector: str = "", selectors: list[str] | None = None) -> dict | None:

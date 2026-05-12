@@ -1,7 +1,7 @@
 (() => {
   const GLOBAL_KEY = "__spaceBrowserPageContent__";
   const DOM_HELPER_KEY = "__spaceBrowserDomHelper__";
-  const VERSION = "11";
+  const VERSION = "12";
   const REQUIRED_API_NAMES = Object.freeze([
     "annotate",
     "boundingBoxFor",
@@ -646,6 +646,19 @@
       .split(/[.:]/u, 1)[0];
   }
 
+  function isGlobalOrDelegatedEventBinding(value) {
+    const parts = String(value || "")
+      .trim()
+      .toLowerCase()
+      .split(/[.:]/u)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    return parts.includes("window")
+      || parts.includes("document")
+      || parts.includes("outside")
+      || parts.includes("away");
+  }
+
   function isInteractiveEventName(value) {
     return INTERACTIVE_EVENT_NAMES.has(normalizeInteractiveEventName(value));
   }
@@ -657,10 +670,16 @@
     }
 
     if (normalizedName.startsWith("@")) {
+      if (isGlobalOrDelegatedEventBinding(normalizedName.slice(1))) {
+        return false;
+      }
       return isInteractiveEventName(normalizedName.slice(1));
     }
 
     if (normalizedName.startsWith("x-on:") || normalizedName.startsWith("v-on:")) {
+      if (isGlobalOrDelegatedEventBinding(normalizedName.slice(5))) {
+        return false;
+      }
       return isInteractiveEventName(normalizedName.slice(5));
     }
 

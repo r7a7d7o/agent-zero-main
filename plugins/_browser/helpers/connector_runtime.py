@@ -63,6 +63,18 @@ get_browser_config = browser_config.get_browser_config
 _LOCAL_PROVIDERS = {"ollama", "lm_studio"}
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
 _SENSITIVE_ACTIONS = {"content", "detail", "evaluate", "screenshot", "screenshot_file"}
+_KEY_ALIASES = {
+    "cmd": "Meta",
+    "command": "Meta",
+    "control": "Control",
+    "ctrl": "Control",
+    "escape": "Escape",
+    "esc": "Escape",
+    "meta": "Meta",
+    "option": "Alt",
+    "return": "Enter",
+    "space": "Space",
+}
 _REQUIRED_API_NAMES_RE = re.compile(
     r"const\s+REQUIRED_API_NAMES\s*=\s*Object\.freeze\(\[(?P<body>.*?)\]\);",
     re.S,
@@ -151,7 +163,7 @@ class ConnectorBrowserRuntime:
             payload["text"] = kwargs.get("text", "")
         elif action == "key_chord":
             payload["browser_id"] = args[0] if args else None
-            payload["keys"] = args[1] if len(args) > 1 else []
+            payload["keys"] = self._normalize_keys(args[1] if len(args) > 1 else [])
         elif action == "clipboard":
             payload["browser_id"] = args[0] if args else None
             payload["clipboard_action"] = kwargs.get("action", "")
@@ -196,10 +208,44 @@ class ConnectorBrowserRuntime:
                 normalized["url"] = cls._normalize_open_url(normalized.get("url"))
             elif action == "navigate":
                 normalized["url"] = normalize_url(normalized.get("url", ""))
+            elif action == "click" and not normalized.get("ref") and (
+                normalized.get("x") or normalized.get("y")
+            ):
+                normalized["action"] = "mouse"
+                normalized.setdefault("event_type", "click")
+                normalized.setdefault("button", "left")
+            elif action == "type" and not normalized.get("ref"):
+                normalized["action"] = "keyboard"
+                normalized.setdefault("key", "")
+            elif action in {"key_chord", "keychord"}:
+                normalized["keys"] = cls._normalize_keys(normalized.get("keys"))
             elif action == "multi" or isinstance(normalized.get("calls"), list):
                 normalized["calls"] = cls._normalize_multi_calls(normalized.get("calls", []))
             normalized_calls.append(normalized)
         return normalized_calls
+
+    @staticmethod
+    def _normalize_keys(keys: Any) -> list[str]:
+        if keys is None:
+            return []
+        if isinstance(keys, str):
+            raw = re.split(r"\s*\+\s*|\s*,\s*", keys.strip())
+        elif isinstance(keys, list):
+            raw = keys
+        else:
+            raw = [str(keys)]
+        normalized: list[str] = []
+        for key in raw:
+            value = str(key or "").strip()
+            if not value:
+                continue
+            normalized.append(
+                _KEY_ALIASES.get(
+                    value.lower(),
+                    value.upper() if len(value) == 1 and value.isalpha() else value,
+                )
+            )
+        return normalized
 
     async def _dispatch(self, payload: dict[str, Any]) -> Any:
         payload.setdefault("profile_mode", self._host_browser_profile_mode())
